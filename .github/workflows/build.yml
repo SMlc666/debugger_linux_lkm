@@ -58,8 +58,8 @@ jobs:
       KERNEL_BRANCH: android14-6.1
       NDK_VERSION: android-ndk-r27d
       NDK_ZIP: android-ndk-r27d-linux.zip
-      NDK_URL: https://dl.google.com/android/repository/android-ndk-r27d-linux.zip
-      NDK_DIR: ${{ runner.temp }}/android-ndk-r27d
+      NDK_URL: "https://dl.google.com/android/repository/android-ndk-r27d-linux.zip"
+      NDK_DIR: ${{ github.workspace }}/.ndk/android-ndk-r27d
       ANDROID_API: "34"
 
     steps:
@@ -86,7 +86,9 @@ jobs:
             unzip
 
       - name: Prepare ccache directory
-        run: mkdir -p "$CCACHE_DIR"
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          mkdir -p "$(dirname "$NDK_DIR")"
 
       - name: Configure ccache
         uses: actions/cache@v4
@@ -111,7 +113,7 @@ jobs:
         if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
           curl -L "$NDK_URL" -o "$RUNNER_TEMP/$NDK_ZIP"
-          unzip -q "$RUNNER_TEMP/$NDK_ZIP" -d "$RUNNER_TEMP"
+          unzip -q "$RUNNER_TEMP/$NDK_ZIP" -d "$(dirname "$NDK_DIR")"
 
       - name: Fetch Android common kernel
         run: |
