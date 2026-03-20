@@ -37,6 +37,7 @@ struct lkmdbg_session {
 	u32 event_head;
 	u32 event_count;
 	pid_t owner_tgid;
+	pid_t target_tgid;
 	struct lkmdbg_event_record events[LKMDBG_SESSION_EVENT_CAPACITY];
 };
 
@@ -56,6 +57,9 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 ssize_t lkmdbg_session_read(struct file *file, char __user *buf, size_t count,
 			   loff_t *ppos);
 __poll_t lkmdbg_session_poll(struct file *file, poll_table *wait);
+long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_mem_read(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_mem_write(struct lkmdbg_session *session, void __user *argp);
 #ifdef CONFIG_COMPAT
 long lkmdbg_session_compat_ioctl(struct file *file, unsigned int cmd,
 				 unsigned long arg);

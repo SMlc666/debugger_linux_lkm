@@ -71,6 +71,7 @@ static int lkmdbg_session_copy_status_to_user(struct lkmdbg_session *session,
 
 	mutex_lock(&session->lock);
 	reply.owner_tgid = session->owner_tgid;
+	reply.target_tgid = session->target_tgid;
 	reply.session_id = session->session_id;
 	reply.session_ioctl_calls = session->ioctl_calls;
 	mutex_unlock(&session->lock);
@@ -186,6 +187,12 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		lkmdbg_session_queue_event(session, LKMDBG_EVENT_SESSION_RESET,
 					   old_calls, current->tgid);
 		return 0;
+	case LKMDBG_IOC_SET_TARGET:
+		return lkmdbg_mem_set_target(session, argp);
+	case LKMDBG_IOC_READ_MEM:
+		return lkmdbg_mem_read(session, argp);
+	case LKMDBG_IOC_WRITE_MEM:
+		return lkmdbg_mem_write(session, argp);
 	default:
 		return -ENOTTY;
 	}

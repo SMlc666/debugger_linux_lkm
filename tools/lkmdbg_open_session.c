@@ -20,6 +20,7 @@ static void print_status(const struct lkmdbg_status_reply *reply)
 	printf("hook_requested=%u\n", reply->hook_requested);
 	printf("hook_active=%u\n", reply->hook_active);
 	printf("owner_tgid=%d\n", reply->owner_tgid);
+	printf("target_tgid=%d\n", reply->target_tgid);
 	printf("session_id=%" PRIu64 "\n", reply->session_id);
 	printf("active_sessions=%" PRIu64 "\n", reply->active_sessions);
 	printf("load_jiffies=%" PRIu64 "\n", reply->load_jiffies);

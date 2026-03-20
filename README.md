@@ -62,6 +62,9 @@ The current session ioctls include:
 
 - `LKMDBG_IOC_GET_STATUS`
 - `LKMDBG_IOC_RESET_SESSION`
+- `LKMDBG_IOC_SET_TARGET`
+- `LKMDBG_IOC_READ_MEM`
+- `LKMDBG_IOC_WRITE_MEM`
 
 Current session events include:
 
