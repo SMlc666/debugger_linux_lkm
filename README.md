@@ -72,8 +72,9 @@ sudo cat /sys/kernel/debug/lkmdbg/status
 
 Selftest modes:
 
-- `hook_selftest_mode=1`: install the inline hook but do not invoke the hooked function
-- `hook_selftest_mode=2`: install the hook and invoke one module-local test call
+- `hook_selftest_mode=1`: prepare the inline hook and trampoline, but do not patch the target
+- `hook_selftest_mode=2`: prepare and install the hook, but do not invoke the hooked function
+- `hook_selftest_mode=3`: prepare, install, and invoke one module-local test call
 
 The hardening bypasses are now opt-in:
 
