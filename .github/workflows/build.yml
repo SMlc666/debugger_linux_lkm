@@ -48,7 +48,7 @@ jobs:
       - name: Show ccache stats
         run: ccache --show-stats
 
-  module-build-android14-6.1:
+  module-build-android14-6-1:
     runs-on: ubuntu-24.04
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-android14-6.1
