@@ -615,18 +615,20 @@ void lkmdbg_hooks_exit(void)
 		list_del_init(&hook->node);
 		mutex_unlock(&lkmdbg_hook_lock);
 
-		ctx.hook = hook;
-		ctx.insns = hook->original_insns;
-		ctx.words = hook->patch_words;
-		ret = stop_machine(lkmdbg_patch_stop_machine, &ctx,
-				   cpu_online_mask);
-		if (ret)
-			pr_warn("lkmdbg: hook exit rollback failed origin=%px ret=%d\n",
-				hook->origin, ret);
+		if (hook->active) {
+			ctx.hook = hook;
+			ctx.insns = hook->original_insns;
+			ctx.words = hook->patch_words;
+			ret = stop_machine(lkmdbg_patch_stop_machine, &ctx,
+					   cpu_online_mask);
+			if (ret)
+				pr_warn("lkmdbg: hook exit rollback failed origin=%px ret=%d\n",
+					hook->origin, ret);
+		}
 
-			vfree(hook->trampoline);
-			kfree(hook);
-			mutex_lock(&lkmdbg_hook_lock);
+		vfree(hook->trampoline);
+		kfree(hook);
+		mutex_lock(&lkmdbg_hook_lock);
 	}
 	mutex_unlock(&lkmdbg_hook_lock);
 }
