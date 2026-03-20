@@ -85,8 +85,16 @@ static long lkmdbg_mem_xfer(struct lkmdbg_session *session, void __user *argp,
 		return PTR_ERR(task);
 	}
 
-	copied = access_process_vm(task, (unsigned long)req.remote_addr, kbuf,
-				   (int)req.length, write ? FOLL_WRITE : 0);
+	if (!lkmdbg_symbols.access_process_vm) {
+		put_task_struct(task);
+		kvfree(kbuf);
+		return -ENOENT;
+	}
+
+	copied = lkmdbg_symbols.access_process_vm(task,
+						  (unsigned long)req.remote_addr,
+						  kbuf, (int)req.length,
+						  write ? FOLL_WRITE : 0);
 	put_task_struct(task);
 	if (copied <= 0) {
 		kvfree(kbuf);

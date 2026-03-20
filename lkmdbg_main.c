@@ -18,6 +18,8 @@ struct lkmdbg_state lkmdbg_state = {
 	.lock = __MUTEX_INITIALIZER(lkmdbg_state.lock),
 };
 
+struct lkmdbg_symbols lkmdbg_symbols;
+
 static int __init lkmdbg_init(void)
 {
 	int ret;
@@ -28,8 +30,15 @@ static int __init lkmdbg_init(void)
 	if (ret)
 		return ret;
 
+	ret = lkmdbg_symbols_init();
+	if (ret) {
+		lkmdbg_debugfs_exit();
+		return ret;
+	}
+
 	ret = lkmdbg_transport_init();
 	if (ret) {
+		lkmdbg_symbols_exit();
 		lkmdbg_debugfs_exit();
 		return ret;
 	}
@@ -42,6 +51,7 @@ static int __init lkmdbg_init(void)
 static void __exit lkmdbg_exit(void)
 {
 	lkmdbg_transport_exit();
+	lkmdbg_symbols_exit();
 	lkmdbg_debugfs_exit();
 	pr_info("lkmdbg: unloaded\n");
 }

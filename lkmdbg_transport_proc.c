@@ -94,19 +94,22 @@ int lkmdbg_transport_init(void)
 	if (!hook_proc_version)
 		return 0;
 
-	filp = filp_open(LKMDBG_TARGET_PATH, O_RDONLY, 0);
+	if (!lkmdbg_symbols.filp_open || !lkmdbg_symbols.filp_close)
+		return -ENOENT;
+
+	filp = lkmdbg_symbols.filp_open(LKMDBG_TARGET_PATH, O_RDONLY, 0);
 	if (IS_ERR(filp))
 		return PTR_ERR(filp);
 
 	inode = file_inode(filp);
 	if (!inode || !inode->i_fop) {
-		filp_close(filp, NULL);
+		lkmdbg_symbols.filp_close(filp, NULL);
 		return -ENOENT;
 	}
 
 	proc_version_inode = igrab(inode);
 	if (!proc_version_inode) {
-		filp_close(filp, NULL);
+		lkmdbg_symbols.filp_close(filp, NULL);
 		return -ENOENT;
 	}
 
@@ -114,7 +117,7 @@ int lkmdbg_transport_init(void)
 	proc_version_hook_fops = kmemdup(proc_version_orig_fops,
 					 sizeof(*proc_version_hook_fops),
 					 GFP_KERNEL);
-	filp_close(filp, NULL);
+	lkmdbg_symbols.filp_close(filp, NULL);
 	if (!proc_version_hook_fops) {
 		iput(proc_version_inode);
 		proc_version_inode = NULL;

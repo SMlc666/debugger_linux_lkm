@@ -3,6 +3,7 @@
 
 #include <linux/debugfs.h>
 #include <linux/fs.h>
+#include <linux/kprobes.h>
 #include <linux/mutex.h>
 #include <linux/poll.h>
 #include <linux/types.h>
@@ -28,6 +29,14 @@ struct lkmdbg_state {
 	bool proc_version_hook_active;
 };
 
+struct lkmdbg_symbols {
+	unsigned long (*kallsyms_lookup_name)(const char *name);
+	struct file *(*filp_open)(const char *filename, int flags, umode_t mode);
+	int (*filp_close)(struct file *file, fl_owner_t id);
+	int (*access_process_vm)(struct task_struct *tsk, unsigned long addr,
+				 void *buf, int len, unsigned int gup_flags);
+};
+
 struct lkmdbg_session {
 	struct mutex lock;
 	wait_queue_head_t readq;
@@ -44,9 +53,13 @@ struct lkmdbg_session {
 extern char *tag;
 extern bool hook_proc_version;
 extern struct lkmdbg_state lkmdbg_state;
+extern struct lkmdbg_symbols lkmdbg_symbols;
 
 int lkmdbg_debugfs_init(void);
 void lkmdbg_debugfs_exit(void);
+
+int lkmdbg_symbols_init(void);
+void lkmdbg_symbols_exit(void);
 
 int lkmdbg_transport_init(void);
 void lkmdbg_transport_exit(void);
