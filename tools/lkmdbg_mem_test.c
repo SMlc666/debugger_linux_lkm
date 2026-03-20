@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "../lkmdbg_ioctl.h"
@@ -100,9 +101,130 @@ static void usage(const char *prog)
 {
 	fprintf(stderr,
 		"Usage:\n"
+		"  %s selftest\n"
 		"  %s read <pid> <remote_addr_hex> <length>\n"
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
-		prog, prog);
+		prog, prog, prog);
+}
+
+static int run_selftest(const char *prog)
+{
+	int to_parent[2];
+	int to_child[2];
+	pid_t child;
+	int session_fd;
+	uintptr_t remote_addr;
+	char addr_buf[64] = { 0 };
+	char read_buf[32] = { 0 };
+	const char *payload = "patched-by-lkmdbg";
+	ssize_t nread;
+	int status;
+
+	(void)prog;
+
+	if (pipe(to_parent) < 0 || pipe(to_child) < 0) {
+		fprintf(stderr, "pipe failed: %s\n", strerror(errno));
+		return 1;
+	}
+
+	child = fork();
+	if (child < 0) {
+		fprintf(stderr, "fork failed: %s\n", strerror(errno));
+		return 1;
+	}
+
+	if (child == 0) {
+		char child_buf[64] = "child-buffer-initial";
+		char signal_buf[8] = { 0 };
+		ssize_t ignored;
+
+		close(to_parent[0]);
+		close(to_child[1]);
+
+		dprintf(to_parent[1], "%p\n", (void *)child_buf);
+		ignored = read(to_child[0], signal_buf, sizeof(signal_buf));
+		(void)ignored;
+
+		printf("child-buffer-final=%s\n", child_buf);
+		fflush(stdout);
+		_exit(0);
+	}
+
+	close(to_parent[1]);
+	close(to_child[0]);
+
+	nread = read(to_parent[0], addr_buf, sizeof(addr_buf) - 1);
+	if (nread <= 0) {
+		fprintf(stderr, "failed to read child address\n");
+		close(to_parent[0]);
+		close(to_child[1]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	remote_addr = (uintptr_t)strtoull(addr_buf, NULL, 16);
+	printf("selftest child pid=%d remote_addr=0x%llx\n", child,
+	       (unsigned long long)remote_addr);
+
+	session_fd = open_session_fd();
+	if (session_fd < 0) {
+		close(to_parent[0]);
+		close(to_child[1]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	if (set_target(session_fd, child) < 0) {
+		close(session_fd);
+		close(to_parent[0]);
+		close(to_child[1]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	if (read_target_memory(session_fd, remote_addr, read_buf,
+			       sizeof("child-buffer-initial") - 1) < 0) {
+		close(session_fd);
+		close(to_parent[0]);
+		close(to_child[1]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	printf("selftest read-back=%s\n", read_buf);
+
+	if (write_target_memory(session_fd, remote_addr, payload,
+				strlen(payload) + 1) < 0) {
+		close(session_fd);
+		close(to_parent[0]);
+		close(to_child[1]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	if (write(to_child[1], "ok", 2) < 0)
+		fprintf(stderr, "failed to signal child: %s\n", strerror(errno));
+
+	close(session_fd);
+	close(to_parent[0]);
+	close(to_child[1]);
+
+	if (waitpid(child, &status, 0) < 0) {
+		fprintf(stderr, "waitpid failed: %s\n", strerror(errno));
+		return 1;
+	}
+
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+		fprintf(stderr, "child exited abnormally\n");
+		return 1;
+	}
+
+	return 0;
 }
 
 int main(int argc, char **argv)
@@ -111,6 +233,9 @@ int main(int argc, char **argv)
 	pid_t pid;
 	uintptr_t remote_addr;
 	char *endp;
+
+	if (argc == 2 && strcmp(argv[1], "selftest") == 0)
+		return run_selftest(argv[0]);
 
 	if (argc < 5) {
 		usage(argv[0]);

@@ -87,6 +87,7 @@ Example direct memory access flow:
 
 ```bash
 cc -O2 -Wall -Wextra -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c
+sudo ./tools/lkmdbg_mem_test selftest
 sudo ./tools/lkmdbg_mem_test read <pid> <remote_addr_hex> <length>
 sudo ./tools/lkmdbg_mem_test write <pid> <remote_addr_hex> <ascii_data>
 ```
