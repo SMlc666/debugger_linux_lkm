@@ -9,7 +9,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "../lkmdbg_ioctl.h"
+#include "../include/lkmdbg_ioctl.h"
 
 #define TARGET_PATH "/proc/version"
 
@@ -21,17 +21,18 @@ static void print_status(const struct lkmdbg_status_reply *reply)
 	printf("hook_active=%u\n", reply->hook_active);
 	printf("owner_tgid=%d\n", reply->owner_tgid);
 	printf("target_tgid=%d\n", reply->target_tgid);
-	printf("session_id=%" PRIu64 "\n", reply->session_id);
-	printf("active_sessions=%" PRIu64 "\n", reply->active_sessions);
-	printf("load_jiffies=%" PRIu64 "\n", reply->load_jiffies);
-	printf("status_reads=%" PRIu64 "\n", reply->status_reads);
+	printf("session_id=%" PRIu64 "\n", (uint64_t)reply->session_id);
+	printf("active_sessions=%" PRIu64 "\n",
+	       (uint64_t)reply->active_sessions);
+	printf("load_jiffies=%" PRIu64 "\n", (uint64_t)reply->load_jiffies);
+	printf("status_reads=%" PRIu64 "\n", (uint64_t)reply->status_reads);
 	printf("bootstrap_ioctl_calls=%" PRIu64 "\n",
-	       reply->bootstrap_ioctl_calls);
+	       (uint64_t)reply->bootstrap_ioctl_calls);
 	printf("session_ioctl_calls=%" PRIu64 "\n",
-	       reply->session_ioctl_calls);
+	       (uint64_t)reply->session_ioctl_calls);
 	printf("session_opened_total=%" PRIu64 "\n",
-	       reply->session_opened_total);
-	printf("open_successes=%" PRIu64 "\n", reply->open_successes);
+	       (uint64_t)reply->session_opened_total);
+	printf("open_successes=%" PRIu64 "\n", (uint64_t)reply->open_successes);
 }
 
 static void print_event(const struct lkmdbg_event_record *event)
@@ -39,10 +40,10 @@ static void print_event(const struct lkmdbg_event_record *event)
 	printf("event.version=%u\n", event->version);
 	printf("event.type=%u\n", event->type);
 	printf("event.size=%u\n", event->size);
-	printf("event.session_id=%" PRIu64 "\n", event->session_id);
-	printf("event.seq=%" PRIu64 "\n", event->seq);
-	printf("event.value0=%" PRIu64 "\n", event->value0);
-	printf("event.value1=%" PRIu64 "\n", event->value1);
+	printf("event.session_id=%" PRIu64 "\n", (uint64_t)event->session_id);
+	printf("event.seq=%" PRIu64 "\n", (uint64_t)event->seq);
+	printf("event.value0=%" PRIu64 "\n", (uint64_t)event->value0);
+	printf("event.value1=%" PRIu64 "\n", (uint64_t)event->value1);
 }
 
 int main(void)

@@ -1,0 +1,167 @@
+#include <linux/init.h>
+#include <linux/jiffies.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+
+#include "lkmdbg_internal.h"
+
+char *tag = "arm64-gki-smoke";
+module_param(tag, charp, 0444);
+MODULE_PARM_DESC(tag, "Human-readable tag shown in debugfs output");
+
+bool hook_proc_version;
+module_param(hook_proc_version, bool, 0444);
+MODULE_PARM_DESC(hook_proc_version,
+		 "Clone and swap /proc/version inode file_operations to add hidden ioctl support");
+
+bool hook_selftest;
+module_param(hook_selftest, bool, 0644);
+MODULE_PARM_DESC(hook_selftest,
+		 "Install a module-local arm64 inline hook and run one validation call");
+
+struct lkmdbg_state lkmdbg_state = {
+	.lock = __MUTEX_INITIALIZER(lkmdbg_state.lock),
+};
+
+struct lkmdbg_symbols lkmdbg_symbols;
+static struct lkmdbg_inline_hook *lkmdbg_selftest_hook;
+static u64 (*lkmdbg_selftest_orig)(u64 value);
+
+static noinline u64 lkmdbg_selftest_target(u64 value)
+{
+	if (value & 1)
+		value += 3;
+	else
+		value += 7;
+
+	value ^= 0x1122334455667788ULL;
+	value += 0x0102030405060708ULL;
+	return value;
+}
+
+static noinline u64 lkmdbg_selftest_replacement(u64 value)
+{
+	u64 original;
+
+	if (!lkmdbg_selftest_orig)
+		return 0xBAD0BAD0BAD0BAD0ULL;
+
+	original = lkmdbg_selftest_orig(value + 1);
+	return original ^ 0x00FF00FF00FF00FFULL;
+}
+
+static int lkmdbg_run_hook_selftest(void)
+{
+	const u64 input = 0x41;
+	u64 expected;
+	u64 actual;
+	void *orig_fn = NULL;
+	int ret;
+
+	expected = lkmdbg_selftest_target(input + 1) ^
+		   0x00FF00FF00FF00FFULL;
+
+	ret = lkmdbg_hook_install(lkmdbg_selftest_target,
+				  lkmdbg_selftest_replacement,
+				  &lkmdbg_selftest_hook, &orig_fn);
+
+	mutex_lock(&lkmdbg_state.lock);
+	lkmdbg_state.hook_selftest_enabled = true;
+	lkmdbg_state.hook_selftest_ret = ret;
+	mutex_unlock(&lkmdbg_state.lock);
+
+	if (ret)
+		return ret;
+
+	lkmdbg_selftest_orig = orig_fn;
+	actual = lkmdbg_selftest_target(input);
+
+	mutex_lock(&lkmdbg_state.lock);
+	lkmdbg_state.hook_selftest_installed = true;
+	lkmdbg_state.hook_selftest_expected = expected;
+	lkmdbg_state.hook_selftest_actual = actual;
+	mutex_unlock(&lkmdbg_state.lock);
+
+	pr_info("lkmdbg: hook selftest expected=0x%llx actual=0x%llx orig=%px target=%px replacement=%px\n",
+		(unsigned long long)expected,
+		(unsigned long long)actual,
+		lkmdbg_selftest_orig,
+		lkmdbg_selftest_target,
+		lkmdbg_selftest_replacement);
+
+	if (actual != expected)
+		return -EIO;
+
+	return 0;
+}
+
+static int __init lkmdbg_init(void)
+{
+	int cfi_patched;
+	int blacklist_patched;
+	int ret;
+
+	lkmdbg_state.load_jiffies = jiffies;
+
+	ret = lkmdbg_debugfs_init();
+	if (ret)
+		return ret;
+
+	ret = lkmdbg_symbols_init();
+	if (ret) {
+		lkmdbg_debugfs_exit();
+		return ret;
+	}
+
+	ret = lkmdbg_hooks_init();
+	if (ret) {
+		lkmdbg_symbols_exit();
+		lkmdbg_debugfs_exit();
+		return ret;
+	}
+
+	/* best-effort hardening bypass for hook work on GKI */
+	blacklist_patched = lkmdbg_disable_kprobe_blacklist();
+	cfi_patched = lkmdbg_cfi_bypass();
+
+	if (hook_selftest) {
+		ret = lkmdbg_run_hook_selftest();
+		if (ret) {
+			pr_err("lkmdbg: hook selftest failed ret=%d\n", ret);
+			lkmdbg_hooks_exit();
+			lkmdbg_symbols_exit();
+			lkmdbg_debugfs_exit();
+			return ret;
+		}
+	}
+
+	ret = lkmdbg_transport_init();
+	if (ret) {
+		lkmdbg_hooks_exit();
+		lkmdbg_symbols_exit();
+		lkmdbg_debugfs_exit();
+		return ret;
+	}
+
+	pr_info("lkmdbg: loaded tag=%s hook_proc_version=%u kprobe_patched=%d cfi_patched=%d\n",
+		tag, hook_proc_version, blacklist_patched, cfi_patched);
+	return 0;
+}
+
+static void __exit lkmdbg_exit(void)
+{
+	lkmdbg_transport_exit();
+	lkmdbg_selftest_hook = NULL;
+	lkmdbg_selftest_orig = NULL;
+	lkmdbg_hooks_exit();
+	lkmdbg_symbols_exit();
+	lkmdbg_debugfs_exit();
+	pr_info("lkmdbg: unloaded\n");
+}
+
+MODULE_AUTHOR("OpenAI Codex");
+MODULE_DESCRIPTION("Minimal Linux kernel module scaffold for arm64 Android GKI debugger work");
+MODULE_LICENSE("GPL");
+
+module_init(lkmdbg_init);
+module_exit(lkmdbg_exit);

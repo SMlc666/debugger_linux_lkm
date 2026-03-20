@@ -10,6 +10,7 @@
 #include <linux/uaccess.h>
 #include <linux/wait.h>
 
+#include "lkmdbg_hook.h"
 #include "lkmdbg_ioctl.h"
 
 #define LKMDBG_DIR_NAME "lkmdbg"
@@ -27,6 +28,11 @@ struct lkmdbg_state {
 	u64 active_sessions;
 	u64 next_session_id;
 	bool proc_version_hook_active;
+	bool hook_selftest_enabled;
+	bool hook_selftest_installed;
+	int hook_selftest_ret;
+	u64 hook_selftest_expected;
+	u64 hook_selftest_actual;
 };
 
 struct lkmdbg_symbols {
@@ -35,7 +41,14 @@ struct lkmdbg_symbols {
 	int (*filp_close)(struct file *file, fl_owner_t id);
 	int (*access_process_vm)(struct task_struct *tsk, unsigned long addr,
 				 void *buf, int len, unsigned int gup_flags);
+	int (*aarch64_insn_write)(void *addr, u32 insn);
+	void (*flush_icache_range)(unsigned long start, unsigned long end);
+	void *(*module_alloc)(unsigned long size);
+	void (*module_memfree)(void *region);
 };
+
+int lkmdbg_disable_kprobe_blacklist(void);
+int lkmdbg_cfi_bypass(void);
 
 struct lkmdbg_session {
 	struct mutex lock;
@@ -52,6 +65,7 @@ struct lkmdbg_session {
 
 extern char *tag;
 extern bool hook_proc_version;
+extern bool hook_selftest;
 extern struct lkmdbg_state lkmdbg_state;
 extern struct lkmdbg_symbols lkmdbg_symbols;
 

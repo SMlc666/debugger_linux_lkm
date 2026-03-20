@@ -10,7 +10,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "../lkmdbg_ioctl.h"
+#include "../include/lkmdbg_ioctl.h"
 
 #define TARGET_PATH "/proc/version"
 

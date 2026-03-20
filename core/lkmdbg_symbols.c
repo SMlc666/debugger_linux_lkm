@@ -42,6 +42,28 @@ static int lkmdbg_resolve_runtime_symbols(void)
 		(int (*)(struct task_struct *tsk, unsigned long addr, void *buf,
 			 int len, unsigned int gup_flags))addr;
 
+	addr = lkmdbg_symbols.kallsyms_lookup_name("aarch64_insn_write");
+	if (!addr)
+		return -ENOENT;
+	lkmdbg_symbols.aarch64_insn_write = (int (*)(void *, u32))addr;
+
+	addr = lkmdbg_symbols.kallsyms_lookup_name("caches_clean_inval_pou");
+	if (!addr)
+		addr = lkmdbg_symbols.kallsyms_lookup_name("__flush_icache_range");
+	if (!addr)
+		return -ENOENT;
+	lkmdbg_symbols.flush_icache_range =
+		(void (*)(unsigned long, unsigned long))addr;
+
+	addr = lkmdbg_symbols.kallsyms_lookup_name("module_alloc");
+	if (addr)
+		lkmdbg_symbols.module_alloc =
+			(void *(*)(unsigned long size))addr;
+
+	addr = lkmdbg_symbols.kallsyms_lookup_name("module_memfree");
+	if (addr)
+		lkmdbg_symbols.module_memfree = (void (*)(void *region))addr;
+
 	return 0;
 }
 
@@ -56,4 +78,8 @@ void lkmdbg_symbols_exit(void)
 	lkmdbg_symbols.filp_open = NULL;
 	lkmdbg_symbols.filp_close = NULL;
 	lkmdbg_symbols.access_process_vm = NULL;
+	lkmdbg_symbols.aarch64_insn_write = NULL;
+	lkmdbg_symbols.flush_icache_range = NULL;
+	lkmdbg_symbols.module_alloc = NULL;
+	lkmdbg_symbols.module_memfree = NULL;
 }

@@ -8,6 +8,24 @@ This repository intentionally starts with a small smoke-test module and a safe-f
 - exports a `debugfs` status file at `/sys/kernel/debug/lkmdbg/status`
 - can optionally clone-and-swap `/proc/version` inode `file_operations`
 - provides a stable place to add probe, breakpoint, and event plumbing next
+- on load, best-effort disables the kprobe blacklist and patches common CFI
+  slowpath symbols to simplify inline hooks on Android GKI
+
+Current source layout:
+
+- `core/`: module init, runtime symbol lookup, protection bypass helpers
+- `hook/`: arm64 inline hook support with trampoline generation and rollback
+- `transport/`: hidden `/proc/version` transport and session fd handling
+- `mem/`: target memory read/write helpers
+- `ui/`: debugfs status export
+- `include/`: shared kernel/user protocol and internal declarations
+
+Current hook support is intentionally minimal:
+
+- single-target arm64 inline hook install/uninstall
+- 4-instruction entry patch with a relocated trampoline
+- relocation handling for common branch, ADR/ADRP, literal load, and test-branch instructions
+- stop-machine patching for install and rollback
 
 ## Local build
 
@@ -45,6 +63,13 @@ sudo insmod lkmdbg.ko hook_proc_version=1
 sudo cat /sys/kernel/debug/lkmdbg/status
 ```
 
+Run the module-local inline hook smoke test on load:
+
+```bash
+sudo insmod lkmdbg.ko hook_selftest=1
+sudo cat /sys/kernel/debug/lkmdbg/status
+```
+
 This stage is intentionally conservative:
 
 - normal `/proc/version` reads stay untouched
@@ -73,7 +98,7 @@ Current session events include:
 - `LKMDBG_EVENT_SESSION_RESET`
 - `LKMDBG_EVENT_INTERNAL_NOTICE`
 
-Shared definitions live in [lkmdbg_ioctl.h](/root/debugger_linux_lkm/lkmdbg_ioctl.h).
+Shared definitions live in [lkmdbg_ioctl.h](/root/debugger_linux_lkm/include/lkmdbg_ioctl.h).
 
 Example bootstrap flow:
 

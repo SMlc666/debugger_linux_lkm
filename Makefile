@@ -1,6 +1,32 @@
 ifneq ($(KERNELRELEASE),)
+ccflags-y += -I$(src)/include
+
 obj-m += lkmdbg.o
-lkmdbg-y := lkmdbg_main.o lkmdbg_debugfs.o lkmdbg_symbols.o lkmdbg_session.o lkmdbg_mem.o lkmdbg_transport_proc.o
+
+lkmdbg-core-y := \
+	core/lkmdbg_main.o \
+	core/lkmdbg_symbols.o \
+	core/lkmdbg_protect.o
+
+lkmdbg-hook-y := \
+	hook/lkmdbg_hook_arm64.o
+
+lkmdbg-transport-y := \
+	transport/lkmdbg_session.o \
+	transport/lkmdbg_transport_proc.o
+
+lkmdbg-mem-y := \
+	mem/lkmdbg_mem.o
+
+lkmdbg-ui-y := \
+	ui/lkmdbg_debugfs.o
+
+lkmdbg-y := \
+	$(lkmdbg-core-y) \
+	$(lkmdbg-hook-y) \
+	$(lkmdbg-transport-y) \
+	$(lkmdbg-mem-y) \
+	$(lkmdbg-ui-y)
 else
 KDIR ?= /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)
