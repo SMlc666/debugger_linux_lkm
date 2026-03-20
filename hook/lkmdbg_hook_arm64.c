@@ -21,6 +21,7 @@ struct lkmdbg_inline_hook {
 	void *origin;
 	void *replacement;
 	void *trampoline;
+	bool trampoline_is_exec;
 	bool active;
 	u32 original_insns[LKMDBG_HOOK_TRAMP_INSN_COUNT];
 	u32 patch_insns[LKMDBG_HOOK_TRAMP_INSN_COUNT];
@@ -457,6 +458,20 @@ static int lkmdbg_prepare_hook(struct lkmdbg_inline_hook *hook)
 	return 0;
 }
 
+static void lkmdbg_free_trampoline(struct lkmdbg_inline_hook *hook)
+{
+	if (!hook->trampoline)
+		return;
+
+	if (hook->trampoline_is_exec && lkmdbg_symbols.module_memfree)
+		lkmdbg_symbols.module_memfree(hook->trampoline);
+	else
+		vfree(hook->trampoline);
+
+	hook->trampoline = NULL;
+	hook->trampoline_is_exec = false;
+}
+
 static int lkmdbg_patch_stop_machine(void *data)
 {
 	struct lkmdbg_patch_ctx *ctx = data;
@@ -498,7 +513,7 @@ int lkmdbg_hook_create(void *target, void *replacement,
 	list_for_each_entry(iter, &lkmdbg_hook_list, node) {
 		if (iter->origin == hook->origin) {
 			mutex_unlock(&lkmdbg_hook_lock);
-			vfree(hook->trampoline);
+			lkmdbg_free_trampoline(hook);
 			kfree(hook);
 			return -EEXIST;
 		}
@@ -509,7 +524,7 @@ int lkmdbg_hook_create(void *target, void *replacement,
 	if (ret) {
 		pr_err("lkmdbg: inline hook prepare failed target=%px origin=%px ret=%d\n",
 		       hook->target, hook->origin, ret);
-		vfree(hook->trampoline);
+		lkmdbg_free_trampoline(hook);
 		kfree(hook);
 		return ret;
 	}
@@ -527,6 +542,9 @@ int lkmdbg_hook_create(void *target, void *replacement,
 int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook, void **orig_out)
 {
 	struct lkmdbg_patch_ctx ctx;
+	void *prepare_trampoline;
+	void *exec_trampoline;
+	bool can_use_exec_alloc;
 	int ret;
 
 	if (!hook)
@@ -535,14 +553,51 @@ int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook, void **orig_out)
 	if (hook->active)
 		return -EALREADY;
 
-	if (!lkmdbg_symbols.set_memory_x || !lkmdbg_symbols.flush_icache_range)
+	if (!lkmdbg_symbols.flush_icache_range)
 		return -ENOENT;
 
-	ret = lkmdbg_symbols.set_memory_x((unsigned long)hook->trampoline, 1);
-	if (ret) {
-		pr_err("lkmdbg: set_memory_x failed trampoline=%px ret=%d\n",
-		       hook->trampoline, ret);
-		return ret;
+	pr_emerg("lkmdbg: hook_activate stage=exec_alloc_begin target=%px origin=%px\n",
+		 hook->target, hook->origin);
+
+	prepare_trampoline = hook->trampoline;
+	exec_trampoline = NULL;
+	can_use_exec_alloc = lkmdbg_symbols.module_alloc &&
+			     lkmdbg_symbols.module_memfree;
+
+	if (can_use_exec_alloc) {
+		exec_trampoline = lkmdbg_symbols.module_alloc(PAGE_SIZE);
+		if (!exec_trampoline) {
+			pr_err("lkmdbg: module_alloc failed for trampoline target=%px origin=%px\n",
+			       hook->target, hook->origin);
+			return -ENOMEM;
+		}
+		pr_emerg("lkmdbg: hook_activate stage=exec_alloc_done target=%px origin=%px trampoline=%px\n",
+			 hook->target, hook->origin, exec_trampoline);
+
+		hook->trampoline = exec_trampoline;
+		hook->trampoline_is_exec = true;
+		pr_emerg("lkmdbg: hook_activate stage=exec_prepare_begin target=%px origin=%px trampoline=%px\n",
+			 hook->target, hook->origin, hook->trampoline);
+		ret = lkmdbg_prepare_hook(hook);
+		if (ret) {
+			pr_err("lkmdbg: exec trampoline prepare failed target=%px origin=%px ret=%d\n",
+			       hook->target, hook->origin, ret);
+			lkmdbg_free_trampoline(hook);
+			hook->trampoline = prepare_trampoline;
+			hook->trampoline_is_exec = false;
+			return ret;
+		}
+		pr_emerg("lkmdbg: hook_activate stage=exec_prepare_done target=%px origin=%px trampoline=%px\n",
+			 hook->target, hook->origin, hook->trampoline);
+
+		vfree(prepare_trampoline);
+	} else {
+		pr_emerg("lkmdbg: hook_activate stage=no_exec_allocator target=%px origin=%px module_alloc=%u module_memfree=%u set_memory_x=%u\n",
+			 hook->target, hook->origin,
+			 !!lkmdbg_symbols.module_alloc,
+			 !!lkmdbg_symbols.module_memfree,
+			 !!lkmdbg_symbols.set_memory_x);
+		return -ENOENT;
 	}
 
 	lkmdbg_symbols.flush_icache_range((unsigned long)hook->trampoline,
@@ -552,12 +607,16 @@ int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook, void **orig_out)
 	ctx.hook = hook;
 	ctx.insns = hook->patch_insns;
 	ctx.words = hook->patch_words;
+	pr_emerg("lkmdbg: hook_activate stage=patch_begin target=%px origin=%px\n",
+		 hook->target, hook->origin);
 	ret = stop_machine(lkmdbg_patch_stop_machine, &ctx, cpu_online_mask);
 	if (ret) {
 		pr_err("lkmdbg: inline hook patch failed target=%px origin=%px ret=%d\n",
 		       hook->target, hook->origin, ret);
 		return ret;
 	}
+	pr_emerg("lkmdbg: hook_activate stage=patch_done target=%px origin=%px\n",
+		 hook->target, hook->origin);
 
 	mutex_lock(&lkmdbg_hook_lock);
 	hook->active = true;
@@ -599,7 +658,7 @@ void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook)
 		list_del_init(&hook->node);
 	mutex_unlock(&lkmdbg_hook_lock);
 
-	vfree(hook->trampoline);
+	lkmdbg_free_trampoline(hook);
 	kfree(hook);
 }
 
@@ -626,7 +685,7 @@ void lkmdbg_hooks_exit(void)
 					hook->origin, ret);
 		}
 
-		vfree(hook->trampoline);
+		lkmdbg_free_trampoline(hook);
 		kfree(hook);
 		mutex_lock(&lkmdbg_hook_lock);
 	}
