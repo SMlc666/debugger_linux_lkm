@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  module-build:
+  module-build-generic:
     runs-on: ubuntu-24.04
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -45,10 +45,90 @@ jobs:
           echo "Using KDIR=$KDIR"
           make KDIR="$KDIR" CC="ccache gcc"
 
-      - name: Upload module artifact
+      - name: Show ccache stats
+        run: ccache --show-stats
+
+  module-build-android14-6.1:
+    runs-on: ubuntu-24.04
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-android14-6.1
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      KERNEL_REPO: https://android.googlesource.com/kernel/common
+      KERNEL_BRANCH: android14-6.1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Android kernel build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc \
+            bison \
+            build-essential \
+            ccache \
+            clang \
+            flex \
+            git \
+            libelf-dev \
+            libssl-dev \
+            lld \
+            llvm \
+            pahole \
+            rsync
+
+      - name: Prepare ccache directory
+        run: mkdir -p "$CCACHE_DIR"
+
+      - name: Configure ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-android14-6.1-ccache-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-android14-6.1-ccache-${{ github.ref_name }}-
+            ${{ runner.os }}-android14-6.1-ccache-
+
+      - name: Reset ccache stats
+        run: ccache --zero-stats
+
+      - name: Fetch Android common kernel
+        run: |
+          git clone --depth=1 --branch "$KERNEL_BRANCH" "$KERNEL_REPO" "$RUNNER_TEMP/android-kernel-common"
+
+      - name: Build Android GKI tree and external module
+        run: |
+          KERNEL_DIR="$RUNNER_TEMP/android-kernel-common"
+          OUT_DIR="$RUNNER_TEMP/android-kernel-out"
+          make -C "$KERNEL_DIR" \
+            O="$OUT_DIR" \
+            ARCH=arm64 \
+            LLVM=1 \
+            CC="ccache clang" \
+            HOSTCC="ccache clang" \
+            gki_defconfig
+          make -C "$KERNEL_DIR" \
+            O="$OUT_DIR" \
+            ARCH=arm64 \
+            LLVM=1 \
+            CC="ccache clang" \
+            HOSTCC="ccache clang" \
+            modules_prepare
+          make -C "$KERNEL_DIR" \
+            O="$OUT_DIR" \
+            M="$GITHUB_WORKSPACE" \
+            ARCH=arm64 \
+            LLVM=1 \
+            CC="ccache clang" \
+            HOSTCC="ccache clang" \
+            modules
+
+      - name: Upload Android module artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lkmdbg-ko
+          name: lkmdbg-ko-android14-6.1
           path: lkmdbg.ko
           if-no-files-found: error
 

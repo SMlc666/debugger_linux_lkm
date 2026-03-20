@@ -14,3 +14,5 @@ Module.symvers
 *.swo
 *.orig
 *.rej
+tools/lkmdbg_mem_test
+tools/lkmdbg_open_session
