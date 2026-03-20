@@ -55,6 +55,11 @@ static int lkmdbg_resolve_runtime_symbols(void)
 	lkmdbg_symbols.flush_icache_range =
 		(void (*)(unsigned long, unsigned long))addr;
 
+	addr = lkmdbg_symbols.kallsyms_lookup_name("set_memory_x");
+	if (addr)
+		lkmdbg_symbols.set_memory_x =
+			(int (*)(unsigned long, int))addr;
+
 	addr = lkmdbg_symbols.kallsyms_lookup_name("module_alloc");
 	if (addr)
 		lkmdbg_symbols.module_alloc =
@@ -80,6 +85,7 @@ void lkmdbg_symbols_exit(void)
 	lkmdbg_symbols.access_process_vm = NULL;
 	lkmdbg_symbols.aarch64_insn_write = NULL;
 	lkmdbg_symbols.flush_icache_range = NULL;
+	lkmdbg_symbols.set_memory_x = NULL;
 	lkmdbg_symbols.module_alloc = NULL;
 	lkmdbg_symbols.module_memfree = NULL;
 }

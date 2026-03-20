@@ -43,6 +43,7 @@ struct lkmdbg_symbols {
 				 void *buf, int len, unsigned int gup_flags);
 	int (*aarch64_insn_write)(void *addr, u32 insn);
 	void (*flush_icache_range)(unsigned long start, unsigned long end);
+	int (*set_memory_x)(unsigned long addr, int numpages);
 	void *(*module_alloc)(unsigned long size);
 	void (*module_memfree)(void *region);
 };

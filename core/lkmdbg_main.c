@@ -99,12 +99,14 @@ static int lkmdbg_run_hook_selftest(void)
 	}
 
 	lkmdbg_trace_stage("hook_selftest_install_begin");
-	ret = lkmdbg_hook_activate(lkmdbg_selftest_hook);
+	ret = lkmdbg_hook_activate(lkmdbg_selftest_hook, &orig_fn);
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.hook_selftest_ret = ret;
 	mutex_unlock(&lkmdbg_state.lock);
 	if (ret)
 		return ret;
+
+	lkmdbg_selftest_orig = orig_fn;
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.hook_selftest_installed = true;

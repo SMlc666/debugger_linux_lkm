@@ -454,9 +454,6 @@ static int lkmdbg_prepare_hook(struct lkmdbg_inline_hook *hook)
 
 	memcpy(hook->trampoline, hook->trampoline_insns,
 	       hook->trampoline_words * sizeof(u32));
-	lkmdbg_symbols.flush_icache_range((unsigned long)hook->trampoline,
-					  (unsigned long)hook->trampoline +
-					  hook->trampoline_words * sizeof(u32));
 	return 0;
 }
 
@@ -483,9 +480,6 @@ int lkmdbg_hook_create(void *target, void *replacement,
 	if (!target || !replacement || !hook_out || !orig_out)
 		return -EINVAL;
 
-	if (!lkmdbg_symbols.module_alloc)
-		return -ENOENT;
-
 	hook = kzalloc(sizeof(*hook), GFP_KERNEL);
 	if (!hook)
 		return -ENOMEM;
@@ -494,7 +488,7 @@ int lkmdbg_hook_create(void *target, void *replacement,
 	hook->target = target;
 	hook->origin = (void *)lkmdbg_hook_follow_branch((u64)target);
 	hook->replacement = replacement;
-	hook->trampoline = lkmdbg_symbols.module_alloc(PAGE_SIZE);
+	hook->trampoline = vmalloc(PAGE_SIZE);
 	if (!hook->trampoline) {
 		kfree(hook);
 		return -ENOMEM;
@@ -504,10 +498,7 @@ int lkmdbg_hook_create(void *target, void *replacement,
 	list_for_each_entry(iter, &lkmdbg_hook_list, node) {
 		if (iter->origin == hook->origin) {
 			mutex_unlock(&lkmdbg_hook_lock);
-			if (lkmdbg_symbols.module_memfree)
-				lkmdbg_symbols.module_memfree(hook->trampoline);
-			else
-				vfree(hook->trampoline);
+			vfree(hook->trampoline);
 			kfree(hook);
 			return -EEXIST;
 		}
@@ -518,20 +509,22 @@ int lkmdbg_hook_create(void *target, void *replacement,
 	if (ret) {
 		pr_err("lkmdbg: inline hook prepare failed target=%px origin=%px ret=%d\n",
 		       hook->target, hook->origin, ret);
-		if (lkmdbg_symbols.module_memfree)
-			lkmdbg_symbols.module_memfree(hook->trampoline);
-		else
-			vfree(hook->trampoline);
+		vfree(hook->trampoline);
 		kfree(hook);
 		return ret;
 	}
 
 	*hook_out = hook;
-	*orig_out = hook->trampoline;
+	*orig_out = NULL;
+
+	mutex_lock(&lkmdbg_hook_lock);
+	list_add_tail(&hook->node, &lkmdbg_hook_list);
+	mutex_unlock(&lkmdbg_hook_lock);
+
 	return 0;
 }
 
-int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook)
+int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook, void **orig_out)
 {
 	struct lkmdbg_patch_ctx ctx;
 	int ret;
@@ -541,6 +534,20 @@ int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook)
 
 	if (hook->active)
 		return -EALREADY;
+
+	if (!lkmdbg_symbols.set_memory_x || !lkmdbg_symbols.flush_icache_range)
+		return -ENOENT;
+
+	ret = lkmdbg_symbols.set_memory_x((unsigned long)hook->trampoline, 1);
+	if (ret) {
+		pr_err("lkmdbg: set_memory_x failed trampoline=%px ret=%d\n",
+		       hook->trampoline, ret);
+		return ret;
+	}
+
+	lkmdbg_symbols.flush_icache_range((unsigned long)hook->trampoline,
+					  (unsigned long)hook->trampoline +
+					  hook->trampoline_words * sizeof(u32));
 
 	ctx.hook = hook;
 	ctx.insns = hook->patch_insns;
@@ -553,9 +560,11 @@ int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook)
 	}
 
 	mutex_lock(&lkmdbg_hook_lock);
-	list_add_tail(&hook->node, &lkmdbg_hook_list);
 	hook->active = true;
 	mutex_unlock(&lkmdbg_hook_lock);
+
+	if (orig_out)
+		*orig_out = hook->trampoline;
 
 	pr_info("lkmdbg: inline hook installed target=%px origin=%px replacement=%px trampoline=%px\n",
 		hook->target, hook->origin, hook->replacement, hook->trampoline);
@@ -581,15 +590,16 @@ void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook)
 				hook->origin, ret);
 
 		mutex_lock(&lkmdbg_hook_lock);
-		list_del_init(&hook->node);
 		hook->active = false;
 		mutex_unlock(&lkmdbg_hook_lock);
 	}
 
-	if (lkmdbg_symbols.module_memfree)
-		lkmdbg_symbols.module_memfree(hook->trampoline);
-	else
-		vfree(hook->trampoline);
+	mutex_lock(&lkmdbg_hook_lock);
+	if (!list_empty(&hook->node))
+		list_del_init(&hook->node);
+	mutex_unlock(&lkmdbg_hook_lock);
+
+	vfree(hook->trampoline);
 	kfree(hook);
 }
 
@@ -614,12 +624,9 @@ void lkmdbg_hooks_exit(void)
 			pr_warn("lkmdbg: hook exit rollback failed origin=%px ret=%d\n",
 				hook->origin, ret);
 
-		if (lkmdbg_symbols.module_memfree)
-			lkmdbg_symbols.module_memfree(hook->trampoline);
-		else
 			vfree(hook->trampoline);
-		kfree(hook);
-		mutex_lock(&lkmdbg_hook_lock);
+			kfree(hook);
+			mutex_lock(&lkmdbg_hook_lock);
 	}
 	mutex_unlock(&lkmdbg_hook_lock);
 }
@@ -635,7 +642,7 @@ int lkmdbg_hook_install(void *target, void *replacement,
 	if (ret)
 		return ret;
 
-	ret = lkmdbg_hook_activate(hook);
+	ret = lkmdbg_hook_activate(hook, orig_out);
 	if (ret) {
 		lkmdbg_hook_remove(hook);
 		return ret;
