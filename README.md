@@ -56,11 +56,18 @@ The hidden ioctl protocol now uses a bootstrap-plus-session model:
 - `/proc/version` only handles `LKMDBG_IOC_OPEN_SESSION`
 - that ioctl returns an anonymous session fd created with `anon_inode_getfd()`
 - follow-up control ioctls run on the session fd instead of `/proc/version`
+- the session fd now supports `read()` and `poll()` for queued events
 
 The current session ioctls include:
 
 - `LKMDBG_IOC_GET_STATUS`
 - `LKMDBG_IOC_RESET_SESSION`
+
+Current session events include:
+
+- `LKMDBG_EVENT_SESSION_OPENED`
+- `LKMDBG_EVENT_SESSION_RESET`
+- `LKMDBG_EVENT_INTERNAL_NOTICE`
 
 Shared definitions live in [lkmdbg_ioctl.h](/root/debugger_linux_lkm/lkmdbg_ioctl.h).
 

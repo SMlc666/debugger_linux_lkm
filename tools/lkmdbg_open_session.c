@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/poll.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -32,6 +33,17 @@ static void print_status(const struct lkmdbg_status_reply *reply)
 	printf("open_successes=%" PRIu64 "\n", reply->open_successes);
 }
 
+static void print_event(const struct lkmdbg_event_record *event)
+{
+	printf("event.version=%u\n", event->version);
+	printf("event.type=%u\n", event->type);
+	printf("event.size=%u\n", event->size);
+	printf("event.session_id=%" PRIu64 "\n", event->session_id);
+	printf("event.seq=%" PRIu64 "\n", event->seq);
+	printf("event.value0=%" PRIu64 "\n", event->value0);
+	printf("event.value1=%" PRIu64 "\n", event->value1);
+}
+
 int main(void)
 {
 	struct lkmdbg_open_session_request req = {
@@ -39,8 +51,11 @@ int main(void)
 		.size = sizeof(req),
 	};
 	struct lkmdbg_status_reply reply = { 0 };
+	struct lkmdbg_event_record event = { 0 };
+	struct pollfd pfd = { 0 };
 	int proc_fd;
 	int session_fd;
+	ssize_t nread;
 
 	proc_fd = open(TARGET_PATH, O_RDONLY | O_CLOEXEC);
 	if (proc_fd < 0) {
@@ -66,6 +81,38 @@ int main(void)
 	}
 
 	print_status(&reply);
+
+	pfd.fd = session_fd;
+	pfd.events = POLLIN;
+	if (poll(&pfd, 1, 1000) < 0) {
+		fprintf(stderr, "poll failed: %s\n", strerror(errno));
+		close(session_fd);
+		close(proc_fd);
+		return 1;
+	}
+
+	if (!(pfd.revents & POLLIN)) {
+		fprintf(stderr, "poll timed out waiting for session event\n");
+		close(session_fd);
+		close(proc_fd);
+		return 1;
+	}
+
+	nread = read(session_fd, &event, sizeof(event));
+	if (nread < 0) {
+		fprintf(stderr, "read event failed: %s\n", strerror(errno));
+		close(session_fd);
+		close(proc_fd);
+		return 1;
+	}
+	if ((size_t)nread != sizeof(event)) {
+		fprintf(stderr, "short read: %zd\n", nread);
+		close(session_fd);
+		close(proc_fd);
+		return 1;
+	}
+
+	print_event(&event);
 
 	close(session_fd);
 	close(proc_fd);

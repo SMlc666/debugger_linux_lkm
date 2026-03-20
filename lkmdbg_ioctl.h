@@ -6,6 +6,11 @@
 
 #define LKMDBG_PROTO_VERSION 1
 #define LKMDBG_IOC_MAGIC 0xBD
+#define LKMDBG_EVENT_VERSION 1
+
+#define LKMDBG_EVENT_SESSION_OPENED 1
+#define LKMDBG_EVENT_SESSION_RESET 2
+#define LKMDBG_EVENT_INTERNAL_NOTICE 3
 
 struct lkmdbg_open_session_request {
 	__u32 version;
@@ -29,6 +34,17 @@ struct lkmdbg_status_reply {
 	__u64 session_ioctl_calls;
 	__u64 session_opened_total;
 	__u64 open_successes;
+};
+
+struct lkmdbg_event_record {
+	__u32 version;
+	__u32 type;
+	__u32 size;
+	__u32 reserved0;
+	__u64 session_id;
+	__u64 seq;
+	__u64 value0;
+	__u64 value1;
 };
 
 #define LKMDBG_IOC_OPEN_SESSION \
