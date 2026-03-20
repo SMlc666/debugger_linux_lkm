@@ -29,6 +29,7 @@ struct lkmdbg_state {
 	u64 next_session_id;
 	bool proc_version_hook_active;
 	bool hook_selftest_enabled;
+	bool hook_selftest_exec_ready;
 	bool hook_selftest_installed;
 	int hook_selftest_ret;
 	u64 hook_selftest_expected;

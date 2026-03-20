@@ -15,6 +15,7 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	u64 hook_actual;
 	bool hook_active;
 	bool selftest_enabled;
+	bool selftest_exec_ready;
 	bool selftest_installed;
 	int selftest_ret;
 
@@ -27,6 +28,7 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	sessions_total = lkmdbg_state.session_opened_total;
 	hook_active = lkmdbg_state.proc_version_hook_active;
 	selftest_enabled = lkmdbg_state.hook_selftest_enabled;
+	selftest_exec_ready = lkmdbg_state.hook_selftest_exec_ready;
 	selftest_installed = lkmdbg_state.hook_selftest_installed;
 	selftest_ret = lkmdbg_state.hook_selftest_ret;
 	hook_expected = lkmdbg_state.hook_selftest_expected;
@@ -49,6 +51,7 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	seq_printf(m, "target_path=%s\n", LKMDBG_TARGET_PATH);
 	seq_printf(m, "hook_selftest_mode=%u\n", hook_selftest_mode);
 	seq_printf(m, "hook_selftest_enabled=%u\n", selftest_enabled);
+	seq_printf(m, "hook_selftest_exec_ready=%u\n", selftest_exec_ready);
 	seq_printf(m, "hook_selftest_installed=%u\n", selftest_installed);
 	seq_printf(m, "hook_selftest_ret=%d\n", selftest_ret);
 	seq_printf(m, "hook_selftest_expected=0x%llx\n",

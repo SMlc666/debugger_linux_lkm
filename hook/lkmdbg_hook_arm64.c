@@ -539,9 +539,8 @@ int lkmdbg_hook_create(void *target, void *replacement,
 	return 0;
 }
 
-int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook, void **orig_out)
+int lkmdbg_hook_prepare_exec(struct lkmdbg_inline_hook *hook, void **orig_out)
 {
-	struct lkmdbg_patch_ctx ctx;
 	void *prepare_trampoline;
 	void *exec_trampoline;
 	bool can_use_exec_alloc;
@@ -552,6 +551,12 @@ int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook, void **orig_out)
 
 	if (hook->active)
 		return -EALREADY;
+
+	if (hook->trampoline_is_exec) {
+		if (orig_out)
+			*orig_out = hook->trampoline;
+		return 0;
+	}
 
 	if (!lkmdbg_symbols.flush_icache_range)
 		return -ENOENT;
@@ -604,6 +609,27 @@ int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook, void **orig_out)
 					  (unsigned long)hook->trampoline +
 					  hook->trampoline_words * sizeof(u32));
 
+	if (orig_out)
+		*orig_out = hook->trampoline;
+
+	return 0;
+}
+
+int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
+{
+	struct lkmdbg_patch_ctx ctx;
+	int ret;
+
+	if (!hook)
+		return -EINVAL;
+
+	if (hook->active)
+		return -EALREADY;
+
+	ret = lkmdbg_hook_prepare_exec(hook, orig_out);
+	if (ret)
+		return ret;
+
 	ctx.hook = hook;
 	ctx.insns = hook->patch_insns;
 	ctx.words = hook->patch_words;
@@ -628,6 +654,11 @@ int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook, void **orig_out)
 	pr_info("lkmdbg: inline hook installed target=%px origin=%px replacement=%px trampoline=%px\n",
 		hook->target, hook->origin, hook->replacement, hook->trampoline);
 	return 0;
+}
+
+int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook, void **orig_out)
+{
+	return lkmdbg_hook_patch_target(hook, orig_out);
 }
 
 void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook)
