@@ -14,10 +14,20 @@ module_param(hook_proc_version, bool, 0444);
 MODULE_PARM_DESC(hook_proc_version,
 		 "Clone and swap /proc/version inode file_operations to add hidden ioctl support");
 
-bool hook_selftest;
-module_param(hook_selftest, bool, 0644);
-MODULE_PARM_DESC(hook_selftest,
-		 "Install a module-local arm64 inline hook and run one validation call");
+unsigned int hook_selftest_mode;
+module_param(hook_selftest_mode, uint, 0644);
+MODULE_PARM_DESC(hook_selftest_mode,
+		 "0=off, 1=install only, 2=install and invoke a module-local arm64 inline hook");
+
+bool bypass_kprobe_blacklist;
+module_param(bypass_kprobe_blacklist, bool, 0644);
+MODULE_PARM_DESC(bypass_kprobe_blacklist,
+		 "Best-effort clear the kernel kprobe blacklist during module init");
+
+bool bypass_cfi;
+module_param(bypass_cfi, bool, 0644);
+MODULE_PARM_DESC(bypass_cfi,
+		 "Best-effort patch common CFI slowpath symbols during module init");
 
 struct lkmdbg_state lkmdbg_state = {
 	.lock = __MUTEX_INITIALIZER(lkmdbg_state.lock),
@@ -50,6 +60,13 @@ static noinline u64 lkmdbg_selftest_replacement(u64 value)
 	return original ^ 0x00FF00FF00FF00FFULL;
 }
 
+static void lkmdbg_trace_stage(const char *stage)
+{
+	pr_emerg("lkmdbg: stage=%s hook_selftest_mode=%u hook_proc_version=%u bypass_kprobe_blacklist=%u bypass_cfi=%u\n",
+		 stage, hook_selftest_mode, hook_proc_version,
+		 bypass_kprobe_blacklist, bypass_cfi);
+}
+
 static int lkmdbg_run_hook_selftest(void)
 {
 	const u64 input = 0x41;
@@ -61,6 +78,7 @@ static int lkmdbg_run_hook_selftest(void)
 	expected = lkmdbg_selftest_target(input + 1) ^
 		   0x00FF00FF00FF00FFULL;
 
+	lkmdbg_trace_stage("hook_selftest_install_begin");
 	ret = lkmdbg_hook_install(lkmdbg_selftest_target,
 				  lkmdbg_selftest_replacement,
 				  &lkmdbg_selftest_hook, &orig_fn);
@@ -74,10 +92,20 @@ static int lkmdbg_run_hook_selftest(void)
 		return ret;
 
 	lkmdbg_selftest_orig = orig_fn;
-	actual = lkmdbg_selftest_target(input);
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.hook_selftest_installed = true;
+	mutex_unlock(&lkmdbg_state.lock);
+
+	if (hook_selftest_mode < 2) {
+		lkmdbg_trace_stage("hook_selftest_install_done");
+		return 0;
+	}
+
+	lkmdbg_trace_stage("hook_selftest_invoke_begin");
+	actual = lkmdbg_selftest_target(input);
+
+	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.hook_selftest_expected = expected;
 	lkmdbg_state.hook_selftest_actual = actual;
 	mutex_unlock(&lkmdbg_state.lock);
@@ -101,17 +129,20 @@ static int __init lkmdbg_init(void)
 	int blacklist_patched;
 	int ret;
 
+	lkmdbg_trace_stage("init_begin");
 	lkmdbg_state.load_jiffies = jiffies;
 
 	ret = lkmdbg_debugfs_init();
 	if (ret)
 		return ret;
+	lkmdbg_trace_stage("debugfs_ready");
 
 	ret = lkmdbg_symbols_init();
 	if (ret) {
 		lkmdbg_debugfs_exit();
 		return ret;
 	}
+	lkmdbg_trace_stage("symbols_ready");
 
 	ret = lkmdbg_hooks_init();
 	if (ret) {
@@ -119,12 +150,22 @@ static int __init lkmdbg_init(void)
 		lkmdbg_debugfs_exit();
 		return ret;
 	}
+	lkmdbg_trace_stage("hooks_ready");
 
-	/* best-effort hardening bypass for hook work on GKI */
-	blacklist_patched = lkmdbg_disable_kprobe_blacklist();
-	cfi_patched = lkmdbg_cfi_bypass();
+	blacklist_patched = 0;
+	cfi_patched = 0;
+	if (bypass_kprobe_blacklist) {
+		lkmdbg_trace_stage("bypass_kprobe_begin");
+		blacklist_patched = lkmdbg_disable_kprobe_blacklist();
+		lkmdbg_trace_stage("bypass_kprobe_done");
+	}
+	if (bypass_cfi) {
+		lkmdbg_trace_stage("bypass_cfi_begin");
+		cfi_patched = lkmdbg_cfi_bypass();
+		lkmdbg_trace_stage("bypass_cfi_done");
+	}
 
-	if (hook_selftest) {
+	if (hook_selftest_mode) {
 		ret = lkmdbg_run_hook_selftest();
 		if (ret) {
 			pr_err("lkmdbg: hook selftest failed ret=%d\n", ret);
@@ -142,9 +183,11 @@ static int __init lkmdbg_init(void)
 		lkmdbg_debugfs_exit();
 		return ret;
 	}
+	lkmdbg_trace_stage("transport_ready");
 
-	pr_info("lkmdbg: loaded tag=%s hook_proc_version=%u kprobe_patched=%d cfi_patched=%d\n",
-		tag, hook_proc_version, blacklist_patched, cfi_patched);
+	pr_info("lkmdbg: loaded tag=%s hook_proc_version=%u hook_selftest_mode=%u kprobe_patched=%d cfi_patched=%d\n",
+		tag, hook_proc_version, hook_selftest_mode,
+		blacklist_patched, cfi_patched);
 	return 0;
 }
 

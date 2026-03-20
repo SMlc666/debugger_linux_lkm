@@ -65,7 +65,9 @@ struct lkmdbg_session {
 
 extern char *tag;
 extern bool hook_proc_version;
-extern bool hook_selftest;
+extern unsigned int hook_selftest_mode;
+extern bool bypass_kprobe_blacklist;
+extern bool bypass_cfi;
 extern struct lkmdbg_state lkmdbg_state;
 extern struct lkmdbg_symbols lkmdbg_symbols;
 

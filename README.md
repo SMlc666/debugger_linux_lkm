@@ -66,8 +66,19 @@ sudo cat /sys/kernel/debug/lkmdbg/status
 Run the module-local inline hook smoke test on load:
 
 ```bash
-sudo insmod lkmdbg.ko hook_selftest=1
+sudo insmod lkmdbg.ko hook_selftest_mode=1
 sudo cat /sys/kernel/debug/lkmdbg/status
+```
+
+Selftest modes:
+
+- `hook_selftest_mode=1`: install the inline hook but do not invoke the hooked function
+- `hook_selftest_mode=2`: install the hook and invoke one module-local test call
+
+The hardening bypasses are now opt-in:
+
+```bash
+sudo insmod lkmdbg.ko bypass_kprobe_blacklist=1 bypass_cfi=1
 ```
 
 This stage is intentionally conservative:

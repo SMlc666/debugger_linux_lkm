@@ -47,7 +47,7 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	seq_printf(m, "session_opened_total=%llu\n",
 		   (unsigned long long)sessions_total);
 	seq_printf(m, "target_path=%s\n", LKMDBG_TARGET_PATH);
-	seq_printf(m, "hook_selftest_requested=%u\n", hook_selftest);
+	seq_printf(m, "hook_selftest_mode=%u\n", hook_selftest_mode);
 	seq_printf(m, "hook_selftest_enabled=%u\n", selftest_enabled);
 	seq_printf(m, "hook_selftest_installed=%u\n", selftest_installed);
 	seq_printf(m, "hook_selftest_ret=%d\n", selftest_ret);
@@ -55,6 +55,8 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 		   (unsigned long long)hook_expected);
 	seq_printf(m, "hook_selftest_actual=0x%llx\n",
 		   (unsigned long long)hook_actual);
+	seq_printf(m, "bypass_kprobe_blacklist=%u\n", bypass_kprobe_blacklist);
+	seq_printf(m, "bypass_cfi=%u\n", bypass_cfi);
 
 	return 0;
 }
