@@ -10,6 +10,10 @@ on:
 jobs:
   module-build:
     runs-on: ubuntu-24.04
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
 
     steps:
       - name: Checkout
@@ -20,22 +24,33 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential ccache linux-headers-generic
 
+      - name: Prepare ccache directory
+        run: mkdir -p "$CCACHE_DIR"
+
       - name: Configure ccache
         uses: actions/cache@v4
         with:
-          path: ~/.ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-ccache-${{ github.ref_name }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-ccache-${{ github.ref_name }}-
             ${{ runner.os }}-ccache-
 
+      - name: Reset ccache stats
+        run: ccache --zero-stats
+
       - name: Build module
-        env:
-          CC: ccache gcc
         run: |
           KDIR="$(ls -d /usr/src/linux-headers-*-generic | sort -V | tail -n1)"
           echo "Using KDIR=$KDIR"
-          make KDIR="$KDIR"
+          make KDIR="$KDIR" CC="ccache gcc"
+
+      - name: Upload module artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lkmdbg-ko
+          path: lkmdbg.ko
+          if-no-files-found: error
 
       - name: Show ccache stats
         run: ccache --show-stats
