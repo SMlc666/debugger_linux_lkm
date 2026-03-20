@@ -27,6 +27,7 @@ Build the user-space bootstrap test tool:
 
 ```bash
 cc -O2 -Wall -Wextra -o tools/lkmdbg_open_session tools/lkmdbg_open_session.c
+cc -O2 -Wall -Wextra -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c
 ```
 
 Load and inspect:
@@ -80,6 +81,14 @@ Example bootstrap flow:
 sudo insmod lkmdbg.ko hook_proc_version=1
 cc -O2 -Wall -Wextra -o tools/lkmdbg_open_session tools/lkmdbg_open_session.c
 sudo ./tools/lkmdbg_open_session
+```
+
+Example direct memory access flow:
+
+```bash
+cc -O2 -Wall -Wextra -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c
+sudo ./tools/lkmdbg_mem_test read <pid> <remote_addr_hex> <length>
+sudo ./tools/lkmdbg_mem_test write <pid> <remote_addr_hex> <ascii_data>
 ```
 
 ## Android GKI note
