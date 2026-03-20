@@ -56,6 +56,11 @@ jobs:
       CCACHE_COMPILERCHECK: content
       KERNEL_REPO: https://android.googlesource.com/kernel/common
       KERNEL_BRANCH: android14-6.1
+      NDK_VERSION: android-ndk-r27d
+      NDK_ZIP: android-ndk-r27d-linux.zip
+      NDK_URL: https://dl.google.com/android/repository/android-ndk-r27d-linux.zip
+      NDK_DIR: ${{ runner.temp }}/android-ndk-r27d
+      ANDROID_API: "34"
 
     steps:
       - name: Checkout
@@ -77,7 +82,8 @@ jobs:
             lld \
             llvm \
             pahole \
-            rsync
+            rsync \
+            unzip
 
       - name: Prepare ccache directory
         run: mkdir -p "$CCACHE_DIR"
@@ -91,8 +97,21 @@ jobs:
             ${{ runner.os }}-android14-6.1-ccache-${{ github.ref_name }}-
             ${{ runner.os }}-android14-6.1-ccache-
 
+      - name: Cache Android NDK
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NDK_DIR }}
+          key: ${{ runner.os }}-${{ env.NDK_VERSION }}
+
       - name: Reset ccache stats
         run: ccache --zero-stats
+
+      - name: Fetch Android NDK
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -L "$NDK_URL" -o "$RUNNER_TEMP/$NDK_ZIP"
+          unzip -q "$RUNNER_TEMP/$NDK_ZIP" -d "$RUNNER_TEMP"
 
       - name: Fetch Android common kernel
         run: |
@@ -125,11 +144,26 @@ jobs:
             HOSTCC="ccache clang" \
             modules
 
-      - name: Upload Android module artifact
+      - name: Build Android userspace tools
+        run: |
+          TOOLCHAIN="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          TARGET="aarch64-linux-android${ANDROID_API}"
+          mkdir -p "$GITHUB_WORKSPACE/out/android14-6.1"
+          ccache "$TOOLCHAIN/${TARGET}-clang" -O2 -Wall -Wextra \
+            -o "$GITHUB_WORKSPACE/out/android14-6.1/lkmdbg_open_session" \
+            "$GITHUB_WORKSPACE/tools/lkmdbg_open_session.c"
+          ccache "$TOOLCHAIN/${TARGET}-clang" -O2 -Wall -Wextra \
+            -o "$GITHUB_WORKSPACE/out/android14-6.1/lkmdbg_mem_test" \
+            "$GITHUB_WORKSPACE/tools/lkmdbg_mem_test.c"
+
+      - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lkmdbg-ko-android14-6.1
-          path: lkmdbg.ko
+          name: lkmdbg-android14-6.1
+          path: |
+            lkmdbg.ko
+            out/android14-6.1/lkmdbg_open_session
+            out/android14-6.1/lkmdbg_mem_test
           if-no-files-found: error
 
       - name: Show ccache stats
