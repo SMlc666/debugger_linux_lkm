@@ -1,5 +1,6 @@
 ifneq ($(KERNELRELEASE),)
 obj-m += lkmdbg.o
+lkmdbg-y := lkmdbg_main.o lkmdbg_debugfs.o lkmdbg_session.o lkmdbg_transport_proc.o
 else
 KDIR ?= /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)
