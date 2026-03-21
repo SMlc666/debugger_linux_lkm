@@ -142,7 +142,12 @@ sudo ./tools/lkmdbg_mem_test write <pid> <remote_addr_hex> <ascii_data>
 
 ## Android GKI note
 
-The GitHub Actions workflow in this repository is only a host-side smoke test. It builds the module against Ubuntu kernel headers to catch obvious compile regressions. It does not validate Android 14 GKI 6.1 compatibility.
+The GitHub Actions workflow in this repository currently covers two generic CI checks:
+
+- a host-side build against Ubuntu kernel headers
+- a generic arm64 QEMU smoke test that boots a temporary upstream kernel and runs a basic `insmod`/`rmmod` cycle
+
+That QEMU job is only meant to catch obvious runtime regressions in a plain arm64 Linux environment. It still does not validate Android 14 GKI 6.1 compatibility.
 
 For actual Android bring-up you should point `KDIR` at the exact `android14-6.1` kernel build tree or exported module build headers used by your target device.
 
