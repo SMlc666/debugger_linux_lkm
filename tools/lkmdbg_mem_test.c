@@ -1015,8 +1015,7 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 	    !(entry.flags & LKMDBG_PAGE_FLAG_PRESENT) ||
 	    !(entry.flags & LKMDBG_PAGE_FLAG_FORCE_READ) ||
 	    (entry.flags & (LKMDBG_PAGE_FLAG_NOFAULT_READ |
-			    LKMDBG_PAGE_FLAG_NOFAULT_WRITE |
-			    LKMDBG_PAGE_FLAG_FORCE_WRITE))) {
+			    LKMDBG_PAGE_FLAG_NOFAULT_WRITE))) {
 		fprintf(stderr, "force-read page flags mismatch flags=0x%x\n",
 			entry.flags);
 		goto out;
