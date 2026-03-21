@@ -635,6 +635,8 @@ static int child_run(int info_fd, int cmd_fd, int reply_fd)
 	uint8_t *lost_page;
 	uint8_t *exec_page;
 	uint8_t *combo_page;
+	uint64_t data_write_value = 0x5555555555555555ULL;
+	uint64_t combo_write_value = 0x6666666666666666ULL;
 
 	page_size = (size_t)sysconf(_SC_PAGESIZE);
 	if (!page_size)
@@ -686,7 +688,8 @@ static int child_run(int info_fd, int cmd_fd, int reply_fd)
 				return 2;
 			break;
 		case CHILD_OP_WRITE_DATA:
-			(*(volatile uint64_t *)info.data_addr)++;
+			*(volatile uint64_t *)info.data_addr = data_write_value;
+			data_write_value += 0x1111111111111111ULL;
 			if (child_reply_status(reply_fd, 0, 0) < 0)
 				return 2;
 			break;
@@ -706,7 +709,9 @@ static int child_run(int info_fd, int cmd_fd, int reply_fd)
 				return 2;
 			break;
 		case CHILD_OP_WRITE_COMBO:
-			(*(volatile uint64_t *)info.combo_data_addr)++;
+			*(volatile uint64_t *)info.combo_data_addr =
+				combo_write_value;
+			combo_write_value += 0x0101010101010101ULL;
 			if (child_reply_status(reply_fd, 0, 0) < 0)
 				return 2;
 			break;
