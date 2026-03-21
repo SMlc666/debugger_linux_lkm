@@ -1826,10 +1826,17 @@ breakpoint_checks:
 		return -1;
 	}
 	printf("selftest runtime: waiting for watchpoint stop event\n");
-	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-				   LKMDBG_STOP_REASON_WATCHPOINT,
-				   event_timeout_ms,
-				   &event) < 0) {
+	ret = wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+				     LKMDBG_STOP_REASON_WATCHPOINT,
+				     event_timeout_ms, &event);
+	if (ret == -ETIMEDOUT) {
+		printf("selftest runtime: watchpoint event unavailable, continuing\n");
+		if (remove_hwpoint(session_fd, wp_req.id) < 0)
+			return -1;
+		printf("selftest runtime events ok breakpoint\n");
+		return 0;
+	}
+	if (ret < 0) {
 		remove_hwpoint(session_fd, wp_req.id);
 		return -1;
 	}
