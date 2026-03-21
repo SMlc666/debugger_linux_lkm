@@ -1,5 +1,7 @@
+#include <linux/atomic.h>
 #include <linux/capability.h>
 #include <linux/fs.h>
+#include <linux/jiffies.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 
@@ -14,6 +16,8 @@ static int (*proc_version_orig_open)(struct inode *inode, struct file *file);
 static int (*proc_version_orig_release)(struct inode *inode, struct file *file);
 static long (*proc_version_orig_ioctl)(struct file *file, unsigned int cmd,
 				       unsigned long arg);
+static atomic_t proc_version_open_inflight = ATOMIC_INIT(0);
+static DECLARE_WAIT_QUEUE_HEAD(proc_version_open_waitq);
 #ifdef CONFIG_COMPAT
 static long (*proc_version_orig_compat_ioctl)(struct file *file,
 					      unsigned int cmd,
@@ -43,20 +47,39 @@ static long lkmdbg_bootstrap_ioctl(struct file *file, unsigned int cmd,
 
 static int lkmdbg_proc_version_open(struct inode *inode, struct file *file)
 {
+	struct lkmdbg_hook_registry_entry *registry;
+	int (*orig_open)(struct inode *inode, struct file *file);
+	struct file_operations *hook_fops;
 	const struct file_operations *new_fops;
 	const struct file_operations *old_fops;
 	int ret = 0;
 
-	if (proc_version_orig_open)
-		ret = proc_version_orig_open(inode, file);
-	if (ret || !proc_version_inode || inode != proc_version_inode)
-		return ret;
+	atomic_inc(&proc_version_open_inflight);
 
-	lkmdbg_hook_registry_note_hit(proc_version_open_registry);
+	orig_open = READ_ONCE(proc_version_orig_open);
+	if (orig_open)
+		ret = orig_open(inode, file);
+	if (ret)
+		goto out;
 
-	new_fops = fops_get(proc_version_hook_fops);
-	if (!new_fops)
-		return -ENOENT;
+	if (!proc_version_inode || inode != proc_version_inode)
+		goto out;
+
+	registry = READ_ONCE(proc_version_open_registry);
+	if (registry)
+		lkmdbg_hook_registry_note_hit(registry);
+
+	hook_fops = READ_ONCE(proc_version_hook_fops);
+	if (!hook_fops) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	new_fops = fops_get(hook_fops);
+	if (!new_fops) {
+		ret = -ENOENT;
+		goto out;
+	}
 
 	old_fops = file->f_op;
 	WRITE_ONCE(file->f_op, new_fops);
@@ -65,6 +88,10 @@ static int lkmdbg_proc_version_open(struct inode *inode, struct file *file)
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.proc_open_successes++;
 	mutex_unlock(&lkmdbg_state.lock);
+
+out:
+	if (atomic_dec_and_test(&proc_version_open_inflight))
+		wake_up_all(&proc_version_open_waitq);
 
 	return ret;
 }
@@ -110,6 +137,8 @@ int lkmdbg_transport_init(void)
 
 	if (!hook_proc_version)
 		return 0;
+
+	atomic_set(&proc_version_open_inflight, 0);
 
 	if (!lkmdbg_symbols.filp_open || !lkmdbg_symbols.filp_close)
 		return -ENOENT;
@@ -221,8 +250,20 @@ int lkmdbg_transport_init(void)
 
 void lkmdbg_transport_exit(void)
 {
+	long remaining = 1;
+
 	if (proc_version_open_hook) {
-		lkmdbg_hook_remove(proc_version_open_hook);
+		if (!lkmdbg_hook_deactivate(proc_version_open_hook)) {
+			remaining = wait_event_timeout(
+				proc_version_open_waitq,
+				atomic_read(&proc_version_open_inflight) == 0,
+				msecs_to_jiffies(1000));
+			if (!remaining)
+				pr_warn("lkmdbg: proc_version_open hook drain timed out inflight=%d\n",
+					atomic_read(&proc_version_open_inflight));
+		}
+
+		lkmdbg_hook_destroy(proc_version_open_hook);
 		proc_version_open_hook = NULL;
 	}
 	if (proc_version_open_registry) {

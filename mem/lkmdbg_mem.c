@@ -144,7 +144,7 @@ static unsigned int lkmdbg_mem_gup_flags(const struct lkmdbg_mem_op *op,
 
 static long lkmdbg_mem_xfer_window(struct mm_struct *mm, u64 remote_addr,
 				   u64 local_addr, size_t length,
-				   unsigned int gup_flags, bool write, u8 *bounce)
+				   unsigned int gup_flags, bool write)
 {
 	struct page *pages[LKMDBG_MEM_MAX_PIN_PAGES] = { 0 };
 	size_t total_done = 0;
@@ -187,13 +187,12 @@ static long lkmdbg_mem_xfer_window(struct mm_struct *mm, u64 remote_addr,
 			page_addr = kmap_local_page(pages[i]);
 
 			if (write) {
-				if (copy_from_user(bounce, user_addr, chunk_len)) {
+				if (copy_from_user((u8 *)page_addr + page_offset,
+						   user_addr, chunk_len)) {
 					kunmap_local(page_addr);
 					lkmdbg_put_remote_pages(pages, pinned);
 					return -EFAULT;
 				}
-				memcpy((u8 *)page_addr + page_offset, bounce,
-				       chunk_len);
 				set_page_dirty_lock(pages[i]);
 			} else if (copy_to_user(user_addr,
 						(u8 *)page_addr + page_offset,
@@ -275,7 +274,6 @@ static long lkmdbg_mem_copy_reply(void __user *argp, struct lkmdbg_mem_request *
 static long lkmdbg_mem_xfer_ops(struct mm_struct *mm, struct lkmdbg_mem_op *ops,
 				u32 op_count, bool write)
 {
-	u8 *bounce = NULL;
 	u64 batch_total = 0;
 	u64 transferred = 0;
 	u32 i;
@@ -293,12 +291,6 @@ static long lkmdbg_mem_xfer_ops(struct mm_struct *mm, struct lkmdbg_mem_op *ops,
 		ops[i].bytes_done = 0;
 	}
 
-	if (write) {
-		bounce = kmalloc(PAGE_SIZE, GFP_KERNEL);
-		if (!bounce)
-			return -ENOMEM;
-	}
-
 	for (i = 0; i < op_count; i++) {
 		long copied;
 		unsigned int gup_flags;
@@ -306,11 +298,9 @@ static long lkmdbg_mem_xfer_ops(struct mm_struct *mm, struct lkmdbg_mem_op *ops,
 		gup_flags = lkmdbg_mem_gup_flags(&ops[i], write);
 		copied = lkmdbg_mem_xfer_window(mm, ops[i].remote_addr,
 						ops[i].local_addr, ops[i].length,
-						gup_flags, write, bounce);
-		if (copied < 0) {
-			kfree(bounce);
+						gup_flags, write);
+		if (copied < 0)
 			return copied;
-		}
 
 		ops[i].bytes_done = (u32)copied;
 		transferred += copied;
@@ -318,7 +308,6 @@ static long lkmdbg_mem_xfer_ops(struct mm_struct *mm, struct lkmdbg_mem_op *ops,
 			break;
 	}
 
-	kfree(bounce);
 	return (long)transferred;
 }
 
