@@ -63,9 +63,6 @@ static int lkmdbg_validate_mem_op(const struct lkmdbg_mem_op *op, bool write)
 	if (op->flags & ~LKMDBG_MEM_OP_VALID_FLAGS)
 		return -EINVAL;
 
-	if (write && (op->flags & LKMDBG_MEM_OP_FLAG_FORCE_ACCESS))
-		return -EOPNOTSUPP;
-
 	return 0;
 }
 
@@ -139,7 +136,7 @@ static unsigned int lkmdbg_mem_gup_flags(const struct lkmdbg_mem_op *op,
 {
 	unsigned int flags = write ? FOLL_WRITE : 0;
 
-	if (!write && (op->flags & LKMDBG_MEM_OP_FLAG_FORCE_ACCESS))
+	if (op->flags & LKMDBG_MEM_OP_FLAG_FORCE_ACCESS)
 		flags |= FOLL_FORCE;
 
 	return flags;

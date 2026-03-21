@@ -121,8 +121,8 @@ Memory transfer requests now use a single batched shape:
 - a single-op request is just `op_count=1`
 - the kernel processes ops against one target `mm` without faulting missing remote pages in
 - large contiguous transfers are handled as one op; sparse transfers can be grouped into one batched request
-- `lkmdbg_mem_op.flags` currently supports `LKMDBG_MEM_OP_FLAG_FORCE_ACCESS` for privileged reads of already-present pages even when user read permission is removed
-- forced writes are intentionally rejected with `-EOPNOTSUPP`; COW-sensitive and file-backed write bypass is not exposed by this interface
+- `lkmdbg_mem_op.flags` currently supports `LKMDBG_MEM_OP_FLAG_FORCE_ACCESS` for privileged access to already-present pages even when user permissions are removed
+- forced writes are now kernel-permitted on already-present pages as well; user space is responsible for avoiding COW-sensitive or file-backed targets if that distinction matters
 
 Current session events include:
 
