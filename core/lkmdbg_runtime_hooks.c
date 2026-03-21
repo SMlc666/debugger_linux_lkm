@@ -6,6 +6,7 @@
 #include "lkmdbg_internal.h"
 
 static struct lkmdbg_inline_hook *lkmdbg_seq_read_hook;
+static struct lkmdbg_hook_registry_entry *lkmdbg_seq_read_registry;
 static ssize_t (*lkmdbg_seq_read_orig)(struct file *file, char __user *buf,
 				       size_t count, loff_t *ppos);
 
@@ -17,6 +18,7 @@ static ssize_t lkmdbg_seq_read_replacement(struct file *file, char __user *buf,
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.seq_read_hook_hits++;
 	mutex_unlock(&lkmdbg_state.lock);
+	lkmdbg_hook_registry_note_hit(lkmdbg_seq_read_registry);
 
 	if (!lkmdbg_seq_read_orig)
 		return -ENOENT;
@@ -43,15 +45,26 @@ static int lkmdbg_install_seq_read_hook(void)
 	if (!target)
 		return -ENOENT;
 
+	lkmdbg_seq_read_registry = lkmdbg_hook_registry_register("seq_read",
+							target,
+							lkmdbg_seq_read_replacement);
+	if (!lkmdbg_seq_read_registry)
+		return -ENOMEM;
+
 	ret = lkmdbg_hook_install(target, lkmdbg_seq_read_replacement,
 				  &lkmdbg_seq_read_hook, &orig_fn);
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.seq_read_hook_last_ret = ret;
 	mutex_unlock(&lkmdbg_state.lock);
-	if (ret)
+	if (ret) {
+		lkmdbg_hook_registry_unregister(lkmdbg_seq_read_registry, ret);
+		lkmdbg_seq_read_registry = NULL;
 		return ret;
+	}
 
 	lkmdbg_seq_read_orig = orig_fn;
+	lkmdbg_hook_registry_mark_installed(lkmdbg_seq_read_registry, target,
+						orig_fn, 0);
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.seq_read_hook_active = true;
@@ -87,6 +100,10 @@ void lkmdbg_runtime_hooks_exit(void)
 	if (lkmdbg_seq_read_hook) {
 		lkmdbg_hook_remove(lkmdbg_seq_read_hook);
 		lkmdbg_seq_read_hook = NULL;
+	}
+	if (lkmdbg_seq_read_registry) {
+		lkmdbg_hook_registry_unregister(lkmdbg_seq_read_registry, 0);
+		lkmdbg_seq_read_registry = NULL;
 	}
 
 	lkmdbg_seq_read_orig = NULL;

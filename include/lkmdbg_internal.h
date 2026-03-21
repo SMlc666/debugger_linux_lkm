@@ -4,6 +4,7 @@
 #include <linux/debugfs.h>
 #include <linux/fs.h>
 #include <linux/kprobes.h>
+#include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/poll.h>
 #include <linux/types.h>
@@ -16,8 +17,23 @@
 #define LKMDBG_DIR_NAME "lkmdbg"
 #define LKMDBG_TARGET_PATH "/proc/version"
 #define LKMDBG_SESSION_EVENT_CAPACITY 32
+#define LKMDBG_HOOK_NAME_MAX 32
 
 struct mm_struct;
+struct seq_file;
+
+struct lkmdbg_hook_registry_entry {
+	struct list_head node;
+	u64 hook_id;
+	char name[LKMDBG_HOOK_NAME_MAX];
+	u64 target;
+	u64 origin;
+	u64 replacement;
+	u64 trampoline;
+	u64 hits;
+	int last_ret;
+	bool active;
+};
 
 struct lkmdbg_state {
 	struct dentry *debugfs_dir;
@@ -71,6 +87,7 @@ int lkmdbg_disable_kprobe_blacklist(void);
 int lkmdbg_cfi_bypass(void);
 
 struct lkmdbg_session {
+	struct list_head node;
 	struct mutex lock;
 	wait_queue_head_t readq;
 	u64 session_id;
@@ -98,6 +115,17 @@ void lkmdbg_debugfs_exit(void);
 int lkmdbg_symbols_init(void);
 void lkmdbg_symbols_exit(void);
 
+int lkmdbg_hook_registry_debugfs_show(struct seq_file *m);
+struct lkmdbg_hook_registry_entry *
+lkmdbg_hook_registry_register(const char *name, void *target,
+			      void *replacement);
+void lkmdbg_hook_registry_mark_installed(
+	struct lkmdbg_hook_registry_entry *entry, void *origin,
+	void *trampoline, int ret);
+void lkmdbg_hook_registry_note_hit(struct lkmdbg_hook_registry_entry *entry);
+void lkmdbg_hook_registry_unregister(struct lkmdbg_hook_registry_entry *entry,
+					 int ret);
+
 int lkmdbg_runtime_hooks_init(void);
 void lkmdbg_runtime_hooks_exit(void);
 
@@ -110,6 +138,7 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 ssize_t lkmdbg_session_read(struct file *file, char __user *buf, size_t count,
 			   loff_t *ppos);
 __poll_t lkmdbg_session_poll(struct file *file, poll_table *wait);
+void lkmdbg_session_broadcast_event(u32 type, u64 value0, u64 value1);
 long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_read(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_write(struct lkmdbg_session *session, void __user *argp);

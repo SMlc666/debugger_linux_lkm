@@ -9,6 +9,7 @@ static struct inode *proc_version_inode;
 static const struct file_operations *proc_version_orig_fops;
 static struct file_operations *proc_version_hook_fops;
 static struct lkmdbg_inline_hook *proc_version_open_hook;
+static struct lkmdbg_hook_registry_entry *proc_version_open_registry;
 static int (*proc_version_orig_open)(struct inode *inode, struct file *file);
 static int (*proc_version_orig_release)(struct inode *inode, struct file *file);
 static long (*proc_version_orig_ioctl)(struct file *file, unsigned int cmd,
@@ -50,6 +51,8 @@ static int lkmdbg_proc_version_open(struct inode *inode, struct file *file)
 		ret = proc_version_orig_open(inode, file);
 	if (ret || !proc_version_inode || inode != proc_version_inode)
 		return ret;
+
+	lkmdbg_hook_registry_note_hit(proc_version_open_registry);
 
 	new_fops = fops_get(proc_version_hook_fops);
 	if (!new_fops)
@@ -167,10 +170,29 @@ int lkmdbg_transport_init(void)
 	proc_version_hook_fops->compat_ioctl = lkmdbg_proc_version_compat_ioctl;
 #endif
 
+	proc_version_open_registry = lkmdbg_hook_registry_register(
+		"proc_version_open", proc_version_orig_open, lkmdbg_proc_version_open);
+	if (!proc_version_open_registry) {
+		kfree(proc_version_hook_fops);
+		proc_version_hook_fops = NULL;
+		iput(proc_version_inode);
+		proc_version_inode = NULL;
+		proc_version_orig_fops = NULL;
+		proc_version_orig_open = NULL;
+		proc_version_orig_release = NULL;
+		proc_version_orig_ioctl = NULL;
+#ifdef CONFIG_COMPAT
+		proc_version_orig_compat_ioctl = NULL;
+#endif
+		return -ENOMEM;
+	}
+
 	ret = lkmdbg_hook_install((void *)proc_version_orig_open,
 				  lkmdbg_proc_version_open,
 				  &proc_version_open_hook, &orig_open);
 	if (ret) {
+		lkmdbg_hook_registry_unregister(proc_version_open_registry, ret);
+		proc_version_open_registry = NULL;
 		kfree(proc_version_hook_fops);
 		proc_version_hook_fops = NULL;
 		iput(proc_version_inode);
@@ -186,6 +208,9 @@ int lkmdbg_transport_init(void)
 	}
 
 	proc_version_orig_open = orig_open;
+	lkmdbg_hook_registry_mark_installed(proc_version_open_registry,
+						proc_version_orig_fops->open,
+						orig_open, 0);
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.proc_version_hook_active = true;
@@ -199,6 +224,10 @@ void lkmdbg_transport_exit(void)
 	if (proc_version_open_hook) {
 		lkmdbg_hook_remove(proc_version_open_hook);
 		proc_version_open_hook = NULL;
+	}
+	if (proc_version_open_registry) {
+		lkmdbg_hook_registry_unregister(proc_version_open_registry, 0);
+		proc_version_open_registry = NULL;
 	}
 
 	mutex_lock(&lkmdbg_state.lock);

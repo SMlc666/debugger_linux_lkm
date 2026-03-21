@@ -10,18 +10,20 @@
 
 #include "lkmdbg_internal.h"
 
+static LIST_HEAD(lkmdbg_session_list);
+static DEFINE_MUTEX(lkmdbg_session_list_lock);
+
 static bool lkmdbg_session_has_events(struct lkmdbg_session *session)
 {
 	return READ_ONCE(session->event_count) > 0;
 }
 
-static void lkmdbg_session_queue_event(struct lkmdbg_session *session, u32 type,
-				       u64 value0, u64 value1)
+static void lkmdbg_session_queue_event_locked(struct lkmdbg_session *session,
+					      u32 type, u64 value0,
+					      u64 value1)
 {
 	struct lkmdbg_event_record *event;
 	u32 slot;
-
-	mutex_lock(&session->lock);
 
 	slot = (session->event_head + session->event_count) %
 	       LKMDBG_SESSION_EVENT_CAPACITY;
@@ -44,9 +46,30 @@ static void lkmdbg_session_queue_event(struct lkmdbg_session *session, u32 type,
 	event->seq = session->event_seq;
 	event->value0 = value0;
 	event->value1 = value1;
+}
+
+static void lkmdbg_session_queue_event(struct lkmdbg_session *session, u32 type,
+				       u64 value0, u64 value1)
+{
+	mutex_lock(&session->lock);
+	lkmdbg_session_queue_event_locked(session, type, value0, value1);
 
 	mutex_unlock(&session->lock);
 	wake_up_interruptible(&session->readq);
+}
+
+void lkmdbg_session_broadcast_event(u32 type, u64 value0, u64 value1)
+{
+	struct lkmdbg_session *session;
+
+	mutex_lock(&lkmdbg_session_list_lock);
+	list_for_each_entry(session, &lkmdbg_session_list, node) {
+		mutex_lock(&session->lock);
+		lkmdbg_session_queue_event_locked(session, type, value0, value1);
+		mutex_unlock(&session->lock);
+		wake_up_interruptible(&session->readq);
+	}
+	mutex_unlock(&lkmdbg_session_list_lock);
 }
 
 static int lkmdbg_session_copy_status_to_user(struct lkmdbg_session *session,
@@ -92,6 +115,11 @@ static int lkmdbg_session_release(struct inode *inode, struct file *file)
 	if (lkmdbg_state.active_sessions > 0)
 		lkmdbg_state.active_sessions--;
 	mutex_unlock(&lkmdbg_state.lock);
+
+	mutex_lock(&lkmdbg_session_list_lock);
+	if (!list_empty(&session->node))
+		list_del_init(&session->node);
+	mutex_unlock(&lkmdbg_session_list_lock);
 
 	kfree(session);
 	return 0;
@@ -236,6 +264,7 @@ int lkmdbg_open_session(void __user *argp)
 
 	mutex_init(&session->lock);
 	init_waitqueue_head(&session->readq);
+	INIT_LIST_HEAD(&session->node);
 	session->owner_tgid = current->tgid;
 
 	mutex_lock(&lkmdbg_state.lock);
@@ -254,6 +283,10 @@ int lkmdbg_open_session(void __user *argp)
 	lkmdbg_state.session_opened_total++;
 	lkmdbg_state.active_sessions++;
 	mutex_unlock(&lkmdbg_state.lock);
+
+	mutex_lock(&lkmdbg_session_list_lock);
+	list_add_tail(&session->node, &lkmdbg_session_list);
+	mutex_unlock(&lkmdbg_session_list_lock);
 
 	lkmdbg_session_queue_event(session, LKMDBG_EVENT_SESSION_OPENED,
 				   current->tgid, 0);

@@ -124,9 +124,27 @@ static int lkmdbg_status_open(struct inode *inode, struct file *file)
 	return single_open(file, lkmdbg_status_show, inode->i_private);
 }
 
+static int lkmdbg_hooks_show(struct seq_file *m, void *unused)
+{
+	return lkmdbg_hook_registry_debugfs_show(m);
+}
+
+static int lkmdbg_hooks_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, lkmdbg_hooks_show, inode->i_private);
+}
+
 static const struct file_operations lkmdbg_status_fops = {
 	.owner = THIS_MODULE,
 	.open = lkmdbg_status_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static const struct file_operations lkmdbg_hooks_fops = {
+	.owner = THIS_MODULE,
+	.open = lkmdbg_hooks_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
 	.release = single_release,
@@ -140,6 +158,13 @@ int lkmdbg_debugfs_init(void)
 
 	if (!debugfs_create_file("status", 0444, lkmdbg_state.debugfs_dir, NULL,
 				 &lkmdbg_status_fops)) {
+		debugfs_remove_recursive(lkmdbg_state.debugfs_dir);
+		lkmdbg_state.debugfs_dir = NULL;
+		return -ENOMEM;
+	}
+
+	if (!debugfs_create_file("hooks", 0444, lkmdbg_state.debugfs_dir, NULL,
+				 &lkmdbg_hooks_fops)) {
 		debugfs_remove_recursive(lkmdbg_state.debugfs_dir);
 		lkmdbg_state.debugfs_dir = NULL;
 		return -ENOMEM;

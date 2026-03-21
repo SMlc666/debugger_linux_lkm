@@ -8,7 +8,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mount.h>
+#include <sys/poll.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -16,7 +18,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "../../include/lkmdbg_ioctl.h"
+
 #define STATUS_PATH "/sys/kernel/debug/lkmdbg/status"
+#define HOOKS_PATH "/sys/kernel/debug/lkmdbg/hooks"
 #define MODULE_PATH "/lkmdbg.ko"
 #define MODULE_NAME "lkmdbg"
 #define OPEN_SESSION_TOOL "/lkmdbg_open_session"
@@ -145,6 +150,67 @@ static void qemu_run_tool(char *const argv[])
 		   WEXITSTATUS(status));
 }
 
+static int qemu_open_session(void)
+{
+	struct lkmdbg_open_session_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+	};
+	int proc_fd;
+	int session_fd;
+
+	proc_fd = open("/proc/version", O_RDONLY | O_CLOEXEC);
+	if (proc_fd < 0)
+		qemu_fail("open_proc_version_for_session errno=%d", errno);
+
+	session_fd = ioctl(proc_fd, LKMDBG_IOC_OPEN_SESSION, &req);
+	if (session_fd < 0) {
+		close(proc_fd);
+		qemu_fail("open_session_ioctl errno=%d", errno);
+	}
+
+	close(proc_fd);
+	return session_fd;
+}
+
+static void qemu_drain_one_event(int session_fd)
+{
+	struct lkmdbg_event_record event;
+	ssize_t nr;
+
+	nr = read(session_fd, &event, sizeof(event));
+	if (nr < 0)
+		qemu_fail("read_session_event errno=%d", errno);
+	qemu_check((size_t)nr == sizeof(event), "short_session_event_read=%zd", nr);
+}
+
+static void qemu_expect_event_type(int session_fd, unsigned int type)
+{
+	struct lkmdbg_event_record event;
+	struct pollfd pfd = {
+		.fd = session_fd,
+		.events = POLLIN,
+	};
+	int poll_ret;
+	ssize_t nr;
+
+	for (;;) {
+		poll_ret = poll(&pfd, 1, 1000);
+		if (poll_ret < 0)
+			qemu_fail("poll_session_event errno=%d", errno);
+		qemu_check(poll_ret > 0 && (pfd.revents & POLLIN),
+			   "missing_session_event_type_%u", type);
+
+		nr = read(session_fd, &event, sizeof(event));
+		if (nr < 0)
+			qemu_fail("read_session_event errno=%d", errno);
+		qemu_check((size_t)nr == sizeof(event), "short_session_event_read=%zd",
+			   nr);
+		if (event.type == type)
+			return;
+	}
+}
+
 static void qemu_insmod(const char *params)
 {
 	int fd;
@@ -229,13 +295,25 @@ int main(void)
 	qemu_rmmod();
 
 	for (iter = 0; iter < 5; iter++) {
-		qemu_insmod("hook_seq_read=1");
+		int session_fd;
+
+		qemu_insmod("hook_proc_version=1 hook_seq_read=1");
 		qemu_expect_status_line("seq_read_hook_active=1\n");
+		qemu_expect_status_line("proc_version_hook_active=1\n");
 		qemu_expect_status_u64_at_least("inline_hook_active=", 1);
+		qemu_read_file(HOOKS_PATH, version_buf, sizeof(version_buf));
+		qemu_check(strstr(version_buf, "name=seq_read") != NULL,
+			   "missing_seq_read_registry");
+		qemu_check(strstr(version_buf, "name=proc_version_open") != NULL,
+			   "missing_proc_version_open_registry");
+		session_fd = qemu_open_session();
+		qemu_drain_one_event(session_fd);
 		qemu_read_file("/proc/version", version_buf, sizeof(version_buf));
 		qemu_check(version_buf[0] != '\0', "empty_proc_version_seq_read");
+		qemu_expect_event_type(session_fd, LKMDBG_EVENT_HOOK_HIT);
 		qemu_expect_status_u64_at_least("seq_read_hook_hits=", 2);
 		qemu_expect_status_u64_at_least("inline_hook_install_total=", 1);
+		close(session_fd);
 		qemu_rmmod();
 	}
 
