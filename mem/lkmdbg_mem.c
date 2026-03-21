@@ -13,6 +13,12 @@
 
 #define LKMDBG_MEM_MAX_XFER 16384U
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+#define LKMDBG_GUP_NOFAULT_FLAG (1U << 5)
+#else
+#define LKMDBG_GUP_NOFAULT_FLAG FOLL_NOFAULT
+#endif
+
 static struct task_struct *lkmdbg_get_target_task(struct lkmdbg_session *session)
 {
 	pid_t target_tgid;
@@ -63,28 +69,22 @@ static long lkmdbg_get_remote_page_nofault(struct mm_struct *mm,
 	long ret;
 	int locked = 1;
 
-#ifndef FOLL_NOFAULT
-	(void)mm;
-	(void)addr;
-	(void)flags;
-	(void)page_out;
-	return -EOPNOTSUPP;
-#else
 	mmap_read_lock(mm);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
-	ret = get_user_pages_remote(mm, addr, 1, flags | FOLL_NOFAULT,
+	ret = get_user_pages_remote(mm, addr, 1,
+				    flags | LKMDBG_GUP_NOFAULT_FLAG,
 				    page_out, &locked);
 #else
 	struct vm_area_struct *vma = NULL;
 
-	ret = get_user_pages_remote(mm, addr, 1, flags | FOLL_NOFAULT,
+	ret = get_user_pages_remote(mm, addr, 1,
+				    flags | LKMDBG_GUP_NOFAULT_FLAG,
 				    page_out, &vma, &locked);
 #endif
 	if (locked)
 		mmap_read_unlock(mm);
 
 	return ret;
-#endif
 }
 
 static bool lkmdbg_mem_is_nofault_miss(long ret)
