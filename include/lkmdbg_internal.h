@@ -80,6 +80,10 @@ struct lkmdbg_symbols {
 	void *(*module_alloc)(unsigned long size);
 	void (*module_memfree)(void *region);
 	struct mm_struct *init_mm;
+	unsigned long task_work_add_sym;
+	unsigned long task_work_cancel_match_sym;
+	unsigned long task_work_cancel_func_sym;
+	unsigned long task_work_cancel_sym;
 };
 
 int lkmdbg_disable_kprobe_blacklist(void);

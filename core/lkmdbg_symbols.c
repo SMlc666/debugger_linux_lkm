@@ -71,6 +71,22 @@ static int lkmdbg_resolve_runtime_symbols(void)
 	if (addr)
 		lkmdbg_symbols.init_mm = (struct mm_struct *)addr;
 
+	addr = lkmdbg_symbols.kallsyms_lookup_name("task_work_add");
+	if (addr)
+		lkmdbg_symbols.task_work_add_sym = addr;
+
+	addr = lkmdbg_symbols.kallsyms_lookup_name("task_work_cancel_match");
+	if (addr)
+		lkmdbg_symbols.task_work_cancel_match_sym = addr;
+
+	addr = lkmdbg_symbols.kallsyms_lookup_name("task_work_cancel_func");
+	if (addr)
+		lkmdbg_symbols.task_work_cancel_func_sym = addr;
+
+	addr = lkmdbg_symbols.kallsyms_lookup_name("task_work_cancel");
+	if (addr)
+		lkmdbg_symbols.task_work_cancel_sym = addr;
+
 	return 0;
 }
 
@@ -91,4 +107,8 @@ void lkmdbg_symbols_exit(void)
 	lkmdbg_symbols.module_alloc = NULL;
 	lkmdbg_symbols.module_memfree = NULL;
 	lkmdbg_symbols.init_mm = NULL;
+	lkmdbg_symbols.task_work_add_sym = 0;
+	lkmdbg_symbols.task_work_cancel_match_sym = 0;
+	lkmdbg_symbols.task_work_cancel_func_sym = 0;
+	lkmdbg_symbols.task_work_cancel_sym = 0;
 }
