@@ -276,11 +276,21 @@ jobs:
           ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/qemu-smoke-init" \
             "$GITHUB_WORKSPACE/.github/scripts/qemu-smoke-init.c"
+          ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/lkmdbg_open_session" \
+            "$GITHUB_WORKSPACE/tools/lkmdbg_open_session.c"
+          ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/lkmdbg_mem_test" \
+            "$GITHUB_WORKSPACE/tools/lkmdbg_mem_test.c"
           mkdir -p "$INITRAMFS_DIR/dev" "$INITRAMFS_DIR/proc" \
             "$INITRAMFS_DIR/sys" "$INITRAMFS_DIR/sys/kernel" \
             "$INITRAMFS_DIR/sys/kernel/debug"
           install -m 0755 "$RUNNER_TEMP/qemu-smoke-init" \
             "$INITRAMFS_DIR/init"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_open_session" \
+            "$INITRAMFS_DIR/lkmdbg_open_session"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_mem_test" \
+            "$INITRAMFS_DIR/lkmdbg_mem_test"
           cp "$GITHUB_WORKSPACE/lkmdbg.ko" "$INITRAMFS_DIR/lkmdbg.ko"
           (
             cd "$INITRAMFS_DIR"

@@ -13,11 +13,14 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define STATUS_PATH "/sys/kernel/debug/lkmdbg/status"
 #define MODULE_PATH "/lkmdbg.ko"
 #define MODULE_NAME "lkmdbg"
+#define OPEN_SESSION_TOOL "/lkmdbg_open_session"
+#define MEM_TEST_TOOL "/lkmdbg_mem_test"
 
 static void qemu_poweroff(void)
 {
@@ -92,6 +95,28 @@ static void qemu_expect_status_line(const char *needle)
 	qemu_check(strstr(buf, needle) != NULL, "missing_status_%s", needle);
 }
 
+static void qemu_run_tool(char *const argv[])
+{
+	pid_t pid;
+	int status;
+
+	pid = fork();
+	if (pid < 0)
+		qemu_fail("fork_%s errno=%d", argv[0], errno);
+
+	if (pid == 0) {
+		execv(argv[0], argv);
+		_exit(127);
+	}
+
+	if (waitpid(pid, &status, 0) < 0)
+		qemu_fail("waitpid_%s errno=%d", argv[0], errno);
+
+	qemu_check(WIFEXITED(status), "tool_signal_%s status=%d", argv[0], status);
+	qemu_check(WEXITSTATUS(status) == 0, "tool_exit_%s status=%d", argv[0],
+		   WEXITSTATUS(status));
+}
+
 static void qemu_insmod(const char *params)
 {
 	int fd;
@@ -118,7 +143,19 @@ static void qemu_rmmod(void)
 
 int main(void)
 {
+	static const struct {
+		const char *params;
+		const char *status_line;
+	} selftests[] = {
+		{ "hook_selftest_mode=1", "hook_selftest_enabled=1\n" },
+		{ "hook_selftest_mode=2", "hook_selftest_exec_pool_ready=1\n" },
+		{ "hook_selftest_mode=3", "hook_selftest_exec_allocated=1\n" },
+		{ "hook_selftest_mode=4", "hook_selftest_exec_ready=1\n" },
+	};
 	char version_buf[4096];
+	size_t i;
+	char *const open_session_argv[] = { OPEN_SESSION_TOOL, NULL };
+	char *const mem_test_argv[] = { MEM_TEST_TOOL, "selftest", NULL };
 
 	mkdir("/dev", 0755);
 	mkdir("/proc", 0555);
@@ -134,15 +171,19 @@ int main(void)
 	printf("LKMDBG_QEMU_SMOKE_BEGIN\n");
 	fflush(stdout);
 
-	qemu_insmod("hook_selftest_mode=1");
-	qemu_expect_status_line("hook_selftest_enabled=1\n");
-	qemu_expect_status_line("hook_selftest_installed=0\n");
-	qemu_rmmod();
+	for (i = 0; i < sizeof(selftests) / sizeof(selftests[0]); i++) {
+		qemu_insmod(selftests[i].params);
+		qemu_expect_status_line(selftests[i].status_line);
+		qemu_expect_status_line("hook_selftest_installed=0\n");
+		qemu_rmmod();
+	}
 
 	qemu_insmod("hook_proc_version=1");
 	qemu_read_file("/proc/version", version_buf, sizeof(version_buf));
 	qemu_check(version_buf[0] != '\0', "empty_proc_version");
 	qemu_expect_status_line("proc_version_hook_active=1\n");
+	qemu_run_tool(open_session_argv);
+	qemu_run_tool(mem_test_argv);
 	qemu_rmmod();
 
 	printf("LKMDBG_QEMU_SMOKE_OK\n");
