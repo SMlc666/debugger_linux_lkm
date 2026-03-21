@@ -375,12 +375,11 @@ jobs:
           if-no-files-found: ignore
 
   qemu-arm64-smoke-kvm:
-    if: github.event_name != 'pull_request' && vars.ENABLE_ARM64_KVM_RUNNER == '1'
+    if: github.event_name != 'pull_request'
     runs-on:
       - self-hosted
       - linux
       - ARM64
-      - kvm
     needs: qemu-arm64-build-artifacts
     timeout-minutes: 30
 
