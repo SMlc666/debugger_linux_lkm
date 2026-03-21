@@ -21,6 +21,9 @@ struct lkmdbg_inline_hook {
 	void *target;
 	void *origin;
 	void *replacement;
+	void *exec_buf;
+	size_t exec_size;
+	bool exec_ready;
 	bool active;
 	kp_hook_t core;
 };
@@ -133,6 +136,28 @@ static int lkmdbg_write_text_insn(void *addr, u32 insn)
 	return 0;
 }
 
+static int lkmdbg_make_page_executable(void *addr)
+{
+	unsigned long page_addr = (unsigned long)addr & PAGE_MASK;
+	pte_t *ptep;
+	pte_t pte;
+
+	ptep = lkmdbg_lookup_kernel_pte(page_addr);
+	if (!ptep)
+		return -ENOENT;
+
+	pte = READ_ONCE(*ptep);
+#ifdef PTE_MAYBE_GP
+	pte = __pte(pte_val(pte) | PTE_MAYBE_GP);
+#endif
+#ifdef PTE_PXN
+	pte = __pte(pte_val(pte) & ~PTE_PXN);
+#endif
+	set_pte(ptep, pte);
+	flush_tlb_kernel_range(page_addr, page_addr + PAGE_SIZE);
+	return 0;
+}
+
 static int lkmdbg_write_text_words(void *addr, const u32 *insns, u32 words)
 {
 	u32 i;
@@ -228,9 +253,33 @@ int lkmdbg_hooks_prepare_exec_pool(void)
 
 int lkmdbg_hook_alloc_exec(struct lkmdbg_inline_hook *hook)
 {
+	int ret;
+
 	if (!hook)
 		return -EINVAL;
 
+	if (hook->exec_buf)
+		return 0;
+
+	hook->exec_buf = vmalloc(PAGE_SIZE);
+	if (!hook->exec_buf)
+		return -ENOMEM;
+
+	memset(hook->exec_buf, 0, PAGE_SIZE);
+	hook->exec_size = PAGE_SIZE;
+
+	ret = lkmdbg_make_page_executable(hook->exec_buf);
+	if (ret) {
+		pr_err("lkmdbg: exec buffer not executable addr=%px ret=%d\n",
+		       hook->exec_buf, ret);
+		vfree(hook->exec_buf);
+		hook->exec_buf = NULL;
+		hook->exec_size = 0;
+		return ret;
+	}
+
+	pr_info("lkmdbg: exec buffer ready target=%px exec=%px\n",
+		hook->target, hook->exec_buf);
 	return 0;
 }
 
@@ -240,7 +289,6 @@ int lkmdbg_hook_create(void *target, void *replacement,
 {
 	struct lkmdbg_inline_hook *hook;
 	struct lkmdbg_inline_hook *iter;
-	kp_hook_err_t ret;
 
 	if (!target || !replacement || !hook_out || !orig_out)
 		return -EINVAL;
@@ -256,7 +304,6 @@ int lkmdbg_hook_create(void *target, void *replacement,
 	hook->core.func_addr = (u64)target;
 	hook->core.origin_addr = (u64)hook->origin;
 	hook->core.replace_addr = (u64)replacement;
-	hook->core.relo_addr = (u64)hook->core.relo_insts;
 
 	mutex_lock(&lkmdbg_hook_lock);
 	list_for_each_entry(iter, &lkmdbg_hook_list, node) {
@@ -268,30 +315,61 @@ int lkmdbg_hook_create(void *target, void *replacement,
 	}
 	mutex_unlock(&lkmdbg_hook_lock);
 
-	ret = kp_hook_prepare(&hook->core);
-	if (ret) {
-		pr_err("lkmdbg: kp hook prepare failed target=%px origin=%px ret=%d\n",
-		       hook->target, hook->origin, (int)ret);
-		kfree(hook);
-		return -EINVAL;
-	}
-
 	mutex_lock(&lkmdbg_hook_lock);
 	list_add_tail(&hook->node, &lkmdbg_hook_list);
 	mutex_unlock(&lkmdbg_hook_lock);
 
 	*hook_out = hook;
-	*orig_out = (void *)hook->core.relo_addr;
+	*orig_out = NULL;
 	return 0;
 }
 
 int lkmdbg_hook_prepare_exec(struct lkmdbg_inline_hook *hook, void **orig_out)
 {
+	kp_hook_err_t ret;
+
 	if (!hook)
 		return -EINVAL;
 
+	if (hook->exec_ready) {
+		if (orig_out)
+			*orig_out = hook->exec_buf;
+		return 0;
+	}
+
+	if (!hook->exec_buf) {
+		ret = lkmdbg_hook_alloc_exec(hook);
+		if (ret)
+			return ret;
+	}
+
+	memset(hook->exec_buf, 0, hook->exec_size);
+	memset(hook->core.origin_insts, 0, sizeof(hook->core.origin_insts));
+	memset(hook->core.tramp_insts, 0, sizeof(hook->core.tramp_insts));
+	memset(hook->core.relo_insts, 0, sizeof(hook->core.relo_insts));
+	hook->core.relo_addr = (u64)hook->exec_buf;
+	hook->core.tramp_insts_num = 0;
+	hook->core.relo_insts_num = 0;
+
+	ret = kp_hook_prepare(&hook->core);
+	if (ret) {
+		pr_err("lkmdbg: kp hook prepare failed target=%px origin=%px ret=%d\n",
+		       hook->target, hook->origin, (int)ret);
+		return -EINVAL;
+	}
+
+	if (hook->core.relo_insts_num * sizeof(u32) > hook->exec_size)
+		return -E2BIG;
+
+	memcpy(hook->exec_buf, hook->core.relo_insts,
+	       hook->core.relo_insts_num * sizeof(u32));
+	lkmdbg_symbols.flush_icache_range((unsigned long)hook->exec_buf,
+					  (unsigned long)hook->exec_buf +
+					  hook->core.relo_insts_num * sizeof(u32));
+	hook->exec_ready = true;
+
 	if (orig_out)
-		*orig_out = (void *)hook->core.relo_addr;
+		*orig_out = hook->exec_buf;
 	return 0;
 }
 
@@ -304,6 +382,12 @@ int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
 
 	if (hook->active)
 		return -EALREADY;
+
+	if (!hook->exec_ready) {
+		ret = lkmdbg_hook_prepare_exec(hook, orig_out);
+		if (ret)
+			return ret;
+	}
 
 	pr_info("lkmdbg: kp hook patch backend=%s target=%px origin=%px\n",
 		lkmdbg_alias_page ? "alias-vmalloc" : "unavailable",
@@ -323,11 +407,11 @@ int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
 	mutex_unlock(&lkmdbg_hook_lock);
 
 	if (orig_out)
-		*orig_out = (void *)hook->core.relo_addr;
+		*orig_out = hook->exec_buf;
 
 	pr_info("lkmdbg: kp hook installed target=%px origin=%px replacement=%px trampoline=%px\n",
 		hook->target, hook->origin, hook->replacement,
-		(void *)hook->core.relo_addr);
+		hook->exec_buf);
 	return 0;
 }
 
@@ -377,6 +461,9 @@ void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook)
 	if (!list_empty(&hook->node))
 		list_del_init(&hook->node);
 	mutex_unlock(&lkmdbg_hook_lock);
+
+	if (hook->exec_buf)
+		vfree(hook->exec_buf);
 
 	kfree(hook);
 }
