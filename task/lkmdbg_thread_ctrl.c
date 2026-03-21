@@ -305,9 +305,14 @@ static int lkmdbg_mmu_lookup_pte(struct mm_struct *mm, unsigned long addr,
 	if (pmd_leaf(*pmdp) || pmd_trans_huge(*pmdp))
 		return -EOPNOTSUPP;
 
-	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
-	if (!ptep)
+	ptl = pte_lockptr(mm, pmdp);
+	spin_lock(ptl);
+
+	ptep = pte_offset_kernel(pmdp, addr);
+	if (!ptep) {
+		spin_unlock(ptl);
 		return -ENOENT;
+	}
 
 	*ptep_out = ptep;
 	*ptl_out = ptl;
@@ -334,7 +339,7 @@ static int lkmdbg_mmu_update_exec_locked(struct mm_struct *mm,
 
 	pte = READ_ONCE(*ptep);
 	if (!pte_present(pte) || !pte_valid(pte)) {
-		pte_unmap_unlock(ptep, ptl);
+		spin_unlock(ptl);
 		return -ENOENT;
 	}
 
@@ -342,18 +347,18 @@ static int lkmdbg_mmu_update_exec_locked(struct mm_struct *mm,
 		new_pte = lkmdbg_mmu_pte_set_exec(pte, true);
 	} else {
 		if (!(vma->vm_flags & VM_EXEC) || !pte_user_exec(pte)) {
-			pte_unmap_unlock(ptep, ptl);
+			spin_unlock(ptl);
 			return -EACCES;
 		}
 		new_pte = lkmdbg_mmu_pte_set_exec(pte, false);
 	}
 
-	if (pte_val(new_pte) != pte_val(pte)) {
-		set_pte_at(mm, addr, ptep, new_pte);
-		flush_tlb_page(vma, addr);
-	}
+	if (pte_val(new_pte) != pte_val(pte))
+		set_pte(ptep, new_pte);
 
-	pte_unmap_unlock(ptep, ptl);
+	spin_unlock(ptl);
+	if (pte_val(new_pte) != pte_val(pte))
+		flush_tlb_page(vma, addr);
 	return 0;
 }
 
