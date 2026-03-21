@@ -14,9 +14,11 @@ int lkmdbg_hook_alloc_exec(struct lkmdbg_inline_hook *hook);
 int lkmdbg_hook_prepare_exec(struct lkmdbg_inline_hook *hook, void **orig_out);
 int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out);
 int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook, void **orig_out);
+int lkmdbg_hook_deactivate(struct lkmdbg_inline_hook *hook);
 int lkmdbg_hook_install(void *target, void *replacement,
 			struct lkmdbg_inline_hook **hook_out,
 			void **orig_out);
+void lkmdbg_hook_destroy(struct lkmdbg_inline_hook *hook);
 void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook);
 
 #endif

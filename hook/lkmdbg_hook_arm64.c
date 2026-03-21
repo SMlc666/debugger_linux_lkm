@@ -460,6 +460,37 @@ int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook, void **orig_out)
 	return lkmdbg_hook_patch_target(hook, orig_out);
 }
 
+int lkmdbg_hook_deactivate(struct lkmdbg_inline_hook *hook)
+{
+	int ret;
+
+	if (!hook)
+		return -EINVAL;
+
+	if (!hook->active)
+		return 0;
+
+	ret = lkmdbg_patch_target_words((void *)hook->core.origin_addr,
+					hook->core.origin_insts,
+					hook->core.tramp_insts_num);
+	if (ret)
+		pr_warn("lkmdbg: kp hook rollback failed origin=%px ret=%d\n",
+			hook->origin, ret);
+
+	mutex_lock(&lkmdbg_hook_lock);
+	if (!ret)
+		hook->active = false;
+	mutex_unlock(&lkmdbg_hook_lock);
+
+	mutex_lock(&lkmdbg_state.lock);
+	if (!ret && lkmdbg_state.inline_hook_active)
+		lkmdbg_state.inline_hook_active--;
+	lkmdbg_state.inline_hook_last_ret = ret;
+	mutex_unlock(&lkmdbg_state.lock);
+
+	return ret;
+}
+
 int lkmdbg_hook_install(void *target, void *replacement,
 			struct lkmdbg_inline_hook **hook_out,
 			void **orig_out)
@@ -481,27 +512,10 @@ int lkmdbg_hook_install(void *target, void *replacement,
 	return 0;
 }
 
-void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook)
+void lkmdbg_hook_destroy(struct lkmdbg_inline_hook *hook)
 {
-	int ret;
-
 	if (!hook)
 		return;
-
-	if (hook->active) {
-		ret = lkmdbg_patch_target_words((void *)hook->core.origin_addr,
-						hook->core.origin_insts,
-						hook->core.tramp_insts_num);
-		if (ret)
-			pr_warn("lkmdbg: kp hook rollback failed origin=%px ret=%d\n",
-				hook->origin, ret);
-
-		mutex_lock(&lkmdbg_state.lock);
-		if (!ret && lkmdbg_state.inline_hook_active)
-			lkmdbg_state.inline_hook_active--;
-		lkmdbg_state.inline_hook_last_ret = ret;
-		mutex_unlock(&lkmdbg_state.lock);
-	}
 
 	mutex_lock(&lkmdbg_hook_lock);
 	if (!list_empty(&hook->node))
@@ -520,6 +534,15 @@ void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook)
 	mutex_unlock(&lkmdbg_state.lock);
 
 	kfree(hook);
+}
+
+void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook)
+{
+	if (!hook)
+		return;
+
+	lkmdbg_hook_deactivate(hook);
+	lkmdbg_hook_destroy(hook);
 }
 #else
 #include "lkmdbg_internal.h"
@@ -584,6 +607,11 @@ int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook, void **orig_out)
 	return lkmdbg_hook_patch_target(hook, orig_out);
 }
 
+int lkmdbg_hook_deactivate(struct lkmdbg_inline_hook *hook)
+{
+	return hook ? -EOPNOTSUPP : -EINVAL;
+}
+
 int lkmdbg_hook_install(void *target, void *replacement,
 			struct lkmdbg_inline_hook **hook_out,
 			void **orig_out)
@@ -596,8 +624,13 @@ int lkmdbg_hook_install(void *target, void *replacement,
 	return -EOPNOTSUPP;
 }
 
-void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook)
+void lkmdbg_hook_destroy(struct lkmdbg_inline_hook *hook)
 {
 	(void)hook;
+}
+
+void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook)
+{
+	lkmdbg_hook_destroy(hook);
 }
 #endif
