@@ -416,11 +416,9 @@ long lkmdbg_continue_target(struct lkmdbg_session *session, void __user *argp)
 	    req.stop_cookie != stop.cookie)
 		return -ESTALE;
 
-	if (req.flags & LKMDBG_CONTINUE_FLAG_REARM_HWPOINTS) {
-		ret = lkmdbg_rearm_all_hwpoints(session);
-		if (ret)
-			return ret;
-	}
+	ret = lkmdbg_prepare_continue_hwpoints(session, &stop, req.flags);
+	if (ret)
+		return ret;
 
 	lkmdbg_session_clear_stop(session);
 	ret = lkmdbg_session_thaw_target(session, req.timeout_ms, &thaw_req);

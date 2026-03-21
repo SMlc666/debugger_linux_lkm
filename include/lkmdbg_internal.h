@@ -110,6 +110,7 @@ struct lkmdbg_symbols {
 	unsigned long tracepoint_probe_register_sym;
 	unsigned long tracepoint_probe_unregister_sym;
 	unsigned long perf_event_disable_local_sym;
+	unsigned long do_page_fault_sym;
 };
 
 int lkmdbg_disable_kprobe_blacklist(void);
@@ -231,6 +232,9 @@ long lkmdbg_remove_hwpoint(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_query_hwpoints(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_rearm_hwpoint(struct lkmdbg_session *session, void __user *argp);
 int lkmdbg_rearm_all_hwpoints(struct lkmdbg_session *session);
+int lkmdbg_prepare_continue_hwpoints(struct lkmdbg_session *session,
+				     const struct lkmdbg_stop_state *stop,
+				     u32 flags);
 long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_freeze_threads(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_thaw_threads(struct lkmdbg_session *session, void __user *argp);

@@ -1903,7 +1903,11 @@ static int parse_hwpoint_type(const char *arg, uint32_t *type_out)
 
 static int parse_hwpoint_flags(const char *arg, uint32_t *flags_out)
 {
+	char *copy;
+	char *token;
+	char *saveptr = NULL;
 	char *endp = NULL;
+	uint32_t flags = 0;
 
 	if (strcmp(arg, "stop") == 0 || strcmp(arg, "0") == 0) {
 		*flags_out = 0;
@@ -1913,9 +1917,40 @@ static int parse_hwpoint_flags(const char *arg, uint32_t *flags_out)
 		*flags_out = LKMDBG_HWPOINT_FLAG_COUNTER_MODE;
 		return 0;
 	}
+	if (strcmp(arg, "mmu") == 0) {
+		*flags_out = LKMDBG_HWPOINT_FLAG_MMU_EXEC;
+		return 0;
+	}
 
+	copy = strdup(arg);
+	if (!copy)
+		return -1;
+
+	for (token = strtok_r(copy, ",|", &saveptr); token;
+	     token = strtok_r(NULL, ",|", &saveptr)) {
+		if (strcmp(token, "stop") == 0)
+			continue;
+		if (strcmp(token, "counter") == 0 || strcmp(token, "count") == 0) {
+			flags |= LKMDBG_HWPOINT_FLAG_COUNTER_MODE;
+			continue;
+		}
+		if (strcmp(token, "mmu") == 0) {
+			flags |= LKMDBG_HWPOINT_FLAG_MMU_EXEC;
+			continue;
+		}
+		free(copy);
+		goto numeric;
+	}
+
+	free(copy);
+	*flags_out = flags;
+	return 0;
+
+numeric:
 	*flags_out = (uint32_t)strtoul(arg, &endp, 0);
-	if (*endp != '\0' || (*flags_out & ~LKMDBG_HWPOINT_FLAG_COUNTER_MODE))
+	if (*endp != '\0' ||
+	    (*flags_out &
+	     ~(LKMDBG_HWPOINT_FLAG_COUNTER_MODE | LKMDBG_HWPOINT_FLAG_MMU_EXEC)))
 		return -1;
 	return 0;
 }
@@ -2190,6 +2225,7 @@ static int verify_runtime_events(int session_fd, int cmd_fd, pid_t child,
 				 const struct child_info *info)
 {
 	struct lkmdbg_hwpoint_request bp_req;
+	struct lkmdbg_hwpoint_request mmu_req;
 	struct lkmdbg_hwpoint_request wp_req;
 	struct lkmdbg_event_record event;
 	struct lkmdbg_stop_query_request stop_req;
@@ -2197,6 +2233,7 @@ static int verify_runtime_events(int session_fd, int cmd_fd, pid_t child,
 	int ret;
 
 	memset(&bp_req, 0, sizeof(bp_req));
+	memset(&mmu_req, 0, sizeof(mmu_req));
 	memset(&wp_req, 0, sizeof(wp_req));
 	memset(&stop_req, 0, sizeof(stop_req));
 	if (drain_session_events(session_fd) < 0)
@@ -2286,6 +2323,62 @@ breakpoint_checks:
 	if (remove_hwpoint(session_fd, bp_req.id) < 0)
 		return -1;
 
+	if (add_hwpoint(session_fd, child, info->exec_target_addr,
+			LKMDBG_HWPOINT_TYPE_EXEC, 4,
+			LKMDBG_HWPOINT_FLAG_MMU_EXEC, &mmu_req) < 0)
+		return -1;
+	if (find_hwpoint_id(session_fd, mmu_req.id) < 0) {
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+
+	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+	printf("selftest runtime: waiting for mmu breakpoint stop event\n");
+	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+				   LKMDBG_STOP_REASON_BREAKPOINT,
+				   event_timeout_ms, &event) < 0) {
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+	if (event.value0 != info->exec_target_addr ||
+	    event.flags != (LKMDBG_HWPOINT_TYPE_EXEC |
+			    LKMDBG_HWPOINT_FLAG_MMU_EXEC) ||
+	    !event.value1) {
+		fprintf(stderr,
+			"mmu breakpoint event mismatch addr=0x%" PRIx64 " ip=0x%" PRIx64 " flags=0x%x\n",
+			(uint64_t)event.value0, (uint64_t)event.value1,
+			event.flags);
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_BREAKPOINT,
+			      &stop_req) < 0) {
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+	if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
+	    !(stop_req.stop.flags & LKMDBG_STOP_FLAG_REARM_REQUIRED) ||
+	    stop_req.stop.value0 != info->exec_target_addr ||
+	    stop_req.stop.event_flags !=
+		    (LKMDBG_HWPOINT_TYPE_EXEC |
+		     LKMDBG_HWPOINT_FLAG_MMU_EXEC)) {
+		fprintf(stderr,
+			"mmu breakpoint stop state mismatch flags=0x%x event_flags=0x%x value0=0x%" PRIx64 "\n",
+			stop_req.stop.flags, stop_req.stop.event_flags,
+			(uint64_t)stop_req.stop.value0);
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0) {
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+	if (remove_hwpoint(session_fd, mmu_req.id) < 0)
+		return -1;
+
 	if (add_hwpoint(session_fd, child, info->watch_addr,
 			LKMDBG_HWPOINT_TYPE_WRITE, 8, 0, &wp_req) < 0)
 		return -1;
@@ -2337,7 +2430,7 @@ breakpoint_checks:
 	if (remove_hwpoint(session_fd, wp_req.id) < 0)
 		return -1;
 
-	printf("selftest runtime events ok clone signal breakpoint watchpoint\n");
+	printf("selftest runtime events ok clone signal breakpoint mmu-breakpoint watchpoint\n");
 	return 0;
 }
 
@@ -2434,7 +2527,7 @@ static void usage(const char *prog)
 		"  %s threads <pid>\n"
 		"  %s getregs <pid> <tid>\n"
 		"  %s setreg <pid> <tid> <reg> <value_hex>\n"
-		"  %s hwadd <pid> <tid> <r|w|rw|x> <addr_hex> <len> [stop|counter|flags]\n"
+		"  %s hwadd <pid> <tid> <r|w|rw|x> <addr_hex> <len> [stop|counter|mmu|flags]\n"
 		"  %s hwdel <pid> <id>\n"
 		"  %s hwrearm <pid> <id>\n"
 		"  %s hwlist <pid>\n"

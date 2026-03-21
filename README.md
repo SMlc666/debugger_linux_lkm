@@ -149,6 +149,21 @@ Current session events include:
 - `LKMDBG_EVENT_TARGET_SIGNAL`
 - `LKMDBG_EVENT_TARGET_STOP`
 
+Execution breakpoints now have two backends behind the existing session fd API:
+
+- hardware execute breakpoints via `LKMDBG_HWPOINT_TYPE_EXEC`
+- arm64 mmu execute breakpoints via `LKMDBG_HWPOINT_TYPE_EXEC` with
+  `LKMDBG_HWPOINT_FLAG_MMU_EXEC`
+
+The first mmu execute breakpoint implementation is intentionally conservative:
+
+- it flips the target user PTE page to non-executable in kernel space
+- it currently stops on execution into the guarded page and reports the
+  requested breakpoint address in `value0` plus the actual faulting PC in
+  `value1`
+- after a hit the page is restored executable, so the breakpoint behaves as
+  a one-shot guard until user space explicitly rearms or removes it
+
 Session fds are readable and pollable:
 
 - `read()` now drains one or more whole `struct lkmdbg_event_record`
