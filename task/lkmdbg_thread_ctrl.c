@@ -35,6 +35,7 @@ struct lkmdbg_hwpoint {
 	u32 type;
 	u32 len;
 	u32 flags;
+	atomic_t stop_latched;
 };
 
 #ifdef CONFIG_ARM64
@@ -233,6 +234,8 @@ static void lkmdbg_hwpoint_event(struct perf_event *bp,
 	WRITE_ONCE(lkmdbg_state.hwpoint_last_type, entry->type);
 	WRITE_ONCE(lkmdbg_state.hwpoint_last_addr, addr);
 	WRITE_ONCE(lkmdbg_state.hwpoint_last_ip, ip);
+	if (atomic_xchg(&entry->stop_latched, 1))
+		return;
 
 	lkmdbg_session_queue_event_ex(entry->session, LKMDBG_EVENT_TARGET_STOP,
 				      reason, entry->tgid, current->pid,
@@ -279,6 +282,7 @@ static int lkmdbg_register_hwpoint(struct lkmdbg_session *session,
 	entry->type = req->type;
 	entry->len = req->len;
 	entry->flags = req->flags;
+	atomic_set(&entry->stop_latched, 0);
 	put_task_struct(task);
 
 	if (!entry->event) {
