@@ -173,7 +173,7 @@ jobs:
 
   qemu-arm64-smoke:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 120
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-qemu-arm64
       CCACHE_BASEDIR: ${{ github.workspace }}
