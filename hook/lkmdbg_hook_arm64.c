@@ -21,7 +21,7 @@ struct lkmdbg_inline_hook {
 	void *origin;
 	void *replacement;
 	void *trampoline;
-	void *exec_slot;
+	u32 exec_slot_index;
 	bool trampoline_is_exec;
 	bool trampoline_ready;
 	bool active;
@@ -32,16 +32,13 @@ struct lkmdbg_inline_hook {
 	u32 trampoline_words;
 };
 
-struct lkmdbg_exec_slot {
-	bool used;
-	u32 trampoline[LKMDBG_HOOK_RELO_MAX_INSN] __aligned(8);
-};
-
 static LIST_HEAD(lkmdbg_hook_list);
 static DEFINE_MUTEX(lkmdbg_hook_lock);
 static void *lkmdbg_exec_pool;
+static bool *lkmdbg_exec_slot_used;
 static bool lkmdbg_exec_pool_uses_module_alloc;
 static u32 lkmdbg_exec_slot_count;
+static size_t lkmdbg_exec_slot_size;
 
 enum lkmdbg_a64_inst_type {
 	LKMDBG_INST_B = 0x14000000,
@@ -119,9 +116,9 @@ static int lkmdbg_write_text_words(void *addr, const u32 *insns, u32 words)
 	return 0;
 }
 
-static struct lkmdbg_exec_slot *lkmdbg_exec_slot_get(u32 index)
+static void *lkmdbg_exec_slot_get(u32 index)
 {
-	return ((struct lkmdbg_exec_slot *)lkmdbg_exec_pool) + index;
+	return (u8 *)lkmdbg_exec_pool + index * lkmdbg_exec_slot_size;
 }
 
 static int lkmdbg_exec_pool_init(void)
@@ -159,7 +156,8 @@ static int lkmdbg_exec_pool_init(void)
 	memset(pool, 0, PAGE_SIZE);
 
 	lkmdbg_exec_pool = pool;
-	lkmdbg_exec_slot_count = PAGE_SIZE / sizeof(struct lkmdbg_exec_slot);
+	lkmdbg_exec_slot_size = sizeof(u32) * LKMDBG_HOOK_RELO_MAX_INSN;
+	lkmdbg_exec_slot_count = PAGE_SIZE / lkmdbg_exec_slot_size;
 	if (!lkmdbg_exec_slot_count) {
 		if (lkmdbg_exec_pool_uses_module_alloc)
 			lkmdbg_symbols.module_memfree(lkmdbg_exec_pool);
@@ -167,6 +165,19 @@ static int lkmdbg_exec_pool_init(void)
 			vfree(lkmdbg_exec_pool);
 		lkmdbg_exec_pool = NULL;
 		return -E2BIG;
+	}
+
+	lkmdbg_exec_slot_used =
+		kcalloc(lkmdbg_exec_slot_count, sizeof(*lkmdbg_exec_slot_used),
+			GFP_KERNEL);
+	if (!lkmdbg_exec_slot_used) {
+		if (lkmdbg_exec_pool_uses_module_alloc)
+			lkmdbg_symbols.module_memfree(lkmdbg_exec_pool);
+		else
+			vfree(lkmdbg_exec_pool);
+		lkmdbg_exec_pool = NULL;
+		lkmdbg_exec_slot_count = 0;
+		return -ENOMEM;
 	}
 
 	pr_info("lkmdbg: hook exec pool ready base=%px slots=%u backend=%s\n",
@@ -185,46 +196,42 @@ static void lkmdbg_exec_pool_exit(void)
 	else
 		vfree(lkmdbg_exec_pool);
 
+	kfree(lkmdbg_exec_slot_used);
+	lkmdbg_exec_slot_used = NULL;
 	lkmdbg_exec_pool = NULL;
 	lkmdbg_exec_pool_uses_module_alloc = false;
 	lkmdbg_exec_slot_count = 0;
+	lkmdbg_exec_slot_size = 0;
 }
 
-static void *lkmdbg_exec_slot_alloc(void)
+static int lkmdbg_exec_slot_alloc(u32 *slot_index_out)
 {
 	u32 i;
-	void *slot_ptr;
 
-	if (!lkmdbg_exec_pool)
-		return NULL;
+	if (!lkmdbg_exec_pool || !lkmdbg_exec_slot_used || !slot_index_out)
+		return -ENOENT;
 
-	slot_ptr = NULL;
 	mutex_lock(&lkmdbg_hook_lock);
 	for (i = 0; i < lkmdbg_exec_slot_count; i++) {
-		struct lkmdbg_exec_slot *slot = lkmdbg_exec_slot_get(i);
-
-		if (slot->used)
+		if (lkmdbg_exec_slot_used[i])
 			continue;
 
-		memset(slot, 0, sizeof(*slot));
-		slot->used = true;
-		slot_ptr = slot;
+		lkmdbg_exec_slot_used[i] = true;
+		*slot_index_out = i;
 		break;
 	}
 	mutex_unlock(&lkmdbg_hook_lock);
 
-	return slot_ptr;
+	return i == lkmdbg_exec_slot_count ? -ENOSPC : 0;
 }
 
-static void lkmdbg_exec_slot_free(void *slot_ptr)
+static void lkmdbg_exec_slot_free(u32 slot_index)
 {
-	struct lkmdbg_exec_slot *slot = slot_ptr;
-
-	if (!slot)
+	if (slot_index >= lkmdbg_exec_slot_count || !lkmdbg_exec_slot_used)
 		return;
 
 	mutex_lock(&lkmdbg_hook_lock);
-	memset(slot, 0, sizeof(*slot));
+	lkmdbg_exec_slot_used[slot_index] = false;
 	mutex_unlock(&lkmdbg_hook_lock);
 }
 
@@ -547,6 +554,7 @@ static int lkmdbg_relocate_one(struct lkmdbg_inline_hook *hook, u64 inst_addr,
 static int lkmdbg_prepare_hook(struct lkmdbg_inline_hook *hook)
 {
 	u32 i;
+	int ret = 0;
 
 	hook->patch_words = lkmdbg_emit_ret_absolute(hook->patch_insns,
 						      (u64)hook->replacement);
@@ -572,11 +580,18 @@ static int lkmdbg_prepare_hook(struct lkmdbg_inline_hook *hook)
 		hook->trampoline_insns + hook->trampoline_words,
 		(u64)hook->origin + hook->patch_words * sizeof(u32));
 
-	if (hook->trampoline != hook->trampoline_insns)
+	if (hook->trampoline_is_exec)
+		ret = lkmdbg_write_text_words(hook->trampoline,
+					      hook->trampoline_insns,
+					      hook->trampoline_words);
+	else if (hook->trampoline != hook->trampoline_insns)
 		memcpy(hook->trampoline, hook->trampoline_insns,
 		       hook->trampoline_words * sizeof(u32));
 
-	if (lkmdbg_symbols.flush_icache_range)
+	if (ret)
+		return ret;
+
+	if (!hook->trampoline_is_exec && lkmdbg_symbols.flush_icache_range)
 		lkmdbg_symbols.flush_icache_range((unsigned long)hook->trampoline,
 						  (unsigned long)hook->trampoline +
 						  hook->trampoline_words * sizeof(u32));
@@ -586,8 +601,8 @@ static int lkmdbg_prepare_hook(struct lkmdbg_inline_hook *hook)
 
 static void lkmdbg_free_trampoline(struct lkmdbg_inline_hook *hook)
 {
-	lkmdbg_exec_slot_free(hook->exec_slot);
-	hook->exec_slot = NULL;
+	lkmdbg_exec_slot_free(hook->exec_slot_index);
+	hook->exec_slot_index = (u32)-1;
 	hook->trampoline = hook->trampoline_insns;
 	hook->trampoline_is_exec = false;
 	hook->trampoline_ready = false;
@@ -625,6 +640,7 @@ int lkmdbg_hook_create(void *target, void *replacement,
 	hook->origin = (void *)lkmdbg_hook_follow_branch((u64)target);
 	hook->replacement = replacement;
 	hook->trampoline = hook->trampoline_insns;
+	hook->exec_slot_index = (u32)-1;
 
 	mutex_lock(&lkmdbg_hook_lock);
 	list_for_each_entry(iter, &lkmdbg_hook_list, node) {
@@ -659,7 +675,8 @@ int lkmdbg_hook_create(void *target, void *replacement,
 int lkmdbg_hook_alloc_exec(struct lkmdbg_inline_hook *hook)
 {
 	void *exec_trampoline;
-	void *slot;
+	u32 slot_index;
+	int ret;
 
 	if (!hook)
 		return -EINVAL;
@@ -673,15 +690,15 @@ int lkmdbg_hook_alloc_exec(struct lkmdbg_inline_hook *hook)
 	pr_emerg("lkmdbg: hook_activate stage=exec_alloc_begin target=%px origin=%px\n",
 		 hook->target, hook->origin);
 
-	slot = lkmdbg_exec_slot_alloc();
-	if (!slot) {
+	ret = lkmdbg_exec_slot_alloc(&slot_index);
+	if (ret) {
 		pr_err("lkmdbg: hook exec pool exhausted target=%px origin=%px slots=%u\n",
 		       hook->target, hook->origin, lkmdbg_exec_slot_count);
-		return -ENOSPC;
+		return ret;
 	}
 
-	exec_trampoline = ((struct lkmdbg_exec_slot *)slot)->trampoline;
-	hook->exec_slot = slot;
+	exec_trampoline = lkmdbg_exec_slot_get(slot_index);
+	hook->exec_slot_index = slot_index;
 	hook->trampoline = exec_trampoline;
 	hook->trampoline_is_exec = true;
 	hook->trampoline_ready = false;
@@ -715,6 +732,7 @@ int lkmdbg_hook_prepare_exec(struct lkmdbg_inline_hook *hook, void **orig_out)
 		if (ret) {
 			pr_err("lkmdbg: exec trampoline prepare failed target=%px origin=%px ret=%d\n",
 			       hook->target, hook->origin, ret);
+			lkmdbg_free_trampoline(hook);
 			return ret;
 		}
 		pr_emerg("lkmdbg: hook_activate stage=exec_prepare_done target=%px origin=%px trampoline=%px\n",
