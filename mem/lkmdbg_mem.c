@@ -7,7 +7,6 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
-#include <linux/vmalloc.h>
 
 #include "lkmdbg_internal.h"
 
@@ -129,13 +128,39 @@ static long lkmdbg_copy_remote_page(struct mm_struct *mm, u8 *kbuf,
 	return (long)length;
 }
 
+static long lkmdbg_read_remote_page_to_user(struct mm_struct *mm,
+					    unsigned long remote_addr,
+					    void __user *local_addr,
+					    size_t length)
+{
+	struct page *page = NULL;
+	unsigned long page_offset;
+	void *page_addr;
+	long ret;
+
+	ret = lkmdbg_get_remote_page_nofault(mm, remote_addr, 0, &page);
+	if (ret <= 0)
+		return ret;
+
+	page_offset = offset_in_page(remote_addr);
+	page_addr = kmap_local_page(page);
+	if (copy_to_user(local_addr, (u8 *)page_addr + page_offset, length))
+		ret = -EFAULT;
+	else
+		ret = (long)length;
+	kunmap_local(page_addr);
+	put_page(page);
+
+	return ret;
+}
+
 static long lkmdbg_mem_xfer(struct lkmdbg_session *session, void __user *argp,
 			    bool write)
 {
 	struct lkmdbg_mem_request req;
 	struct task_struct *task;
 	struct mm_struct *mm;
-	void *kbuf;
+	u8 *bounce = NULL;
 	size_t total_done;
 	int ret;
 
@@ -146,42 +171,50 @@ static long lkmdbg_mem_xfer(struct lkmdbg_session *session, void __user *argp,
 	if (ret)
 		return ret;
 
-	kbuf = kvmalloc(req.length, GFP_KERNEL);
-	if (!kbuf)
-		return -ENOMEM;
-
 	if (write) {
-		if (copy_from_user(kbuf, u64_to_user_ptr(req.local_addr),
-				   req.length)) {
-			kvfree(kbuf);
-			return -EFAULT;
-		}
+		bounce = kmalloc(min_t(size_t, PAGE_SIZE, req.length), GFP_KERNEL);
+		if (!bounce)
+			return -ENOMEM;
 	}
 
 	task = lkmdbg_get_target_task(session);
 	if (IS_ERR(task)) {
-		kvfree(kbuf);
+		kfree(bounce);
 		return PTR_ERR(task);
 	}
 
 	mm = get_task_mm(task);
 	put_task_struct(task);
 	if (!mm) {
-		kvfree(kbuf);
+		kfree(bounce);
 		return -ESRCH;
 	}
 
 	total_done = 0;
 	while (total_done < req.length) {
 		unsigned long remote_addr;
+		void __user *local_addr;
 		size_t chunk_len;
 		long copied;
 
 		remote_addr = (unsigned long)req.remote_addr + total_done;
+		local_addr = u64_to_user_ptr(req.local_addr + total_done);
 		chunk_len = min_t(size_t, req.length - total_done,
 				  PAGE_SIZE - offset_in_page(remote_addr));
-		copied = lkmdbg_copy_remote_page(mm, (u8 *)kbuf + total_done,
-						 remote_addr, chunk_len, write);
+
+		if (write) {
+			if (copy_from_user(bounce, local_addr, chunk_len)) {
+				ret = -EFAULT;
+				goto out_copy;
+			}
+			copied = lkmdbg_copy_remote_page(mm, bounce, remote_addr,
+							 chunk_len, true);
+		} else {
+			copied = lkmdbg_read_remote_page_to_user(mm, remote_addr,
+								 local_addr,
+								 chunk_len);
+		}
+
 		if (copied < 0) {
 			if (lkmdbg_mem_is_nofault_miss(copied))
 				break;
@@ -195,29 +228,18 @@ static long lkmdbg_mem_xfer(struct lkmdbg_session *session, void __user *argp,
 		total_done += (size_t)copied;
 	}
 
-	ret = 0;
 	req.bytes_done = total_done;
-
-	if (!write && total_done &&
-	    copy_to_user(u64_to_user_ptr(req.local_addr), kbuf, total_done)) {
-		ret = -EFAULT;
-		goto out_copy;
-	}
-
 	if (copy_to_user(argp, &req, sizeof(req))) {
 		ret = -EFAULT;
 		goto out_copy;
 	}
 
+	ret = 0;
+
 out_copy:
 	mmput(mm);
-	if (ret) {
-		kvfree(kbuf);
-		return ret;
-	}
-
-	kvfree(kbuf);
-	return 0;
+	kfree(bounce);
+	return ret;
 }
 
 long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp)
