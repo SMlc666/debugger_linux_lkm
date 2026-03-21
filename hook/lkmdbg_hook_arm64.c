@@ -272,6 +272,9 @@ int lkmdbg_hook_alloc_exec(struct lkmdbg_inline_hook *hook)
 	if (ret) {
 		pr_err("lkmdbg: exec buffer not executable addr=%px ret=%d\n",
 		       hook->exec_buf, ret);
+		mutex_lock(&lkmdbg_state.lock);
+		lkmdbg_state.inline_hook_last_ret = ret;
+		mutex_unlock(&lkmdbg_state.lock);
 		vfree(hook->exec_buf);
 		hook->exec_buf = NULL;
 		hook->exec_size = 0;
@@ -309,6 +312,9 @@ int lkmdbg_hook_create(void *target, void *replacement,
 	list_for_each_entry(iter, &lkmdbg_hook_list, node) {
 		if (iter->origin == hook->origin) {
 			mutex_unlock(&lkmdbg_hook_lock);
+			mutex_lock(&lkmdbg_state.lock);
+			lkmdbg_state.inline_hook_last_ret = -EEXIST;
+			mutex_unlock(&lkmdbg_state.lock);
 			kfree(hook);
 			return -EEXIST;
 		}
@@ -318,6 +324,15 @@ int lkmdbg_hook_create(void *target, void *replacement,
 	mutex_lock(&lkmdbg_hook_lock);
 	list_add_tail(&hook->node, &lkmdbg_hook_list);
 	mutex_unlock(&lkmdbg_hook_lock);
+
+	mutex_lock(&lkmdbg_state.lock);
+	lkmdbg_state.inline_hook_create_total++;
+	lkmdbg_state.inline_hook_last_ret = 0;
+	lkmdbg_state.inline_hook_last_target = (u64)hook->target;
+	lkmdbg_state.inline_hook_last_origin = (u64)hook->origin;
+	lkmdbg_state.inline_hook_last_replacement = (u64)hook->replacement;
+	lkmdbg_state.inline_hook_last_trampoline = 0;
+	mutex_unlock(&lkmdbg_state.lock);
 
 	*hook_out = hook;
 	*orig_out = NULL;
@@ -355,11 +370,18 @@ int lkmdbg_hook_prepare_exec(struct lkmdbg_inline_hook *hook, void **orig_out)
 	if (ret) {
 		pr_err("lkmdbg: kp hook prepare failed target=%px origin=%px ret=%d\n",
 		       hook->target, hook->origin, (int)ret);
+		mutex_lock(&lkmdbg_state.lock);
+		lkmdbg_state.inline_hook_last_ret = -EINVAL;
+		mutex_unlock(&lkmdbg_state.lock);
 		return -EINVAL;
 	}
 
-	if (hook->core.relo_insts_num * sizeof(u32) > hook->exec_size)
+	if (hook->core.relo_insts_num * sizeof(u32) > hook->exec_size) {
+		mutex_lock(&lkmdbg_state.lock);
+		lkmdbg_state.inline_hook_last_ret = -E2BIG;
+		mutex_unlock(&lkmdbg_state.lock);
 		return -E2BIG;
+	}
 
 	memcpy(hook->exec_buf, hook->core.relo_insts,
 	       hook->core.relo_insts_num * sizeof(u32));
@@ -367,6 +389,11 @@ int lkmdbg_hook_prepare_exec(struct lkmdbg_inline_hook *hook, void **orig_out)
 					  (unsigned long)hook->exec_buf +
 					  hook->core.relo_insts_num * sizeof(u32));
 	hook->exec_ready = true;
+
+	mutex_lock(&lkmdbg_state.lock);
+	lkmdbg_state.inline_hook_last_ret = 0;
+	lkmdbg_state.inline_hook_last_trampoline = (u64)hook->exec_buf;
+	mutex_unlock(&lkmdbg_state.lock);
 
 	if (orig_out)
 		*orig_out = hook->exec_buf;
@@ -399,12 +426,25 @@ int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
 	if (ret) {
 		pr_err("lkmdbg: kp hook install failed target=%px origin=%px ret=%d\n",
 		       hook->target, hook->origin, ret);
+		mutex_lock(&lkmdbg_state.lock);
+		lkmdbg_state.inline_hook_last_ret = ret;
+		mutex_unlock(&lkmdbg_state.lock);
 		return ret;
 	}
 
 	mutex_lock(&lkmdbg_hook_lock);
 	hook->active = true;
 	mutex_unlock(&lkmdbg_hook_lock);
+
+	mutex_lock(&lkmdbg_state.lock);
+	lkmdbg_state.inline_hook_install_total++;
+	lkmdbg_state.inline_hook_active++;
+	lkmdbg_state.inline_hook_last_ret = 0;
+	lkmdbg_state.inline_hook_last_target = (u64)hook->target;
+	lkmdbg_state.inline_hook_last_origin = (u64)hook->origin;
+	lkmdbg_state.inline_hook_last_replacement = (u64)hook->replacement;
+	lkmdbg_state.inline_hook_last_trampoline = (u64)hook->exec_buf;
+	mutex_unlock(&lkmdbg_state.lock);
 
 	if (orig_out)
 		*orig_out = hook->exec_buf;
@@ -455,6 +495,12 @@ void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook)
 		if (ret)
 			pr_warn("lkmdbg: kp hook rollback failed origin=%px ret=%d\n",
 				hook->origin, ret);
+
+		mutex_lock(&lkmdbg_state.lock);
+		if (!ret && lkmdbg_state.inline_hook_active)
+			lkmdbg_state.inline_hook_active--;
+		lkmdbg_state.inline_hook_last_ret = ret;
+		mutex_unlock(&lkmdbg_state.lock);
 	}
 
 	mutex_lock(&lkmdbg_hook_lock);
@@ -464,6 +510,14 @@ void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook)
 
 	if (hook->exec_buf)
 		vfree(hook->exec_buf);
+
+	mutex_lock(&lkmdbg_state.lock);
+	lkmdbg_state.inline_hook_remove_total++;
+	lkmdbg_state.inline_hook_last_target = (u64)hook->target;
+	lkmdbg_state.inline_hook_last_origin = (u64)hook->origin;
+	lkmdbg_state.inline_hook_last_replacement = (u64)hook->replacement;
+	lkmdbg_state.inline_hook_last_trampoline = (u64)hook->exec_buf;
+	mutex_unlock(&lkmdbg_state.lock);
 
 	kfree(hook);
 }

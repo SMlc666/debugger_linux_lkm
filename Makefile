@@ -6,6 +6,7 @@ obj-m += lkmdbg.o
 
 lkmdbg-core-y := \
 	core/lkmdbg_main.o \
+	core/lkmdbg_runtime_hooks.o \
 	core/lkmdbg_symbols.o \
 	core/lkmdbg_protect.o
 

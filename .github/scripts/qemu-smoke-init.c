@@ -95,6 +95,34 @@ static void qemu_expect_status_line(const char *needle)
 	qemu_check(strstr(buf, needle) != NULL, "missing_status_%s", needle);
 }
 
+static unsigned long long qemu_read_status_u64(const char *key)
+{
+	char buf[8192];
+	char *line;
+	char *endptr;
+	unsigned long long value;
+
+	qemu_read_file(STATUS_PATH, buf, sizeof(buf));
+	line = strstr(buf, key);
+	qemu_check(line != NULL, "missing_status_key_%s", key);
+
+	line += strlen(key);
+	errno = 0;
+	value = strtoull(line, &endptr, 0);
+	qemu_check(errno == 0 && endptr != line, "bad_status_u64_%s", key);
+	return value;
+}
+
+static void qemu_expect_status_u64_at_least(const char *key,
+					    unsigned long long minimum)
+{
+	unsigned long long value;
+
+	value = qemu_read_status_u64(key);
+	qemu_check(value >= minimum, "status_%s_lt_%llu_got_%llu", key, minimum,
+		   value);
+}
+
 static void qemu_run_tool(char *const argv[])
 {
 	pid_t pid;
@@ -147,16 +175,18 @@ int main(void)
 		const char *params;
 		const char *status_line;
 		bool expect_installed;
+		unsigned int repeats;
 	} selftests[] = {
-		{ "hook_selftest_mode=1", "hook_selftest_enabled=1\n", false },
-		{ "hook_selftest_mode=2", "hook_selftest_exec_pool_ready=1\n", false },
-		{ "hook_selftest_mode=3", "hook_selftest_exec_allocated=1\n", false },
-		{ "hook_selftest_mode=4", "hook_selftest_exec_ready=1\n", false },
-		{ "hook_selftest_mode=5", "hook_selftest_exec_ready=1\n", true },
-		{ "hook_selftest_mode=6", "hook_selftest_actual=", true },
+		{ "hook_selftest_mode=1", "hook_selftest_enabled=1\n", false, 1 },
+		{ "hook_selftest_mode=2", "hook_selftest_exec_pool_ready=1\n", false, 1 },
+		{ "hook_selftest_mode=3", "hook_selftest_exec_allocated=1\n", false, 1 },
+		{ "hook_selftest_mode=4", "hook_selftest_exec_ready=1\n", false, 1 },
+		{ "hook_selftest_mode=5", "hook_selftest_exec_ready=1\n", true, 3 },
+		{ "hook_selftest_mode=6", "hook_selftest_actual=", true, 3 },
 	};
 	char version_buf[4096];
 	size_t i;
+	unsigned int iter;
 	char *const open_session_argv[] = { OPEN_SESSION_TOOL, NULL };
 	char *const mem_test_argv[] = { MEM_TEST_TOOL, "selftest", NULL };
 
@@ -175,13 +205,17 @@ int main(void)
 	fflush(stdout);
 
 	for (i = 0; i < sizeof(selftests) / sizeof(selftests[0]); i++) {
-		qemu_insmod(selftests[i].params);
-		qemu_expect_status_line(selftests[i].status_line);
-		if (selftests[i].expect_installed)
-			qemu_expect_status_line("hook_selftest_installed=1\n");
-		else
-			qemu_expect_status_line("hook_selftest_installed=0\n");
-		qemu_rmmod();
+		for (iter = 0; iter < selftests[i].repeats; iter++) {
+			qemu_insmod(selftests[i].params);
+			qemu_expect_status_line(selftests[i].status_line);
+			if (selftests[i].expect_installed) {
+				qemu_expect_status_line("hook_selftest_installed=1\n");
+				qemu_expect_status_u64_at_least("inline_hook_active=", 1);
+			} else {
+				qemu_expect_status_line("hook_selftest_installed=0\n");
+			}
+			qemu_rmmod();
+		}
 	}
 
 	qemu_insmod("hook_proc_version=1");
@@ -191,6 +225,17 @@ int main(void)
 	qemu_run_tool(open_session_argv);
 	qemu_run_tool(mem_test_argv);
 	qemu_rmmod();
+
+	for (iter = 0; iter < 5; iter++) {
+		qemu_insmod("hook_seq_read=1");
+		qemu_expect_status_line("seq_read_hook_active=1\n");
+		qemu_expect_status_u64_at_least("inline_hook_active=", 1);
+		qemu_read_file("/proc/version", version_buf, sizeof(version_buf));
+		qemu_check(version_buf[0] != '\0', "empty_proc_version_seq_read");
+		qemu_expect_status_u64_at_least("seq_read_hook_hits=", 2);
+		qemu_expect_status_u64_at_least("inline_hook_install_total=", 1);
+		qemu_rmmod();
+	}
 
 	printf("LKMDBG_QEMU_SMOKE_OK\n");
 	fflush(stdout);

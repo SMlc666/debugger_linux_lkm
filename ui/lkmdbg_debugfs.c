@@ -13,13 +13,25 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	u64 sessions_total;
 	u64 hook_expected;
 	u64 hook_actual;
+	u64 inline_hook_create_total;
+	u64 inline_hook_install_total;
+	u64 inline_hook_remove_total;
+	u64 inline_hook_active;
+	u64 inline_hook_last_target;
+	u64 inline_hook_last_origin;
+	u64 inline_hook_last_replacement;
+	u64 inline_hook_last_trampoline;
+	u64 seq_read_hook_hits;
 	bool hook_active;
 	bool selftest_enabled;
 	bool selftest_exec_pool_ready;
 	bool selftest_exec_allocated;
 	bool selftest_exec_ready;
 	bool selftest_installed;
+	bool seq_read_hook_active;
 	int selftest_ret;
+	int inline_hook_last_ret;
+	int seq_read_hook_last_ret;
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.status_reads++;
@@ -37,6 +49,18 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	selftest_ret = lkmdbg_state.hook_selftest_ret;
 	hook_expected = lkmdbg_state.hook_selftest_expected;
 	hook_actual = lkmdbg_state.hook_selftest_actual;
+	inline_hook_create_total = lkmdbg_state.inline_hook_create_total;
+	inline_hook_install_total = lkmdbg_state.inline_hook_install_total;
+	inline_hook_remove_total = lkmdbg_state.inline_hook_remove_total;
+	inline_hook_active = lkmdbg_state.inline_hook_active;
+	inline_hook_last_ret = lkmdbg_state.inline_hook_last_ret;
+	inline_hook_last_target = lkmdbg_state.inline_hook_last_target;
+	inline_hook_last_origin = lkmdbg_state.inline_hook_last_origin;
+	inline_hook_last_replacement = lkmdbg_state.inline_hook_last_replacement;
+	inline_hook_last_trampoline = lkmdbg_state.inline_hook_last_trampoline;
+	seq_read_hook_active = lkmdbg_state.seq_read_hook_active;
+	seq_read_hook_hits = lkmdbg_state.seq_read_hook_hits;
+	seq_read_hook_last_ret = lkmdbg_state.seq_read_hook_last_ret;
 	mutex_unlock(&lkmdbg_state.lock);
 
 	seq_printf(m, "tag=%s\n", tag);
@@ -67,6 +91,28 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 		   (unsigned long long)hook_expected);
 	seq_printf(m, "hook_selftest_actual=0x%llx\n",
 		   (unsigned long long)hook_actual);
+	seq_printf(m, "inline_hook_create_total=%llu\n",
+		   (unsigned long long)inline_hook_create_total);
+	seq_printf(m, "inline_hook_install_total=%llu\n",
+		   (unsigned long long)inline_hook_install_total);
+	seq_printf(m, "inline_hook_remove_total=%llu\n",
+		   (unsigned long long)inline_hook_remove_total);
+	seq_printf(m, "inline_hook_active=%llu\n",
+		   (unsigned long long)inline_hook_active);
+	seq_printf(m, "inline_hook_last_ret=%d\n", inline_hook_last_ret);
+	seq_printf(m, "inline_hook_last_target=0x%llx\n",
+		   (unsigned long long)inline_hook_last_target);
+	seq_printf(m, "inline_hook_last_origin=0x%llx\n",
+		   (unsigned long long)inline_hook_last_origin);
+	seq_printf(m, "inline_hook_last_replacement=0x%llx\n",
+		   (unsigned long long)inline_hook_last_replacement);
+	seq_printf(m, "inline_hook_last_trampoline=0x%llx\n",
+		   (unsigned long long)inline_hook_last_trampoline);
+	seq_printf(m, "seq_read_hook_requested=%u\n", hook_seq_read);
+	seq_printf(m, "seq_read_hook_active=%u\n", seq_read_hook_active);
+	seq_printf(m, "seq_read_hook_hits=%llu\n",
+		   (unsigned long long)seq_read_hook_hits);
+	seq_printf(m, "seq_read_hook_last_ret=%d\n", seq_read_hook_last_ret);
 	seq_printf(m, "bypass_kprobe_blacklist=%u\n", bypass_kprobe_blacklist);
 	seq_printf(m, "bypass_cfi=%u\n", bypass_cfi);
 

@@ -19,6 +19,11 @@ module_param(hook_selftest_mode, uint, 0644);
 MODULE_PARM_DESC(hook_selftest_mode,
 		 "0=off, 1=prepare only, 2=prepare exec pool only, 3=allocate exec trampoline only, 4=populate exec trampoline, 5=install only, 6=install and invoke a module-local arm64 inline hook");
 
+bool hook_seq_read;
+module_param(hook_seq_read, bool, 0444);
+MODULE_PARM_DESC(hook_seq_read,
+		 "Install a pass-through inline hook on seq_read and expose hit counters in debugfs");
+
 bool bypass_kprobe_blacklist;
 module_param(bypass_kprobe_blacklist, bool, 0644);
 MODULE_PARM_DESC(bypass_kprobe_blacklist,
@@ -281,14 +286,25 @@ static int __init lkmdbg_init(void)
 	}
 	lkmdbg_trace_stage("transport_ready");
 
-	pr_info("lkmdbg: loaded tag=%s hook_proc_version=%u hook_selftest_mode=%u kprobe_patched=%d cfi_patched=%d\n",
-		tag, hook_proc_version, hook_selftest_mode,
+	ret = lkmdbg_runtime_hooks_init();
+	if (ret) {
+		lkmdbg_transport_exit();
+		lkmdbg_hooks_exit();
+		lkmdbg_symbols_exit();
+		lkmdbg_debugfs_exit();
+		return ret;
+	}
+	lkmdbg_trace_stage("runtime_hooks_ready");
+
+	pr_info("lkmdbg: loaded tag=%s hook_proc_version=%u hook_selftest_mode=%u hook_seq_read=%u kprobe_patched=%d cfi_patched=%d\n",
+		tag, hook_proc_version, hook_selftest_mode, hook_seq_read,
 		blacklist_patched, cfi_patched);
 	return 0;
 }
 
 static void __exit lkmdbg_exit(void)
 {
+	lkmdbg_runtime_hooks_exit();
 	lkmdbg_transport_exit();
 	lkmdbg_selftest_hook = NULL;
 	lkmdbg_selftest_orig = NULL;

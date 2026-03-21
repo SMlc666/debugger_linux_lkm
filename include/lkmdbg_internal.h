@@ -38,6 +38,18 @@ struct lkmdbg_state {
 	int hook_selftest_ret;
 	u64 hook_selftest_expected;
 	u64 hook_selftest_actual;
+	u64 inline_hook_create_total;
+	u64 inline_hook_install_total;
+	u64 inline_hook_remove_total;
+	u64 inline_hook_active;
+	int inline_hook_last_ret;
+	u64 inline_hook_last_target;
+	u64 inline_hook_last_origin;
+	u64 inline_hook_last_replacement;
+	u64 inline_hook_last_trampoline;
+	bool seq_read_hook_active;
+	u64 seq_read_hook_hits;
+	int seq_read_hook_last_ret;
 };
 
 struct lkmdbg_symbols {
@@ -74,6 +86,7 @@ struct lkmdbg_session {
 extern char *tag;
 extern bool hook_proc_version;
 extern unsigned int hook_selftest_mode;
+extern bool hook_seq_read;
 extern bool bypass_kprobe_blacklist;
 extern bool bypass_cfi;
 extern struct lkmdbg_state lkmdbg_state;
@@ -84,6 +97,9 @@ void lkmdbg_debugfs_exit(void);
 
 int lkmdbg_symbols_init(void);
 void lkmdbg_symbols_exit(void);
+
+int lkmdbg_runtime_hooks_init(void);
+void lkmdbg_runtime_hooks_exit(void);
 
 int lkmdbg_transport_init(void);
 void lkmdbg_transport_exit(void);
