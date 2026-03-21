@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -26,6 +27,7 @@
 #define SELFTEST_SLOT_SIZE 64
 #define SELFTEST_LARGE_MAP_LEN (192U * 1024U)
 #define SELFTEST_BATCH_OPS 4
+#define SELFTEST_FREEZE_THREADS 2
 #define VMA_QUERY_BATCH 64
 #define VMA_QUERY_NAMES_SIZE 65536
 
@@ -37,9 +39,11 @@ struct child_info {
 	uintptr_t force_write_addr;
 	uintptr_t large_addr;
 	uintptr_t file_addr;
+	uintptr_t freeze_counters_addr;
 	uint64_t file_inode;
 	uint32_t file_dev_major;
 	uint32_t file_dev_minor;
+	uint32_t freeze_thread_count;
 	uint32_t page_size;
 	uint32_t slot_size;
 	uint32_t slot_count;
@@ -57,6 +61,11 @@ struct worker_ctx {
 	unsigned int thread_index;
 	int failed;
 	char final_payload[SELFTEST_SLOT_SIZE];
+};
+
+struct freeze_child_ctx {
+	volatile int *stop;
+	uint64_t *counter;
 };
 
 struct vma_query_buffer {
@@ -110,6 +119,53 @@ static int set_target(int session_fd, pid_t pid)
 	}
 
 	return 0;
+}
+
+static int control_target_threads(int session_fd, int thaw, uint32_t timeout_ms,
+				  struct lkmdbg_freeze_request *reply_out,
+				  int verbose)
+{
+	struct lkmdbg_freeze_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.timeout_ms = timeout_ms,
+	};
+	unsigned long cmd =
+		thaw ? LKMDBG_IOC_THAW_THREADS : LKMDBG_IOC_FREEZE_THREADS;
+
+	if (ioctl(session_fd, cmd, &req) < 0) {
+		fprintf(stderr, "%s failed: %s\n",
+			thaw ? "THAW_THREADS" : "FREEZE_THREADS",
+			strerror(errno));
+		return -1;
+	}
+
+	if (verbose) {
+		printf("%s total=%u settled=%u parked=%u\n",
+		       thaw ? "THAW_THREADS" : "FREEZE_THREADS",
+		       req.threads_total, req.threads_settled,
+		       req.threads_parked);
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int freeze_target_threads(int session_fd, uint32_t timeout_ms,
+				 struct lkmdbg_freeze_request *reply_out,
+				 int verbose)
+{
+	return control_target_threads(session_fd, 0, timeout_ms, reply_out,
+				      verbose);
+}
+
+static int thaw_target_threads(int session_fd, uint32_t timeout_ms,
+			       struct lkmdbg_freeze_request *reply_out,
+			       int verbose)
+{
+	return control_target_threads(session_fd, 1, timeout_ms, reply_out,
+				      verbose);
 }
 
 static unsigned char pattern_byte(size_t index, unsigned int seed)
@@ -660,6 +716,19 @@ static int query_mincore_resident(void *addr, size_t len)
 	return !!(vec & 1);
 }
 
+static void *freeze_child_thread_main(void *arg)
+{
+	struct freeze_child_ctx *ctx = arg;
+
+	while (!*ctx->stop) {
+		(*ctx->counter)++;
+		if (((*ctx->counter) & 0x3ffULL) == 0)
+			syscall(SYS_gettid);
+	}
+
+	return NULL;
+}
+
 static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 {
 	struct child_info info;
@@ -669,6 +738,10 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	void *force_read_map;
 	char *force_write_map;
 	unsigned char *large_map;
+	uint64_t *freeze_counters;
+	volatile int *freeze_stop;
+	pthread_t freeze_threads[SELFTEST_FREEZE_THREADS];
+	struct freeze_child_ctx freeze_ctxs[SELFTEST_FREEZE_THREADS];
 	void *file_map;
 	int file_fd;
 	struct stat st;
@@ -704,6 +777,16 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	if (large_map == MAP_FAILED)
 		return 2;
 
+	freeze_counters = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
+			       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (freeze_counters == MAP_FAILED)
+		return 2;
+
+	freeze_stop = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
+			   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (freeze_stop == MAP_FAILED)
+		return 2;
+
 	file_fd = memfd_create("lkmdbg-vma", MFD_CLOEXEC);
 	if (file_fd < 0)
 		return 2;
@@ -736,6 +819,15 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	if (mprotect(force_write_map, page_size, PROT_READ) < 0)
 		return 2;
 
+	for (i = 0; i < SELFTEST_FREEZE_THREADS; i++) {
+		freeze_ctxs[i].stop = freeze_stop;
+		freeze_ctxs[i].counter = &freeze_counters[i];
+		if (pthread_create(&freeze_threads[i], NULL,
+				   freeze_child_thread_main,
+				   &freeze_ctxs[i]) != 0)
+			return 2;
+	}
+
 	memset(&info, 0, sizeof(info));
 	info.basic_addr = (uintptr_t)child_buf;
 	info.slots_addr = (uintptr_t)slots_map;
@@ -744,9 +836,11 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	info.force_write_addr = (uintptr_t)force_write_map;
 	info.large_addr = (uintptr_t)large_map;
 	info.file_addr = (uintptr_t)file_map;
+	info.freeze_counters_addr = (uintptr_t)freeze_counters;
 	info.file_inode = (uint64_t)st.st_ino;
 	info.file_dev_major = (uint32_t)major(st.st_dev);
 	info.file_dev_minor = (uint32_t)minor(st.st_dev);
+	info.freeze_thread_count = SELFTEST_FREEZE_THREADS;
 	info.page_size = (uint32_t)page_size;
 	info.slot_size = SELFTEST_SLOT_SIZE;
 	info.slot_count = SELFTEST_THREAD_COUNT;
@@ -770,6 +864,9 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 				return 2;
 			break;
 		case CHILD_OP_EXIT:
+			*freeze_stop = 1;
+			for (i = 0; i < SELFTEST_FREEZE_THREADS; i++)
+				pthread_join(freeze_threads[i], NULL);
 			return 0;
 		default:
 			return 2;
@@ -839,15 +936,123 @@ static void *worker_thread_main(void *arg)
 	return NULL;
 }
 
+static int read_freeze_counters(int session_fd, const struct child_info *info,
+				uint64_t *counters)
+{
+	uint32_t bytes_done = 0;
+	size_t len = info->freeze_thread_count * sizeof(*counters);
+
+	if (read_target_memory(session_fd, info->freeze_counters_addr, counters,
+			       len, &bytes_done, 0) < 0 || bytes_done != len) {
+		fprintf(stderr, "freeze counter read failed bytes_done=%u\n",
+			bytes_done);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int freeze_counters_equal(const uint64_t *a, const uint64_t *b,
+				 uint32_t count)
+{
+	uint32_t i;
+
+	for (i = 0; i < count; i++) {
+		if (a[i] != b[i])
+			return 0;
+	}
+
+	return 1;
+}
+
+static int freeze_counters_advanced(const uint64_t *before, const uint64_t *after,
+				    uint32_t count)
+{
+	uint32_t i;
+
+	for (i = 0; i < count; i++) {
+		if (after[i] > before[i])
+			return 1;
+	}
+
+	return 0;
+}
+
+static int verify_thread_freeze(int session_fd, const struct child_info *info)
+{
+	struct lkmdbg_freeze_request req;
+	uint64_t before[SELFTEST_FREEZE_THREADS];
+	uint64_t frozen_a[SELFTEST_FREEZE_THREADS];
+	uint64_t frozen_b[SELFTEST_FREEZE_THREADS];
+	uint64_t after[SELFTEST_FREEZE_THREADS];
+
+	memset(before, 0, sizeof(before));
+	memset(frozen_a, 0, sizeof(frozen_a));
+	memset(frozen_b, 0, sizeof(frozen_b));
+	memset(after, 0, sizeof(after));
+
+	usleep(50000);
+	if (read_freeze_counters(session_fd, info, before) < 0)
+		return -1;
+
+	if (freeze_target_threads(session_fd, 2000, &req, 1) < 0)
+		return -1;
+
+	if (req.threads_settled < info->freeze_thread_count ||
+	    req.threads_parked < info->freeze_thread_count) {
+		fprintf(stderr,
+			"freeze settle mismatch total=%u settled=%u parked=%u expected_threads=%u\n",
+			req.threads_total, req.threads_settled, req.threads_parked,
+			info->freeze_thread_count);
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	if (read_freeze_counters(session_fd, info, frozen_a) < 0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	usleep(50000);
+	if (read_freeze_counters(session_fd, info, frozen_b) < 0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	if (!freeze_counters_equal(frozen_a, frozen_b, info->freeze_thread_count)) {
+		fprintf(stderr, "freeze counters changed while frozen\n");
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	if (thaw_target_threads(session_fd, 2000, &req, 1) < 0)
+		return -1;
+
+	usleep(50000);
+	if (read_freeze_counters(session_fd, info, after) < 0)
+		return -1;
+
+	if (!freeze_counters_advanced(frozen_b, after, info->freeze_thread_count)) {
+		fprintf(stderr, "freeze counters did not resume after thaw\n");
+		return -1;
+	}
+
+	printf("selftest thread freeze ok total=%u settled=%u parked=%u\n",
+	       req.threads_total, req.threads_settled, req.threads_parked);
+	return 0;
+}
+
 static void usage(const char *prog)
 {
 	fprintf(stderr,
 		"Usage:\n"
 		"  %s selftest\n"
 		"  %s read <pid> <remote_addr_hex> <length>\n"
+		"  %s freeze <pid> [timeout_ms]\n"
+		"  %s thaw <pid> [timeout_ms]\n"
 		"  %s vmas <pid>\n"
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
-		prog, prog, prog, prog);
+		prog, prog, prog, prog, prog, prog);
 }
 
 static int run_selftest(const char *prog)
@@ -1207,6 +1412,16 @@ static int run_selftest(const char *prog)
 		return 1;
 	}
 
+	if (verify_thread_freeze(session_fd, &info) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
 	if (expect_partial_write_progress(session_fd, info.basic_addr,
 					  partial_payload) < 0) {
 		close(session_fd);
@@ -1422,6 +1637,7 @@ int main(int argc, char **argv)
 	uintptr_t remote_addr = 0;
 	char *endp;
 	int needs_remote_addr;
+	uint32_t timeout_ms = 0;
 
 	if (argc == 2 && strcmp(argv[1], "selftest") == 0)
 		return run_selftest(argv[0]);
@@ -1498,6 +1714,34 @@ int main(int argc, char **argv)
 
 		if (write_target_memory(session_fd, remote_addr, data, len, NULL,
 					1) < 0) {
+			close(session_fd);
+			return 1;
+		}
+	} else if (strcmp(argv[1], "freeze") == 0) {
+		if (argc >= 4) {
+			timeout_ms = (uint32_t)strtoul(argv[3], &endp, 0);
+			if (*endp != '\0') {
+				fprintf(stderr, "invalid timeout: %s\n", argv[3]);
+				close(session_fd);
+				return 1;
+			}
+		}
+
+		if (freeze_target_threads(session_fd, timeout_ms, NULL, 1) < 0) {
+			close(session_fd);
+			return 1;
+		}
+	} else if (strcmp(argv[1], "thaw") == 0) {
+		if (argc >= 4) {
+			timeout_ms = (uint32_t)strtoul(argv[3], &endp, 0);
+			if (*endp != '\0') {
+				fprintf(stderr, "invalid timeout: %s\n", argv[3]);
+				close(session_fd);
+				return 1;
+			}
+		}
+
+		if (thaw_target_threads(session_fd, timeout_ms, NULL, 1) < 0) {
 			close(session_fd);
 			return 1;
 		}

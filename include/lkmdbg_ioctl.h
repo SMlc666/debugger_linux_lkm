@@ -113,6 +113,17 @@ struct lkmdbg_vma_query_request {
 	__u64 next_addr;
 };
 
+struct lkmdbg_freeze_request {
+	__u32 version;
+	__u32 size;
+	__u32 flags;
+	__u32 timeout_ms;
+	__u32 threads_total;
+	__u32 threads_settled;
+	__u32 threads_parked;
+	__u32 reserved0;
+};
+
 struct lkmdbg_event_record {
 	__u32 version;
 	__u32 type;
@@ -137,5 +148,9 @@ struct lkmdbg_event_record {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x12, struct lkmdbg_mem_request)
 #define LKMDBG_IOC_QUERY_VMAS \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x13, struct lkmdbg_vma_query_request)
+#define LKMDBG_IOC_FREEZE_THREADS \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x14, struct lkmdbg_freeze_request)
+#define LKMDBG_IOC_THAW_THREADS \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x15, struct lkmdbg_freeze_request)
 
 #endif

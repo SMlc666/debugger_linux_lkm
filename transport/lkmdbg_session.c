@@ -111,6 +111,8 @@ static int lkmdbg_session_release(struct inode *inode, struct file *file)
 
 	(void)inode;
 
+	lkmdbg_session_freeze_release(session);
+
 	mutex_lock(&lkmdbg_state.lock);
 	if (lkmdbg_state.active_sessions > 0)
 		lkmdbg_state.active_sessions--;
@@ -216,6 +218,8 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 					   old_calls, current->tgid);
 		return 0;
 	case LKMDBG_IOC_SET_TARGET:
+		if (lkmdbg_session_freeze_on_target_change(session))
+			return -EBUSY;
 		return lkmdbg_mem_set_target(session, argp);
 	case LKMDBG_IOC_READ_MEM:
 		return lkmdbg_mem_read(session, argp);
@@ -223,6 +227,10 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_mem_write(session, argp);
 	case LKMDBG_IOC_QUERY_VMAS:
 		return lkmdbg_vma_query(session, argp);
+	case LKMDBG_IOC_FREEZE_THREADS:
+		return lkmdbg_freeze_threads(session, argp);
+	case LKMDBG_IOC_THAW_THREADS:
+		return lkmdbg_thaw_threads(session, argp);
 	default:
 		return -ENOTTY;
 	}

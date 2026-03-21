@@ -21,6 +21,7 @@
 
 struct mm_struct;
 struct seq_file;
+struct lkmdbg_freezer;
 
 struct lkmdbg_hook_registry_entry {
 	struct list_head node;
@@ -95,6 +96,7 @@ struct lkmdbg_session {
 	u32 event_count;
 	pid_t owner_tgid;
 	pid_t target_tgid;
+	struct lkmdbg_freezer *freezer;
 	struct lkmdbg_event_record events[LKMDBG_SESSION_EVENT_CAPACITY];
 };
 
@@ -143,6 +145,10 @@ long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_read(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_write(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_freeze_threads(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_thaw_threads(struct lkmdbg_session *session, void __user *argp);
+void lkmdbg_session_freeze_release(struct lkmdbg_session *session);
+int lkmdbg_session_freeze_on_target_change(struct lkmdbg_session *session);
 #ifdef CONFIG_COMPAT
 long lkmdbg_session_compat_ioctl(struct file *file, unsigned int cmd,
 				 unsigned long arg);

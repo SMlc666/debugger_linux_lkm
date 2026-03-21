@@ -24,6 +24,9 @@ lkmdbg-mem-y := \
 	mem/lkmdbg_target.o \
 	mem/lkmdbg_vma.o
 
+lkmdbg-task-y := \
+	task/lkmdbg_freeze.o
+
 lkmdbg-ui-y := \
 	ui/lkmdbg_debugfs.o
 
@@ -32,6 +35,7 @@ lkmdbg-y := \
 	$(lkmdbg-hook-y) \
 	$(lkmdbg-transport-y) \
 	$(lkmdbg-mem-y) \
+	$(lkmdbg-task-y) \
 	$(lkmdbg-ui-y)
 else
 KDIR ?= /lib/modules/$(shell uname -r)/build
