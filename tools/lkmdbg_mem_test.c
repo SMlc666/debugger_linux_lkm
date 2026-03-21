@@ -1,6 +1,9 @@
+#define _GNU_SOURCE
+
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <linux/memfd.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -9,6 +12,7 @@
 #include <signal.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -326,6 +330,18 @@ static int expect_force_write_rejected(int session_fd, uintptr_t remote_addr,
 	return 0;
 }
 
+static int create_selftest_memfd(void)
+{
+#if defined(SYS_memfd_create)
+	return (int)syscall(SYS_memfd_create, "lkmdbg-mem-test", 0);
+#elif defined(__NR_memfd_create)
+	return (int)syscall(__NR_memfd_create, "lkmdbg-mem-test", 0);
+#else
+	errno = ENOSYS;
+	return -1;
+#endif
+}
+
 static int query_mincore_resident(void *addr, size_t len)
 {
 	unsigned char vec = 0;
@@ -349,7 +365,6 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	volatile unsigned char cow_touch;
 	unsigned int i;
 	int cow_fd;
-	char cow_path[] = "/tmp/lkmdbg-mem-test-XXXXXX";
 
 	page_size = (size_t)sysconf(_SC_PAGESIZE);
 	if (!page_size)
@@ -370,10 +385,9 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	if (force_read_map == MAP_FAILED)
 		return 2;
 
-	cow_fd = mkstemp(cow_path);
+	cow_fd = create_selftest_memfd();
 	if (cow_fd < 0)
 		return 2;
-	unlink(cow_path);
 	if (ftruncate(cow_fd, (off_t)page_size) < 0)
 		return 2;
 	cow_map = mmap(NULL, page_size, PROT_READ | PROT_WRITE, MAP_SHARED,
