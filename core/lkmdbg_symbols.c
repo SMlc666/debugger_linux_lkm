@@ -103,6 +103,18 @@ static int lkmdbg_resolve_runtime_symbols(void)
 	if (addr)
 		lkmdbg_symbols.user_disable_single_step_sym = addr;
 
+	addr = lkmdbg_symbols.kallsyms_lookup_name("for_each_kernel_tracepoint");
+	if (addr)
+		lkmdbg_symbols.for_each_kernel_tracepoint_sym = addr;
+
+	addr = lkmdbg_symbols.kallsyms_lookup_name("tracepoint_probe_register");
+	if (addr)
+		lkmdbg_symbols.tracepoint_probe_register_sym = addr;
+
+	addr = lkmdbg_symbols.kallsyms_lookup_name("tracepoint_probe_unregister");
+	if (addr)
+		lkmdbg_symbols.tracepoint_probe_unregister_sym = addr;
+
 	return 0;
 }
 
@@ -131,4 +143,7 @@ void lkmdbg_symbols_exit(void)
 	lkmdbg_symbols.unregister_user_step_hook_sym = 0;
 	lkmdbg_symbols.user_enable_single_step_sym = 0;
 	lkmdbg_symbols.user_disable_single_step_sym = 0;
+	lkmdbg_symbols.for_each_kernel_tracepoint_sym = 0;
+	lkmdbg_symbols.tracepoint_probe_register_sym = 0;
+	lkmdbg_symbols.tracepoint_probe_unregister_sym = 0;
 }

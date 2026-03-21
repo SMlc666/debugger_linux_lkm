@@ -42,6 +42,12 @@ typedef void (*lkmdbg_register_user_step_hook_fn)(struct step_hook *hook);
 typedef void (*lkmdbg_unregister_user_step_hook_fn)(struct step_hook *hook);
 typedef void (*lkmdbg_user_single_step_fn)(struct task_struct *task);
 #endif
+typedef void (*lkmdbg_for_each_kernel_tracepoint_fn)(
+	void (*fct)(struct tracepoint *tp, void *priv), void *priv);
+typedef int (*lkmdbg_tracepoint_probe_register_fn)(struct tracepoint *tp,
+						   void *probe, void *data);
+typedef int (*lkmdbg_tracepoint_probe_unregister_fn)(struct tracepoint *tp,
+						     void *probe, void *data);
 
 static bool lkmdbg_trace_fork_registered;
 static bool lkmdbg_trace_exec_registered;
@@ -392,8 +398,14 @@ static struct tracepoint *lkmdbg_find_tracepoint(const char *name)
 	struct lkmdbg_tracepoint_lookup lookup = {
 		.name = name,
 	};
+	lkmdbg_for_each_kernel_tracepoint_fn for_each_fn;
 
-	for_each_kernel_tracepoint(lkmdbg_tracepoint_find_cb, &lookup);
+	for_each_fn = (lkmdbg_for_each_kernel_tracepoint_fn)
+		lkmdbg_symbols.for_each_kernel_tracepoint_sym;
+	if (!for_each_fn)
+		return NULL;
+
+	for_each_fn(lkmdbg_tracepoint_find_cb, &lookup);
 	return lookup.match;
 }
 
@@ -426,13 +438,20 @@ static int lkmdbg_user_step_handler(struct pt_regs *regs, unsigned long esr)
 
 static int lkmdbg_register_trace_hooks(void)
 {
+	lkmdbg_tracepoint_probe_register_fn register_fn;
 	int ret;
+
+	register_fn = (lkmdbg_tracepoint_probe_register_fn)
+		lkmdbg_symbols.tracepoint_probe_register_sym;
+	if (!register_fn) {
+		pr_info("lkmdbg: tracepoint register helper unavailable\n");
+		return 0;
+	}
 
 	lkmdbg_trace_fork_tp = lkmdbg_find_tracepoint("sched_process_fork");
 	if (lkmdbg_trace_fork_tp) {
-		ret = tracepoint_probe_register(lkmdbg_trace_fork_tp,
-						 (void *)lkmdbg_trace_sched_process_fork,
-						 NULL);
+		ret = register_fn(lkmdbg_trace_fork_tp,
+				  (void *)lkmdbg_trace_sched_process_fork, NULL);
 		if (!ret)
 			lkmdbg_trace_fork_registered = true;
 		else
@@ -444,9 +463,8 @@ static int lkmdbg_register_trace_hooks(void)
 
 	lkmdbg_trace_exec_tp = lkmdbg_find_tracepoint("sched_process_exec");
 	if (lkmdbg_trace_exec_tp) {
-		ret = tracepoint_probe_register(lkmdbg_trace_exec_tp,
-						 (void *)lkmdbg_trace_sched_process_exec,
-						 NULL);
+		ret = register_fn(lkmdbg_trace_exec_tp,
+				  (void *)lkmdbg_trace_sched_process_exec, NULL);
 		if (!ret)
 			lkmdbg_trace_exec_registered = true;
 		else
@@ -458,9 +476,8 @@ static int lkmdbg_register_trace_hooks(void)
 
 	lkmdbg_trace_exit_tp = lkmdbg_find_tracepoint("sched_process_exit");
 	if (lkmdbg_trace_exit_tp) {
-		ret = tracepoint_probe_register(lkmdbg_trace_exit_tp,
-						 (void *)lkmdbg_trace_sched_process_exit,
-						 NULL);
+		ret = register_fn(lkmdbg_trace_exit_tp,
+				  (void *)lkmdbg_trace_sched_process_exit, NULL);
 		if (!ret)
 			lkmdbg_trace_exit_registered = true;
 		else
@@ -472,9 +489,8 @@ static int lkmdbg_register_trace_hooks(void)
 
 	lkmdbg_trace_signal_tp = lkmdbg_find_tracepoint("signal_generate");
 	if (lkmdbg_trace_signal_tp) {
-		ret = tracepoint_probe_register(lkmdbg_trace_signal_tp,
-						 (void *)lkmdbg_trace_signal_generate,
-						 NULL);
+		ret = register_fn(lkmdbg_trace_signal_tp,
+				  (void *)lkmdbg_trace_signal_generate, NULL);
 		if (!ret)
 			lkmdbg_trace_signal_registered = true;
 		else
@@ -506,34 +522,36 @@ int lkmdbg_thread_ctrl_init(void)
 
 void lkmdbg_thread_ctrl_exit(void)
 {
-	if (lkmdbg_trace_signal_registered && lkmdbg_trace_signal_tp) {
-		tracepoint_probe_unregister(lkmdbg_trace_signal_tp,
-					    (void *)lkmdbg_trace_signal_generate,
-					    NULL);
+	lkmdbg_tracepoint_probe_unregister_fn unregister_fn;
+
+	unregister_fn = (lkmdbg_tracepoint_probe_unregister_fn)
+		lkmdbg_symbols.tracepoint_probe_unregister_sym;
+
+	if (unregister_fn && lkmdbg_trace_signal_registered &&
+	    lkmdbg_trace_signal_tp) {
+		unregister_fn(lkmdbg_trace_signal_tp,
+			      (void *)lkmdbg_trace_signal_generate, NULL);
 		lkmdbg_trace_signal_registered = false;
 	}
 	lkmdbg_trace_signal_tp = NULL;
 
-	if (lkmdbg_trace_exit_registered && lkmdbg_trace_exit_tp) {
-		tracepoint_probe_unregister(lkmdbg_trace_exit_tp,
-					    (void *)lkmdbg_trace_sched_process_exit,
-					    NULL);
+	if (unregister_fn && lkmdbg_trace_exit_registered && lkmdbg_trace_exit_tp) {
+		unregister_fn(lkmdbg_trace_exit_tp,
+			      (void *)lkmdbg_trace_sched_process_exit, NULL);
 		lkmdbg_trace_exit_registered = false;
 	}
 	lkmdbg_trace_exit_tp = NULL;
 
-	if (lkmdbg_trace_exec_registered && lkmdbg_trace_exec_tp) {
-		tracepoint_probe_unregister(lkmdbg_trace_exec_tp,
-					    (void *)lkmdbg_trace_sched_process_exec,
-					    NULL);
+	if (unregister_fn && lkmdbg_trace_exec_registered && lkmdbg_trace_exec_tp) {
+		unregister_fn(lkmdbg_trace_exec_tp,
+			      (void *)lkmdbg_trace_sched_process_exec, NULL);
 		lkmdbg_trace_exec_registered = false;
 	}
 	lkmdbg_trace_exec_tp = NULL;
 
-	if (lkmdbg_trace_fork_registered && lkmdbg_trace_fork_tp) {
-		tracepoint_probe_unregister(lkmdbg_trace_fork_tp,
-					    (void *)lkmdbg_trace_sched_process_fork,
-					    NULL);
+	if (unregister_fn && lkmdbg_trace_fork_registered && lkmdbg_trace_fork_tp) {
+		unregister_fn(lkmdbg_trace_fork_tp,
+			      (void *)lkmdbg_trace_sched_process_fork, NULL);
 		lkmdbg_trace_fork_registered = false;
 	}
 	lkmdbg_trace_fork_tp = NULL;

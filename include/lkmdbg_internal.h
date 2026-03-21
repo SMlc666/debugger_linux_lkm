@@ -91,6 +91,9 @@ struct lkmdbg_symbols {
 	unsigned long unregister_user_step_hook_sym;
 	unsigned long user_enable_single_step_sym;
 	unsigned long user_disable_single_step_sym;
+	unsigned long for_each_kernel_tracepoint_sym;
+	unsigned long tracepoint_probe_register_sym;
+	unsigned long tracepoint_probe_unregister_sym;
 };
 
 int lkmdbg_disable_kprobe_blacklist(void);
