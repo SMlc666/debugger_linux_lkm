@@ -34,6 +34,7 @@
 #define VMA_QUERY_NAMES_SIZE 65536
 #define THREAD_QUERY_BATCH 64
 #define PAGE_QUERY_BATCH 64
+#define EVENT_READ_BATCH 16
 
 struct child_info {
 	uintptr_t basic_addr;
@@ -149,7 +150,7 @@ static int set_target(int session_fd, pid_t pid)
 
 static int drain_session_events(int session_fd)
 {
-	struct lkmdbg_event_record event;
+	struct lkmdbg_event_record events[EVENT_READ_BATCH];
 
 	for (;;) {
 		struct pollfd pfd = {
@@ -166,9 +167,15 @@ static int drain_session_events(int session_fd)
 		if (!(pfd.revents & POLLIN))
 			return 0;
 
-		nread = read(session_fd, &event, sizeof(event));
-		if (nread == (ssize_t)sizeof(event))
+		nread = read(session_fd, events, sizeof(events));
+		if (nread > 0) {
+			if (nread % (ssize_t)sizeof(events[0]) != 0) {
+				fprintf(stderr, "short event drain read: %zd\n",
+					nread);
+				return -1;
+			}
 			continue;
+		}
 		if (nread < 0) {
 			fprintf(stderr, "drain event failed: %s\n",
 				strerror(errno));
@@ -181,15 +188,21 @@ static int drain_session_events(int session_fd)
 	}
 }
 
-static int read_session_event_timeout(int session_fd,
-				      struct lkmdbg_event_record *event_out,
-				      int timeout_ms)
+static int read_session_events_timeout(int session_fd,
+				       struct lkmdbg_event_record *events_out,
+				       size_t max_events,
+				       size_t *events_read_out,
+				       int timeout_ms)
 {
 	struct pollfd pfd = {
 		.fd = session_fd,
 		.events = POLLIN,
 	};
+	size_t bytes;
 	ssize_t nread;
+
+	if (!events_out || !max_events || !events_read_out)
+		return -1;
 
 	if (poll(&pfd, 1, timeout_ms) < 0) {
 		fprintf(stderr, "event poll failed: %s\n", strerror(errno));
@@ -199,13 +212,39 @@ static int read_session_event_timeout(int session_fd,
 	if (!(pfd.revents & POLLIN))
 		return 1;
 
-	nread = read(session_fd, event_out, sizeof(*event_out));
+	bytes = max_events * sizeof(*events_out);
+	nread = read(session_fd, events_out, bytes);
 	if (nread < 0) {
 		fprintf(stderr, "event read failed: %s\n", strerror(errno));
 		return -1;
 	}
-	if (nread != (ssize_t)sizeof(*event_out)) {
+	if (nread == 0) {
+		*events_read_out = 0;
+		return 1;
+	}
+	if (nread % (ssize_t)sizeof(*events_out) != 0) {
 		fprintf(stderr, "short event read: %zd\n", nread);
+		return -1;
+	}
+
+	*events_read_out = (size_t)nread / sizeof(*events_out);
+	return 0;
+}
+
+static int read_session_event_timeout(int session_fd,
+				      struct lkmdbg_event_record *event_out,
+				      int timeout_ms)
+{
+	size_t events_read = 0;
+	int ret;
+
+	ret = read_session_events_timeout(session_fd, event_out, 1,
+					  &events_read, timeout_ms);
+	if (ret)
+		return ret;
+	if (events_read != 1) {
+		fprintf(stderr, "unexpected event batch size: %zu\n",
+			events_read);
 		return -1;
 	}
 
@@ -246,6 +285,60 @@ static int wait_for_session_event(int session_fd, uint32_t type, uint32_t code,
 
 	fprintf(stderr, "event wait timed out type=%u code=%u\n", type, code);
 	return -ETIMEDOUT;
+}
+
+static void print_event_record(const struct lkmdbg_event_record *event,
+			       unsigned int index)
+{
+	printf("event[%u].version=%u\n", index, event->version);
+	printf("event[%u].type=%u\n", index, event->type);
+	printf("event[%u].size=%u\n", index, event->size);
+	printf("event[%u].code=%u\n", index, event->code);
+	printf("event[%u].session_id=%" PRIu64 "\n", index,
+	       (uint64_t)event->session_id);
+	printf("event[%u].seq=%" PRIu64 "\n", index, (uint64_t)event->seq);
+	printf("event[%u].tgid=%d\n", index, event->tgid);
+	printf("event[%u].tid=%d\n", index, event->tid);
+	printf("event[%u].flags=0x%x\n", index, event->flags);
+	printf("event[%u].reserved0=%u\n", index, event->reserved0);
+	printf("event[%u].value0=%" PRIu64 "\n", index, (uint64_t)event->value0);
+	printf("event[%u].value1=%" PRIu64 "\n", index, (uint64_t)event->value1);
+}
+
+static int verify_batch_event_read(int session_fd)
+{
+	struct lkmdbg_event_record events[2];
+	size_t events_read = 0;
+
+	if (ioctl(session_fd, LKMDBG_IOC_RESET_SESSION) < 0) {
+		fprintf(stderr, "RESET_SESSION failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (read_session_events_timeout(session_fd, events, 2, &events_read,
+					1000) < 0)
+		return -1;
+	if (events_read != 2) {
+		fprintf(stderr, "expected 2 queued session events, got %zu\n",
+			events_read);
+		return -1;
+	}
+	if (events[0].type != LKMDBG_EVENT_SESSION_OPENED ||
+	    events[1].type != LKMDBG_EVENT_SESSION_RESET) {
+		fprintf(stderr,
+			"unexpected batch event order types=%u,%u\n",
+			events[0].type, events[1].type);
+		return -1;
+	}
+	if (events[1].reserved0 != 0) {
+		fprintf(stderr, "unexpected reset reserved0=%u\n",
+			events[1].reserved0);
+		return -1;
+	}
+
+	printf("selftest batched event read ok seq=%" PRIu64 "->%" PRIu64 "\n",
+	       (uint64_t)events[0].seq, (uint64_t)events[1].seq);
+	return 0;
 }
 
 static int expect_stop_state(int session_fd, uint32_t reason,
@@ -1252,6 +1345,44 @@ static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
 		return -1;
 	}
 
+	return 0;
+}
+
+static int dump_session_events(int session_fd, unsigned int max_events,
+			       int timeout_ms)
+{
+	struct lkmdbg_event_record events[EVENT_READ_BATCH];
+	unsigned int printed = 0;
+
+	if (!max_events)
+		max_events = EVENT_READ_BATCH;
+
+	while (printed < max_events) {
+		size_t events_read = 0;
+		size_t batch_limit = max_events - printed;
+		unsigned int i;
+		int ret;
+
+		if (batch_limit > sizeof(events) / sizeof(events[0]))
+			batch_limit = sizeof(events) / sizeof(events[0]);
+
+		ret = read_session_events_timeout(session_fd, events, batch_limit,
+						  &events_read, timeout_ms);
+		if (ret < 0)
+			return -1;
+		if (ret > 0)
+			break;
+
+		for (i = 0; i < events_read; i++)
+			print_event_record(&events[i], printed + i);
+		printed += events_read;
+
+		if ((size_t)events_read < batch_limit)
+			break;
+		timeout_ms = 0;
+	}
+
+	printf("events_read=%u\n", printed);
 	return 0;
 }
 
@@ -2312,11 +2443,12 @@ static void usage(const char *prog)
 		"  %s step <pid> <tid>\n"
 		"  %s freeze <pid> [timeout_ms]\n"
 		"  %s thaw <pid> [timeout_ms]\n"
+		"  %s events <pid> [max_events] [timeout_ms]\n"
 		"  %s vmas <pid>\n"
 		"  %s pages <pid> <remote_addr_hex> <length>\n"
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog, prog, prog, prog, prog, prog);
+		prog, prog, prog, prog, prog, prog, prog);
 }
 
 static int run_selftest(const char *prog)
@@ -2409,6 +2541,16 @@ static int run_selftest(const char *prog)
 	}
 
 	if (set_target(session_fd, child) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	if (verify_batch_event_read(session_fd) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
 		close(cmd_pipe[1]);
@@ -2951,6 +3093,7 @@ int main(int argc, char **argv)
 	uint32_t hwpoint_len = 0;
 	uint32_t hwpoint_flags = 0;
 	uint32_t continue_flags = 0;
+	unsigned int max_events = EVENT_READ_BATCH;
 
 	if (argc == 2 && strcmp(argv[1], "selftest") == 0)
 		return run_selftest(argv[0]);
@@ -3049,6 +3192,24 @@ int main(int argc, char **argv)
 			else {
 				fprintf(stderr, "invalid continue mode: %s\n",
 					argv[4]);
+				return 1;
+			}
+		}
+	}
+
+	if (strcmp(argv[1], "events") == 0) {
+		if (argc >= 4) {
+			max_events = (unsigned int)strtoul(argv[3], &endp, 0);
+			if (*endp != '\0' || !max_events) {
+				fprintf(stderr, "invalid max_events: %s\n",
+					argv[3]);
+				return 1;
+			}
+		}
+		if (argc >= 5) {
+			timeout_ms = (uint32_t)strtoul(argv[4], &endp, 0);
+			if (*endp != '\0') {
+				fprintf(stderr, "invalid timeout: %s\n", argv[4]);
 				return 1;
 			}
 		}
@@ -3319,6 +3480,11 @@ int main(int argc, char **argv)
 		}
 
 		if (thaw_target_threads(session_fd, timeout_ms, NULL, 1) < 0) {
+			close(session_fd);
+			return 1;
+		}
+	} else if (strcmp(argv[1], "events") == 0) {
+		if (dump_session_events(session_fd, max_events, timeout_ms) < 0) {
 			close(session_fd);
 			return 1;
 		}

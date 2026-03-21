@@ -114,6 +114,20 @@ The current session ioctls include:
 - `LKMDBG_IOC_SET_TARGET`
 - `LKMDBG_IOC_READ_MEM`
 - `LKMDBG_IOC_WRITE_MEM`
+- `LKMDBG_IOC_QUERY_VMAS`
+- `LKMDBG_IOC_QUERY_PAGES`
+- `LKMDBG_IOC_QUERY_THREADS`
+- `LKMDBG_IOC_GET_REGS`
+- `LKMDBG_IOC_SET_REGS`
+- `LKMDBG_IOC_FREEZE_THREADS`
+- `LKMDBG_IOC_THAW_THREADS`
+- `LKMDBG_IOC_GET_STOP_STATE`
+- `LKMDBG_IOC_CONTINUE_TARGET`
+- `LKMDBG_IOC_ADD_HWPOINT`
+- `LKMDBG_IOC_REMOVE_HWPOINT`
+- `LKMDBG_IOC_QUERY_HWPOINTS`
+- `LKMDBG_IOC_REARM_HWPOINT`
+- `LKMDBG_IOC_SINGLE_STEP`
 
 Memory transfer requests now use a single batched shape:
 
@@ -129,6 +143,19 @@ Current session events include:
 - `LKMDBG_EVENT_SESSION_OPENED`
 - `LKMDBG_EVENT_SESSION_RESET`
 - `LKMDBG_EVENT_INTERNAL_NOTICE`
+- `LKMDBG_EVENT_TARGET_CLONE`
+- `LKMDBG_EVENT_TARGET_EXEC`
+- `LKMDBG_EVENT_TARGET_EXIT`
+- `LKMDBG_EVENT_TARGET_SIGNAL`
+- `LKMDBG_EVENT_TARGET_STOP`
+
+Session fds are readable and pollable:
+
+- `read()` now drains one or more whole `struct lkmdbg_event_record`
+  instances per call when the caller provides a larger buffer
+- `poll()`/`POLLIN` still signal that at least one queued event is available
+- `event.seq` and `event.reserved0` let user space detect queue drops and
+  recover after bursts
 
 Shared definitions live in [lkmdbg_ioctl.h](/root/debugger_linux_lkm/include/lkmdbg_ioctl.h).
 

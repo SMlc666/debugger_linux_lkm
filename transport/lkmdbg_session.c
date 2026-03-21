@@ -25,6 +25,19 @@ static bool lkmdbg_session_has_events(struct lkmdbg_session *session)
 	return READ_ONCE(session->event_count) > 0;
 }
 
+static void
+lkmdbg_session_note_read_event(const struct lkmdbg_event_record *event)
+{
+	if (event->type != LKMDBG_EVENT_TARGET_STOP)
+		return;
+
+	atomic64_inc(&lkmdbg_state.target_stop_event_read_total);
+	if (event->code == LKMDBG_STOP_REASON_BREAKPOINT)
+		atomic64_inc(&lkmdbg_state.breakpoint_stop_event_read_total);
+	else if (event->code == LKMDBG_STOP_REASON_WATCHPOINT)
+		atomic64_inc(&lkmdbg_state.watchpoint_stop_event_read_total);
+}
+
 static void lkmdbg_session_queue_event_locked(struct lkmdbg_session *session,
 					      u32 type, u32 code, pid_t tgid,
 					      pid_t tid, u32 flags,
@@ -462,16 +475,23 @@ ssize_t lkmdbg_session_read(struct file *file, char __user *buf, size_t count,
 			    loff_t *ppos)
 {
 	struct lkmdbg_session *session = file->private_data;
-	struct lkmdbg_event_record event;
+	struct lkmdbg_event_record events[LKMDBG_SESSION_EVENT_CAPACITY];
+	size_t max_events;
+	size_t copied = 0;
+	size_t bytes;
 	int ret;
+	u32 i;
 
 	(void)ppos;
 
 	if (!session)
 		return -ENXIO;
 
-	if (count < sizeof(event))
+	max_events = count / sizeof(events[0]);
+	if (!max_events)
 		return -EINVAL;
+	if (max_events > ARRAY_SIZE(events))
+		max_events = ARRAY_SIZE(events);
 
 	for (;;) {
 		spin_lock_irq(&session->event_lock);
@@ -488,24 +508,23 @@ ssize_t lkmdbg_session_read(struct file *file, char __user *buf, size_t count,
 			return ret;
 	}
 
-	event = session->events[session->event_head];
-	session->event_head =
-		(session->event_head + 1) % LKMDBG_SESSION_EVENT_CAPACITY;
-	session->event_count--;
+	while (copied < max_events && session->event_count > 0) {
+		events[copied] = session->events[session->event_head];
+		session->event_head =
+			(session->event_head + 1) % LKMDBG_SESSION_EVENT_CAPACITY;
+		session->event_count--;
+		copied++;
+	}
 	spin_unlock_irq(&session->event_lock);
 
-	if (copy_to_user(buf, &event, sizeof(event)))
+	bytes = copied * sizeof(events[0]);
+	if (copy_to_user(buf, events, bytes))
 		return -EFAULT;
 
-	if (event.type == LKMDBG_EVENT_TARGET_STOP) {
-		atomic64_inc(&lkmdbg_state.target_stop_event_read_total);
-		if (event.code == LKMDBG_STOP_REASON_BREAKPOINT)
-			atomic64_inc(&lkmdbg_state.breakpoint_stop_event_read_total);
-		else if (event.code == LKMDBG_STOP_REASON_WATCHPOINT)
-			atomic64_inc(&lkmdbg_state.watchpoint_stop_event_read_total);
-	}
+	for (i = 0; i < copied; i++)
+		lkmdbg_session_note_read_event(&events[i]);
 
-	return sizeof(event);
+	return bytes;
 }
 
 __poll_t lkmdbg_session_poll(struct file *file, poll_table *wait)
