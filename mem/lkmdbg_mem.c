@@ -1,5 +1,6 @@
 #include <linux/highmem.h>
 #include <linux/mm.h>
+#include <linux/mm_types.h>
 #include <linux/mmap_lock.h>
 #include <linux/pid.h>
 #include <linux/sched/task.h>
