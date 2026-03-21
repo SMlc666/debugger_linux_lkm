@@ -27,6 +27,14 @@ Current hook support is intentionally minimal:
 - relocation handling for common branch, ADR/ADRP, literal load, and test-branch instructions
 - stop-machine patching for install and rollback
 
+The current low-level arm64 hook core is vendored from `KernelPatch` and
+adapted into this repository as a narrow backend:
+
+- source basis: `kernel/include/hook.h` and `kernel/base/hook.c`
+- local adapter keeps the existing `lkmdbg_hook_*` API
+- KernelPatch-specific KPM/runtime integration is not included yet
+- chain hooks (`hook_wrap`) and function-pointer hooks are not wired into `lkmdbg` yet
+
 ## Local build
 
 Build against the currently selected kernel headers:

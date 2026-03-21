@@ -1,0 +1,16 @@
+This directory vendors and adapts a subset of KernelPatch's arm64 hook core.
+
+Upstream project:
+- https://github.com/bmax121/KernelPatch
+
+Source basis:
+- kernel/include/hook.h
+- kernel/base/hook.c
+
+Upstream license:
+- GPL-2.0-or-later
+
+The copied code in this directory retains upstream copyright notices.
+Local adaptations remove KernelPatch-specific runtime integration and keep
+only the low-level arm64 branch/trampoline/relocation logic needed by
+`debugger_linux_lkm`.

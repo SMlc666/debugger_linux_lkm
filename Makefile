@@ -1,5 +1,6 @@
 ifneq ($(KERNELRELEASE),)
 ccflags-y += -I$(src)/include
+ccflags-y += -I$(src)/third_party/kernelpatch/include
 
 obj-m += lkmdbg.o
 
@@ -9,6 +10,7 @@ lkmdbg-core-y := \
 	core/lkmdbg_protect.o
 
 lkmdbg-hook-y := \
+	third_party/kernelpatch/kp_hook_core.o \
 	hook/lkmdbg_hook_arm64.o
 
 lkmdbg-transport-y := \
