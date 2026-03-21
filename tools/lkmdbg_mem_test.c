@@ -444,6 +444,38 @@ static int add_hwpoint(int session_fd, pid_t tid, uint64_t addr, uint32_t type,
 	return 0;
 }
 
+static int add_hwpoint_expect_errno(int session_fd, pid_t tid, uint64_t addr,
+				    uint32_t type, uint32_t len,
+				    uint32_t flags, int expected_errno)
+{
+	struct lkmdbg_hwpoint_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.addr = addr,
+		.tid = tid,
+		.type = type,
+		.len = len,
+		.flags = flags,
+	};
+
+	errno = 0;
+	if (ioctl(session_fd, LKMDBG_IOC_ADD_HWPOINT, &req) == 0) {
+		fprintf(stderr,
+			"ADD_HWPOINT unexpectedly succeeded addr=0x%" PRIx64 " flags=0x%x\n",
+			(uint64_t)addr, flags);
+		return -1;
+	}
+
+	if (errno != expected_errno) {
+		fprintf(stderr,
+			"ADD_HWPOINT errno=%d expected=%d addr=0x%" PRIx64 " flags=0x%x\n",
+			errno, expected_errno, (uint64_t)addr, flags);
+		return -1;
+	}
+
+	return 0;
+}
+
 static int remove_hwpoint(int session_fd, uint64_t id)
 {
 	struct lkmdbg_hwpoint_request req = {
@@ -2376,6 +2408,78 @@ breakpoint_checks:
 		remove_hwpoint(session_fd, mmu_req.id);
 		return -1;
 	}
+
+	if (add_hwpoint_expect_errno(session_fd, child,
+				     info->exec_target_addr + 4,
+				     LKMDBG_HWPOINT_TYPE_EXEC, 4,
+				     LKMDBG_HWPOINT_FLAG_MMU_EXEC,
+				     EEXIST) < 0) {
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+
+	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+	printf("selftest runtime: verifying mmu breakpoint one-shot behavior\n");
+	ret = wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+				     LKMDBG_STOP_REASON_BREAKPOINT,
+				     1000, &event);
+	if (ret != -ETIMEDOUT) {
+		if (!ret) {
+			fprintf(stderr,
+				"mmu breakpoint unexpectedly retriggered without rearm addr=0x%" PRIx64 " flags=0x%x\n",
+				(uint64_t)event.value0, event.flags);
+		}
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+
+	if (rearm_hwpoint(session_fd, mmu_req.id, NULL) < 0) {
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+
+	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+	printf("selftest runtime: waiting for rearmed mmu breakpoint stop event\n");
+	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+				   LKMDBG_STOP_REASON_BREAKPOINT,
+				   event_timeout_ms, &event) < 0) {
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+	if (event.value0 != info->exec_target_addr ||
+	    event.flags != (LKMDBG_HWPOINT_TYPE_EXEC |
+			    LKMDBG_HWPOINT_FLAG_MMU_EXEC)) {
+		fprintf(stderr,
+			"rearmed mmu breakpoint event mismatch addr=0x%" PRIx64 " flags=0x%x\n",
+			(uint64_t)event.value0, event.flags);
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_BREAKPOINT,
+			      &stop_req) < 0) {
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+	if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_REARM_REQUIRED) ||
+	    stop_req.stop.event_flags !=
+		    (LKMDBG_HWPOINT_TYPE_EXEC |
+		     LKMDBG_HWPOINT_FLAG_MMU_EXEC)) {
+		fprintf(stderr,
+			"rearmed mmu breakpoint stop state mismatch flags=0x%x event_flags=0x%x\n",
+			stop_req.stop.flags, stop_req.stop.event_flags);
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
+	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0) {
+		remove_hwpoint(session_fd, mmu_req.id);
+		return -1;
+	}
 	if (remove_hwpoint(session_fd, mmu_req.id) < 0)
 		return -1;
 
@@ -2430,7 +2534,7 @@ breakpoint_checks:
 	if (remove_hwpoint(session_fd, wp_req.id) < 0)
 		return -1;
 
-	printf("selftest runtime events ok clone signal breakpoint mmu-breakpoint watchpoint\n");
+	printf("selftest runtime events ok clone signal breakpoint mmu-breakpoint oneshot rearm watchpoint\n");
 	return 0;
 }
 

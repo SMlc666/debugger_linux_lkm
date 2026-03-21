@@ -163,6 +163,9 @@ The first mmu execute breakpoint implementation is intentionally conservative:
   `value1`
 - after a hit the page is restored executable, so the breakpoint behaves as
   a one-shot guard until user space explicitly rearms or removes it
+- `LKMDBG_CONTINUE_FLAG_REARM_HWPOINTS` does not automatically rearm this
+  backend yet; user space must call `LKMDBG_IOC_REARM_HWPOINT`
+- only one mmu execute breakpoint is allowed per target page today
 
 Session fds are readable and pollable:
 
