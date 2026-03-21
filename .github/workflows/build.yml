@@ -376,12 +376,10 @@ jobs:
 
   qemu-arm64-smoke-kvm:
     if: github.event_name != 'pull_request'
-    runs-on:
-      - self-hosted
-      - linux
-      - ARM64
+    runs-on: ubuntu-24.04-arm
     needs: qemu-arm64-build-artifacts
     timeout-minutes: 30
+    continue-on-error: true
 
     steps:
       - name: Download QEMU boot artifacts
@@ -390,18 +388,25 @@ jobs:
           name: qemu-arm64-boot
           path: ${{ runner.temp }}/qemu-artifacts
 
-      - name: Ensure QEMU is available
+      - name: Install QEMU
         run: |
-          if command -v qemu-system-aarch64 >/dev/null 2>&1; then
-            exit 0
-          fi
-          if command -v sudo >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y qemu-system-arm
-            exit 0
-          fi
-          echo "qemu-system-aarch64 is required on the ARM64 KVM runner" >&2
-          exit 1
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-arm
+
+      - name: Probe hosted ARM64 KVM support
+        run: |
+          LOG="$RUNNER_TEMP/qemu-kvm-probe.log"
+          {
+            echo "runner=$(uname -a)"
+            echo "qemu=$(qemu-system-aarch64 --version | head -n1)"
+            echo "accel_help=$(qemu-system-aarch64 -accel help | tr '\n' ' ')"
+            if [ -e /dev/kvm ]; then
+              ls -l /dev/kvm
+            else
+              echo "/dev/kvm missing"
+            fi
+          } | tee "$LOG"
+          test -e /dev/kvm
 
       - name: Run QEMU smoke test (KVM)
         run: |
@@ -419,6 +424,14 @@ jobs:
             -append "console=ttyAMA0 rdinit=/init panic=-1" \
             -no-reboot | tee "$LOG"
           grep -q 'LKMDBG_QEMU_SMOKE_OK' "$LOG"
+
+      - name: Upload QEMU KVM probe log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-arm64-smoke-kvm-probe-log
+          path: ${{ runner.temp }}/qemu-kvm-probe.log
+          if-no-files-found: ignore
 
       - name: Upload QEMU KVM log
         if: always()
