@@ -271,6 +271,23 @@ static pte_t lkmdbg_mmu_pte_set_exec(pte_t pte, bool executable)
 	return pte;
 }
 
+static void lkmdbg_mmu_flush_exec_page(struct mm_struct *mm,
+				       unsigned long addr)
+{
+	unsigned long tlbi_addr;
+
+	/*
+	 * Match arm64 flush_tlb_page() for the primary user TLB while
+	 * avoiding the secondary notifier path, which is not module-exported
+	 * on the upstream QEMU kernel we build in CI.
+	 */
+	dsb(ishst);
+	tlbi_addr = __TLBI_VADDR(addr, ASID(mm));
+	__tlbi(vale1is, tlbi_addr);
+	__tlbi_user(vale1is, tlbi_addr);
+	dsb(ish);
+}
+
 static int lkmdbg_mmu_lookup_pte(struct mm_struct *mm, unsigned long addr,
 				 pte_t **ptep_out, spinlock_t **ptl_out)
 {
@@ -358,7 +375,7 @@ static int lkmdbg_mmu_update_exec_locked(struct mm_struct *mm,
 
 	spin_unlock(ptl);
 	if (pte_val(new_pte) != pte_val(pte))
-		flush_tlb_page(vma, addr);
+		lkmdbg_mmu_flush_exec_page(mm, addr);
 	return 0;
 }
 
