@@ -51,6 +51,7 @@ typedef int (*lkmdbg_tracepoint_probe_register_fn)(struct tracepoint *tp,
 						   void *probe, void *data);
 typedef int (*lkmdbg_tracepoint_probe_unregister_fn)(struct tracepoint *tp,
 						     void *probe, void *data);
+typedef void (*lkmdbg_perf_event_disable_local_fn)(struct perf_event *event);
 
 static bool lkmdbg_trace_fork_registered;
 static bool lkmdbg_trace_exec_registered;
@@ -60,6 +61,7 @@ static struct tracepoint *lkmdbg_trace_fork_tp;
 static struct tracepoint *lkmdbg_trace_exec_tp;
 static struct tracepoint *lkmdbg_trace_exit_tp;
 static struct tracepoint *lkmdbg_trace_signal_tp;
+static bool lkmdbg_perf_disable_missing_logged;
 
 #ifdef CONFIG_ARM64
 static int lkmdbg_user_step_handler(struct pt_regs *regs, unsigned long esr);
@@ -208,6 +210,24 @@ static void lkmdbg_hwpoint_fill_entry(struct lkmdbg_hwpoint_entry *dst,
 		dst->state |= LKMDBG_HWPOINT_STATE_LATCHED;
 }
 
+static void lkmdbg_hwpoint_disable_stop_mode(struct lkmdbg_hwpoint *entry)
+{
+	lkmdbg_perf_event_disable_local_fn disable_local_fn;
+
+	disable_local_fn = (lkmdbg_perf_event_disable_local_fn)
+		lkmdbg_symbols.perf_event_disable_local_sym;
+	if (!disable_local_fn) {
+		if (!READ_ONCE(lkmdbg_perf_disable_missing_logged)) {
+			WRITE_ONCE(lkmdbg_perf_disable_missing_logged, true);
+			pr_warn("lkmdbg: perf_event_disable_local unavailable, stop-mode hwpoints remain armed\n");
+		}
+		return;
+	}
+
+	disable_local_fn(entry->event);
+	WRITE_ONCE(entry->armed, false);
+}
+
 static void lkmdbg_hwpoint_event(struct perf_event *bp,
 				 struct perf_sample_data *data,
 				 struct pt_regs *regs)
@@ -245,8 +265,7 @@ static void lkmdbg_hwpoint_event(struct perf_event *bp,
 		return;
 	if (atomic_xchg(&entry->stop_latched, 1))
 		return;
-	perf_event_disable_local(bp);
-	WRITE_ONCE(entry->armed, false);
+	lkmdbg_hwpoint_disable_stop_mode(entry);
 
 	lkmdbg_session_queue_event_ex(entry->session, LKMDBG_EVENT_TARGET_STOP,
 				      reason, entry->tgid, current->pid,

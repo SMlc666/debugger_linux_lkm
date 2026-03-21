@@ -107,6 +107,7 @@ struct lkmdbg_symbols {
 	unsigned long for_each_kernel_tracepoint_sym;
 	unsigned long tracepoint_probe_register_sym;
 	unsigned long tracepoint_probe_unregister_sym;
+	unsigned long perf_event_disable_local_sym;
 };
 
 int lkmdbg_disable_kprobe_blacklist(void);
