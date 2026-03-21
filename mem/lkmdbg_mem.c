@@ -238,6 +238,40 @@ static int lkmdbg_get_target_mm(struct lkmdbg_session *session,
 	return 0;
 }
 
+static void lkmdbg_mem_accumulate_progress(const struct lkmdbg_mem_op *ops,
+					   u32 op_count, u32 *processed_out,
+					   u64 *bytes_out)
+{
+	u64 total_bytes = 0;
+	u32 processed = 0;
+	u32 i;
+
+	for (i = 0; i < op_count; i++) {
+		total_bytes += ops[i].bytes_done;
+		if (!ops[i].bytes_done)
+			break;
+		processed++;
+		if (ops[i].bytes_done != ops[i].length)
+			break;
+	}
+
+	*processed_out = processed;
+	*bytes_out = total_bytes;
+}
+
+static long lkmdbg_mem_copy_reply(void __user *argp, struct lkmdbg_mem_request *req,
+				  struct lkmdbg_mem_op *ops, size_t ops_bytes,
+				  long ret)
+{
+	if (copy_to_user(u64_to_user_ptr(req->ops_addr), ops, ops_bytes))
+		return -EFAULT;
+
+	if (copy_to_user(argp, req, sizeof(*req)))
+		return -EFAULT;
+
+	return ret;
+}
+
 static long lkmdbg_mem_xfer_ops(struct mm_struct *mm, struct lkmdbg_mem_op *ops,
 				u32 op_count, bool write)
 {
@@ -294,10 +328,9 @@ static long lkmdbg_mem_xfer(struct lkmdbg_session *session, void __user *argp,
 	struct lkmdbg_mem_request req;
 	struct lkmdbg_mem_op *ops;
 	struct mm_struct *mm;
-	u64 total_bytes = 0;
 	size_t ops_bytes;
+	u64 total_bytes = 0;
 	u32 processed = 0;
-	u32 i;
 	long ret;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
@@ -324,32 +357,12 @@ static long lkmdbg_mem_xfer(struct lkmdbg_session *session, void __user *argp,
 	}
 
 	ret = lkmdbg_mem_xfer_ops(mm, ops, req.op_count, write);
-	if (ret < 0)
-		goto out_mm;
-
-	total_bytes = (u64)ret;
-	for (i = 0; i < req.op_count; i++) {
-		if (!ops[i].bytes_done)
-			break;
-		processed++;
-		if (ops[i].bytes_done != ops[i].length)
-			break;
-	}
-
+	lkmdbg_mem_accumulate_progress(ops, req.op_count, &processed, &total_bytes);
 	req.ops_done = processed;
 	req.bytes_done = total_bytes;
-
-	if (copy_to_user(u64_to_user_ptr(req.ops_addr), ops, ops_bytes)) {
-		ret = -EFAULT;
-		goto out_mm;
-	}
-
-	if (copy_to_user(argp, &req, sizeof(req))) {
-		ret = -EFAULT;
-		goto out_mm;
-	}
-
-	ret = 0;
+	if (ret >= 0)
+		ret = 0;
+	ret = lkmdbg_mem_copy_reply(argp, &req, ops, ops_bytes, ret);
 
 out_mm:
 	mmput(mm);

@@ -297,6 +297,63 @@ static int write_target_memoryv(int session_fd, struct lkmdbg_mem_op *ops,
 	return 0;
 }
 
+static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
+					 const char *payload)
+{
+	struct lkmdbg_mem_op ops[2];
+	struct lkmdbg_mem_request req;
+	char readback[64];
+	uint32_t bytes_done = 0;
+	size_t payload_len = strlen(payload) + 1;
+
+	memset(ops, 0, sizeof(ops));
+	ops[0].remote_addr = remote_addr;
+	ops[0].local_addr = (uintptr_t)payload;
+	ops[0].length = (uint32_t)payload_len;
+	ops[1].remote_addr = remote_addr + 32;
+	ops[1].local_addr = 1;
+	ops[1].length = 8;
+
+	memset(&req, 0, sizeof(req));
+	req.version = LKMDBG_PROTO_VERSION;
+	req.size = sizeof(req);
+	req.ops_addr = (uintptr_t)ops;
+	req.op_count = 2;
+
+	errno = 0;
+	if (ioctl(session_fd, LKMDBG_IOC_WRITE_MEM, &req) == 0) {
+		fprintf(stderr, "partial WRITE_MEM unexpectedly succeeded\n");
+		return -1;
+	}
+
+	if (errno != EFAULT) {
+		fprintf(stderr, "partial WRITE_MEM errno=%d expected=%d\n", errno,
+			EFAULT);
+		return -1;
+	}
+
+	if (req.ops_done != 1 || req.bytes_done != payload_len ||
+	    ops[0].bytes_done != payload_len || ops[1].bytes_done != 0) {
+		fprintf(stderr,
+			"partial WRITE_MEM progress mismatch ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
+			req.ops_done, (uint64_t)req.bytes_done, ops[0].bytes_done,
+			ops[1].bytes_done);
+		return -1;
+	}
+
+	memset(readback, 0, sizeof(readback));
+	if (read_target_memory(session_fd, remote_addr, readback, payload_len,
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != payload_len || strcmp(readback, payload) != 0) {
+		fprintf(stderr,
+			"partial WRITE_MEM first op readback failed bytes_done=%u\n",
+			bytes_done);
+		return -1;
+	}
+
+	return 0;
+}
+
 static int query_mincore_resident(void *addr, size_t len)
 {
 	unsigned char vec = 0;
@@ -488,6 +545,7 @@ static int run_selftest(const char *prog)
 	char force_write_buf[64];
 	const char *payload = "patched-by-lkmdbg";
 	const char *force_write_payload = "force-write-patched";
+	const char *partial_payload = "partial-write-ok";
 	pthread_t threads[SELFTEST_THREAD_COUNT];
 	struct worker_ctx workers[SELFTEST_THREAD_COUNT];
 	unsigned char *large_buf = NULL;
@@ -819,6 +877,19 @@ static int run_selftest(const char *prog)
 	}
 
 	printf("selftest force-read and force-write on protected present pages ok\n");
+
+	if (expect_partial_write_progress(session_fd, info.basic_addr,
+					  partial_payload) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	printf("selftest partial batch progress survives runtime write fault\n");
 
 	large_buf = malloc(info.large_len);
 	batch_a = malloc(batch_lengths[0]);
