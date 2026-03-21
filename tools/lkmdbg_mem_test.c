@@ -28,8 +28,10 @@
 #define SELFTEST_LARGE_MAP_LEN (192U * 1024U)
 #define SELFTEST_BATCH_OPS 4
 #define SELFTEST_FREEZE_THREADS 2
+#define SELFTEST_REG_SENTINEL 0x5A17C0DEULL
 #define VMA_QUERY_BATCH 64
 #define VMA_QUERY_NAMES_SIZE 65536
+#define THREAD_QUERY_BATCH 64
 
 struct child_info {
 	uintptr_t basic_addr;
@@ -40,6 +42,8 @@ struct child_info {
 	uintptr_t large_addr;
 	uintptr_t file_addr;
 	uintptr_t freeze_counters_addr;
+	uintptr_t freeze_tids_addr;
+	uintptr_t freeze_override_rets_addr;
 	uint64_t file_inode;
 	uint32_t file_dev_major;
 	uint32_t file_dev_minor;
@@ -66,6 +70,9 @@ struct worker_ctx {
 struct freeze_child_ctx {
 	volatile int *stop;
 	uint64_t *counter;
+	pid_t *tid_slot;
+	uint64_t *override_ret;
+	unsigned int thread_index;
 };
 
 struct vma_query_buffer {
@@ -105,16 +112,77 @@ static int open_session_fd(void)
 	return session_fd;
 }
 
-static int set_target(int session_fd, pid_t pid)
+static int set_target_ex(int session_fd, pid_t pid, pid_t tid)
 {
 	struct lkmdbg_target_request req = {
 		.version = LKMDBG_PROTO_VERSION,
 		.size = sizeof(req),
 		.tgid = pid,
+		.tid = tid,
 	};
 
 	if (ioctl(session_fd, LKMDBG_IOC_SET_TARGET, &req) < 0) {
 		fprintf(stderr, "SET_TARGET failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	return 0;
+}
+
+static int set_target(int session_fd, pid_t pid)
+{
+	return set_target_ex(session_fd, pid, 0);
+}
+
+static int query_target_threads(int session_fd, int32_t start_tid,
+				struct lkmdbg_thread_entry *entries,
+				uint32_t max_entries,
+				struct lkmdbg_thread_query_request *reply_out)
+{
+	struct lkmdbg_thread_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = max_entries,
+		.start_tid = start_tid,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_THREADS, &req) < 0) {
+		fprintf(stderr, "QUERY_THREADS failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int get_target_regs(int session_fd, pid_t tid,
+			   struct lkmdbg_thread_regs_request *reply_out)
+{
+	struct lkmdbg_thread_regs_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.tid = tid,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_GET_REGS, &req) < 0) {
+		fprintf(stderr, "GET_REGS failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int set_target_regs(int session_fd,
+			   const struct lkmdbg_thread_regs_request *req_in)
+{
+	struct lkmdbg_thread_regs_request req = *req_in;
+
+	if (ioctl(session_fd, LKMDBG_IOC_SET_REGS, &req) < 0) {
+		fprintf(stderr, "SET_REGS failed: %s\n", strerror(errno));
 		return -1;
 	}
 
@@ -719,11 +787,20 @@ static int query_mincore_resident(void *addr, size_t len)
 static void *freeze_child_thread_main(void *arg)
 {
 	struct freeze_child_ctx *ctx = arg;
+	pid_t tid = (pid_t)syscall(SYS_gettid);
 
+	ctx->tid_slot[ctx->thread_index] = tid;
 	while (!*ctx->stop) {
 		(*ctx->counter)++;
 		if (((*ctx->counter) & 0x3ffULL) == 0)
-			syscall(SYS_gettid);
+		{
+			long ret = syscall(SYS_gettid);
+
+			if ((uint64_t)ret != (uint64_t)tid &&
+			    ctx->override_ret[ctx->thread_index] == 0)
+				ctx->override_ret[ctx->thread_index] =
+					(uint64_t)ret;
+		}
 	}
 
 	return NULL;
@@ -739,6 +816,8 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	char *force_write_map;
 	unsigned char *large_map;
 	uint64_t *freeze_counters;
+	pid_t *freeze_tids;
+	uint64_t *freeze_override_rets;
 	volatile int *freeze_stop;
 	pthread_t freeze_threads[SELFTEST_FREEZE_THREADS];
 	struct freeze_child_ctx freeze_ctxs[SELFTEST_FREEZE_THREADS];
@@ -782,6 +861,16 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	if (freeze_counters == MAP_FAILED)
 		return 2;
 
+	freeze_tids = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
+			   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (freeze_tids == MAP_FAILED)
+		return 2;
+
+	freeze_override_rets = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
+				    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (freeze_override_rets == MAP_FAILED)
+		return 2;
+
 	freeze_stop = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
 			   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (freeze_stop == MAP_FAILED)
@@ -822,6 +911,9 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	for (i = 0; i < SELFTEST_FREEZE_THREADS; i++) {
 		freeze_ctxs[i].stop = freeze_stop;
 		freeze_ctxs[i].counter = &freeze_counters[i];
+		freeze_ctxs[i].tid_slot = freeze_tids;
+		freeze_ctxs[i].override_ret = freeze_override_rets;
+		freeze_ctxs[i].thread_index = i;
 		if (pthread_create(&freeze_threads[i], NULL,
 				   freeze_child_thread_main,
 				   &freeze_ctxs[i]) != 0)
@@ -837,6 +929,8 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	info.large_addr = (uintptr_t)large_map;
 	info.file_addr = (uintptr_t)file_map;
 	info.freeze_counters_addr = (uintptr_t)freeze_counters;
+	info.freeze_tids_addr = (uintptr_t)freeze_tids;
+	info.freeze_override_rets_addr = (uintptr_t)freeze_override_rets;
 	info.file_inode = (uint64_t)st.st_ino;
 	info.file_dev_major = (uint32_t)major(st.st_dev);
 	info.file_dev_minor = (uint32_t)minor(st.st_dev);
@@ -952,6 +1046,301 @@ static int read_freeze_counters(int session_fd, const struct child_info *info,
 	return 0;
 }
 
+static int read_freeze_thread_tids(int session_fd, const struct child_info *info,
+				   pid_t *tids)
+{
+	uint32_t bytes_done = 0;
+	size_t len = info->freeze_thread_count * sizeof(*tids);
+
+	if (read_target_memory(session_fd, info->freeze_tids_addr, tids, len,
+			       &bytes_done, 0) < 0 || bytes_done != len) {
+		fprintf(stderr, "freeze tid read failed bytes_done=%u\n",
+			bytes_done);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int read_freeze_override_rets(int session_fd,
+				     const struct child_info *info,
+				     uint64_t *rets)
+{
+	uint32_t bytes_done = 0;
+	size_t len = info->freeze_thread_count * sizeof(*rets);
+
+	if (read_target_memory(session_fd, info->freeze_override_rets_addr, rets,
+			       len, &bytes_done, 0) < 0 || bytes_done != len) {
+		fprintf(stderr, "freeze override read failed bytes_done=%u\n",
+			bytes_done);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int wait_for_freeze_thread_tids(int session_fd,
+				       const struct child_info *info,
+				       pid_t *tids)
+{
+	unsigned int attempt;
+	uint32_t i;
+
+	for (attempt = 0; attempt < 40; attempt++) {
+		if (read_freeze_thread_tids(session_fd, info, tids) < 0)
+			return -1;
+
+		for (i = 0; i < info->freeze_thread_count; i++) {
+			if (tids[i] <= 0)
+				break;
+		}
+
+		if (i == info->freeze_thread_count)
+			return 0;
+
+		usleep(50000);
+	}
+
+	fprintf(stderr, "freeze tids did not stabilize\n");
+	return -1;
+}
+
+static int find_target_thread_entry(int session_fd, pid_t tid,
+				    struct lkmdbg_thread_entry *entry_out)
+{
+	struct lkmdbg_thread_entry entries[THREAD_QUERY_BATCH];
+	int32_t cursor = 0;
+
+	for (;;) {
+		struct lkmdbg_thread_query_request reply;
+		uint32_t i;
+
+		if (query_target_threads(session_fd, cursor, entries,
+					 THREAD_QUERY_BATCH, &reply) < 0)
+			return -1;
+
+		for (i = 0; i < reply.entries_filled; i++) {
+			if (entries[i].tid != tid)
+				continue;
+
+			*entry_out = entries[i];
+			return 0;
+		}
+
+		if (reply.done)
+			break;
+		cursor = reply.next_tid;
+	}
+
+	fprintf(stderr, "thread %d not found in QUERY_THREADS\n", tid);
+	return -1;
+}
+
+static int verify_thread_query(int session_fd, pid_t child,
+			       const struct child_info *info, const pid_t *tids)
+{
+	struct lkmdbg_thread_entry entries[THREAD_QUERY_BATCH];
+	int32_t cursor = 0;
+	uint32_t total = 0;
+	uint32_t found = 0;
+	int saw_leader = 0;
+
+	for (;;) {
+		struct lkmdbg_thread_query_request reply;
+		uint32_t i;
+
+		if (query_target_threads(session_fd, cursor, entries,
+					 THREAD_QUERY_BATCH, &reply) < 0)
+			return -1;
+
+		total += reply.entries_filled;
+		for (i = 0; i < reply.entries_filled; i++) {
+			uint32_t j;
+
+			if (entries[i].tid == child &&
+			    (entries[i].flags &
+			     (LKMDBG_THREAD_FLAG_GROUP_LEADER |
+			      LKMDBG_THREAD_FLAG_SESSION_TARGET)) ==
+				    (LKMDBG_THREAD_FLAG_GROUP_LEADER |
+				     LKMDBG_THREAD_FLAG_SESSION_TARGET))
+				saw_leader = 1;
+
+			for (j = 0; j < info->freeze_thread_count; j++) {
+				if (entries[i].tid != tids[j])
+					continue;
+				found |= 1U << j;
+				break;
+			}
+		}
+
+		if (reply.done)
+			break;
+		cursor = reply.next_tid;
+	}
+
+	if (!saw_leader || total < info->freeze_thread_count + 1 ||
+	    found != ((1U << info->freeze_thread_count) - 1U)) {
+		fprintf(stderr,
+			"thread query mismatch leader=%d total=%u found_mask=0x%x expected_threads=%u\n",
+			saw_leader, total, found, info->freeze_thread_count);
+		return -1;
+	}
+
+	printf("selftest thread query ok total=%u worker_mask=0x%x\n", total,
+	       found);
+	return 0;
+}
+
+static int wait_for_override_ret(int session_fd, const struct child_info *info,
+				 unsigned int thread_index, uint64_t expected)
+{
+	uint64_t rets[SELFTEST_FREEZE_THREADS];
+	unsigned int attempt;
+
+	for (attempt = 0; attempt < 40; attempt++) {
+		memset(rets, 0, sizeof(rets));
+		if (read_freeze_override_rets(session_fd, info, rets) < 0)
+			return -1;
+		if (rets[thread_index] == expected)
+			return 0;
+		usleep(50000);
+	}
+
+	fprintf(stderr,
+		"override return did not appear thread=%u expected=%" PRIu64 "\n",
+		thread_index, expected);
+	return -1;
+}
+
+static void print_arm64_regs(const struct lkmdbg_thread_regs_request *req)
+{
+	unsigned int i;
+
+	printf("regs tid=%d\n", req->tid);
+	for (i = 0; i < 31; i++)
+		printf("x%u=0x%016" PRIx64 "\n", i,
+		       (uint64_t)req->regs.regs[i]);
+	printf("sp=0x%016" PRIx64 "\n", (uint64_t)req->regs.sp);
+	printf("pc=0x%016" PRIx64 "\n", (uint64_t)req->regs.pc);
+	printf("pstate=0x%016" PRIx64 "\n", (uint64_t)req->regs.pstate);
+}
+
+static int set_named_arm64_reg(struct lkmdbg_thread_regs_request *req,
+			       const char *name, uint64_t value)
+{
+	unsigned long index;
+	char *endp;
+
+	if (strcmp(name, "sp") == 0) {
+		req->regs.sp = value;
+		return 0;
+	}
+
+	if (strcmp(name, "pc") == 0) {
+		req->regs.pc = value;
+		return 0;
+	}
+
+	if (strcmp(name, "pstate") == 0) {
+		req->regs.pstate = value;
+		return 0;
+	}
+
+	if (name[0] != 'x')
+		return -1;
+
+	index = strtoul(name + 1, &endp, 10);
+	if (*endp != '\0' || index >= 31)
+		return -1;
+
+	req->regs.regs[index] = value;
+	return 0;
+}
+
+static int dump_target_threads(int session_fd)
+{
+	struct lkmdbg_thread_entry entries[THREAD_QUERY_BATCH];
+	int32_t cursor = 0;
+
+	for (;;) {
+		struct lkmdbg_thread_query_request reply;
+		uint32_t i;
+
+		if (query_target_threads(session_fd, cursor, entries,
+					 THREAD_QUERY_BATCH, &reply) < 0)
+			return -1;
+
+		for (i = 0; i < reply.entries_filled; i++) {
+			printf("tid=%d tgid=%d flags=0x%x pc=0x%016" PRIx64
+			       " sp=0x%016" PRIx64 " comm=%s\n",
+			       entries[i].tid, entries[i].tgid, entries[i].flags,
+			       (uint64_t)entries[i].user_pc,
+			       (uint64_t)entries[i].user_sp,
+			       entries[i].comm);
+		}
+
+		if (reply.done)
+			return 0;
+		cursor = reply.next_tid;
+	}
+}
+
+static int get_and_print_regs(int session_fd, pid_t tid)
+{
+	struct lkmdbg_thread_regs_request req;
+
+	memset(&req, 0, sizeof(req));
+	if (freeze_target_threads(session_fd, 2000, NULL, 0) < 0)
+		return -1;
+
+	if (get_target_regs(session_fd, tid, &req) < 0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	print_arm64_regs(&req);
+	if (thaw_target_threads(session_fd, 2000, NULL, 0) < 0)
+		return -1;
+	return 0;
+}
+
+static int set_and_verify_reg(int session_fd, pid_t tid, const char *name,
+			      uint64_t value)
+{
+	struct lkmdbg_thread_regs_request req;
+
+	memset(&req, 0, sizeof(req));
+	if (freeze_target_threads(session_fd, 2000, NULL, 0) < 0)
+		return -1;
+
+	if (get_target_regs(session_fd, tid, &req) < 0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	if (set_named_arm64_reg(&req, name, value) < 0) {
+		fprintf(stderr, "unknown register: %s\n", name);
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	if (set_target_regs(session_fd, &req) < 0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	memset(&req, 0, sizeof(req));
+	if (get_target_regs(session_fd, tid, &req) < 0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	print_arm64_regs(&req);
+	if (thaw_target_threads(session_fd, 2000, NULL, 0) < 0)
+		return -1;
+	return 0;
+}
+
 static int freeze_counters_equal(const uint64_t *a, const uint64_t *b,
 				 uint32_t count)
 {
@@ -978,18 +1367,33 @@ static int freeze_counters_advanced(const uint64_t *before, const uint64_t *afte
 	return 0;
 }
 
-static int verify_thread_freeze(int session_fd, const struct child_info *info)
+static int verify_thread_freeze(int session_fd, pid_t child,
+				const struct child_info *info)
 {
 	struct lkmdbg_freeze_request req;
+	struct lkmdbg_thread_entry parked_entry;
+	struct lkmdbg_thread_regs_request regs_req;
 	uint64_t before[SELFTEST_FREEZE_THREADS];
 	uint64_t frozen_a[SELFTEST_FREEZE_THREADS];
 	uint64_t frozen_b[SELFTEST_FREEZE_THREADS];
 	uint64_t after[SELFTEST_FREEZE_THREADS];
+	pid_t tids[SELFTEST_FREEZE_THREADS];
+	unsigned int i;
+	unsigned int parked_index = UINT32_MAX;
 
 	memset(before, 0, sizeof(before));
 	memset(frozen_a, 0, sizeof(frozen_a));
 	memset(frozen_b, 0, sizeof(frozen_b));
 	memset(after, 0, sizeof(after));
+	memset(tids, 0, sizeof(tids));
+	memset(&parked_entry, 0, sizeof(parked_entry));
+	memset(&regs_req, 0, sizeof(regs_req));
+
+	if (wait_for_freeze_thread_tids(session_fd, info, tids) < 0)
+		return -1;
+
+	if (verify_thread_query(session_fd, child, info, tids) < 0)
+		return -1;
 
 	usleep(50000);
 	if (read_freeze_counters(session_fd, info, before) < 0)
@@ -1004,6 +1408,55 @@ static int verify_thread_freeze(int session_fd, const struct child_info *info)
 			"freeze settle mismatch total=%u settled=%u parked=%u expected_threads=%u\n",
 			req.threads_total, req.threads_settled, req.threads_parked,
 			info->freeze_thread_count);
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	for (i = 0; i < info->freeze_thread_count; i++) {
+		if (find_target_thread_entry(session_fd, tids[i], &parked_entry) < 0) {
+			thaw_target_threads(session_fd, 2000, NULL, 0);
+			return -1;
+		}
+		if (!(parked_entry.flags & LKMDBG_THREAD_FLAG_FREEZE_PARKED))
+			continue;
+		parked_index = i;
+		break;
+	}
+
+	if (parked_index == UINT32_MAX) {
+		fprintf(stderr, "no parked worker thread found after freeze\n");
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	if (get_target_regs(session_fd, tids[parked_index], &regs_req) < 0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	if ((pid_t)regs_req.regs.regs[0] != tids[parked_index]) {
+		fprintf(stderr,
+			"unexpected frozen x0 tid=%d x0=0x%" PRIx64 "\n",
+			tids[parked_index], (uint64_t)regs_req.regs.regs[0]);
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	regs_req.regs.regs[0] = SELFTEST_REG_SENTINEL;
+	if (set_target_regs(session_fd, &regs_req) < 0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	memset(&regs_req, 0, sizeof(regs_req));
+	if (get_target_regs(session_fd, tids[parked_index], &regs_req) < 0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	if (regs_req.regs.regs[0] != SELFTEST_REG_SENTINEL) {
+		fprintf(stderr, "SET_REGS x0 did not stick got=0x%" PRIx64 "\n",
+			(uint64_t)regs_req.regs.regs[0]);
 		thaw_target_threads(session_fd, 2000, NULL, 0);
 		return -1;
 	}
@@ -1028,6 +1481,10 @@ static int verify_thread_freeze(int session_fd, const struct child_info *info)
 	if (thaw_target_threads(session_fd, 2000, &req, 1) < 0)
 		return -1;
 
+	if (wait_for_override_ret(session_fd, info, parked_index,
+				  SELFTEST_REG_SENTINEL) < 0)
+		return -1;
+
 	usleep(50000);
 	if (read_freeze_counters(session_fd, info, after) < 0)
 		return -1;
@@ -1048,11 +1505,14 @@ static void usage(const char *prog)
 		"Usage:\n"
 		"  %s selftest\n"
 		"  %s read <pid> <remote_addr_hex> <length>\n"
+		"  %s threads <pid>\n"
+		"  %s getregs <pid> <tid>\n"
+		"  %s setreg <pid> <tid> <reg> <value_hex>\n"
 		"  %s freeze <pid> [timeout_ms]\n"
 		"  %s thaw <pid> [timeout_ms]\n"
 		"  %s vmas <pid>\n"
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
-		prog, prog, prog, prog, prog, prog);
+		prog, prog, prog, prog, prog, prog, prog, prog, prog);
 }
 
 static int run_selftest(const char *prog)
@@ -1412,7 +1872,7 @@ static int run_selftest(const char *prog)
 		return 1;
 	}
 
-	if (verify_thread_freeze(session_fd, &info) < 0) {
+	if (verify_thread_freeze(session_fd, child, &info) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
 		close(cmd_pipe[1]);
@@ -1634,10 +2094,13 @@ int main(int argc, char **argv)
 {
 	int session_fd;
 	pid_t pid;
+	pid_t tid = 0;
 	uintptr_t remote_addr = 0;
 	char *endp;
 	int needs_remote_addr;
+	pid_t target_tid = 0;
 	uint32_t timeout_ms = 0;
+	uint64_t reg_value = 0;
 
 	if (argc == 2 && strcmp(argv[1], "selftest") == 0)
 		return run_selftest(argv[0]);
@@ -1668,11 +2131,38 @@ int main(int argc, char **argv)
 		}
 	}
 
+	if (strcmp(argv[1], "getregs") == 0 || strcmp(argv[1], "setreg") == 0) {
+		if (argc < 4) {
+			usage(argv[0]);
+			return 1;
+		}
+
+		tid = (pid_t)strtol(argv[3], &endp, 10);
+		if (*endp != '\0' || tid <= 0) {
+			fprintf(stderr, "invalid tid: %s\n", argv[3]);
+			return 1;
+		}
+		target_tid = tid;
+	}
+
+	if (strcmp(argv[1], "setreg") == 0) {
+		if (argc < 6) {
+			usage(argv[0]);
+			return 1;
+		}
+
+		reg_value = strtoull(argv[5], &endp, 16);
+		if (*endp != '\0') {
+			fprintf(stderr, "invalid register value: %s\n", argv[5]);
+			return 1;
+		}
+	}
+
 	session_fd = open_session_fd();
 	if (session_fd < 0)
 		return 1;
 
-	if (set_target(session_fd, pid) < 0) {
+	if (set_target_ex(session_fd, pid, target_tid) < 0) {
 		close(session_fd);
 		return 1;
 	}
@@ -1708,6 +2198,21 @@ int main(int argc, char **argv)
 		printf("\n");
 
 		free(buf);
+	} else if (strcmp(argv[1], "threads") == 0) {
+		if (dump_target_threads(session_fd) < 0) {
+			close(session_fd);
+			return 1;
+		}
+	} else if (strcmp(argv[1], "getregs") == 0) {
+		if (get_and_print_regs(session_fd, tid) < 0) {
+			close(session_fd);
+			return 1;
+		}
+	} else if (strcmp(argv[1], "setreg") == 0) {
+		if (set_and_verify_reg(session_fd, tid, argv[4], reg_value) < 0) {
+			close(session_fd);
+			return 1;
+		}
 	} else if (strcmp(argv[1], "write") == 0) {
 		const char *data = argv[4];
 		size_t len = strlen(data);

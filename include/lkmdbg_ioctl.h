@@ -15,6 +15,15 @@
 #define LKMDBG_EVENT_HOOK_REMOVED 17
 #define LKMDBG_EVENT_HOOK_HIT 18
 
+#define LKMDBG_THREAD_COMM_MAX 16
+
+#define LKMDBG_THREAD_FLAG_GROUP_LEADER 0x00000001U
+#define LKMDBG_THREAD_FLAG_SESSION_TARGET 0x00000002U
+#define LKMDBG_THREAD_FLAG_FREEZE_TRACKED 0x00000004U
+#define LKMDBG_THREAD_FLAG_FREEZE_SETTLED 0x00000008U
+#define LKMDBG_THREAD_FLAG_FREEZE_PARKED 0x00000010U
+#define LKMDBG_THREAD_FLAG_EXITING 0x00000020U
+
 #define LKMDBG_VMA_PROT_READ 0x00000001U
 #define LKMDBG_VMA_PROT_WRITE 0x00000002U
 #define LKMDBG_VMA_PROT_EXEC 0x00000004U
@@ -124,6 +133,44 @@ struct lkmdbg_freeze_request {
 	__u32 reserved0;
 };
 
+struct lkmdbg_thread_entry {
+	__s32 tid;
+	__s32 tgid;
+	__u32 flags;
+	__u32 reserved0;
+	__u64 user_pc;
+	__u64 user_sp;
+	char comm[LKMDBG_THREAD_COMM_MAX];
+};
+
+struct lkmdbg_thread_query_request {
+	__u32 version;
+	__u32 size;
+	__u64 entries_addr;
+	__u32 max_entries;
+	__u32 flags;
+	__s32 start_tid;
+	__u32 entries_filled;
+	__u32 done;
+	__s32 next_tid;
+	__u32 reserved0;
+};
+
+struct lkmdbg_regs_arm64 {
+	__u64 regs[31];
+	__u64 sp;
+	__u64 pc;
+	__u64 pstate;
+};
+
+struct lkmdbg_thread_regs_request {
+	__u32 version;
+	__u32 size;
+	__s32 tid;
+	__u32 flags;
+	struct lkmdbg_regs_arm64 regs;
+};
+
 struct lkmdbg_event_record {
 	__u32 version;
 	__u32 type;
@@ -152,5 +199,11 @@ struct lkmdbg_event_record {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x14, struct lkmdbg_freeze_request)
 #define LKMDBG_IOC_THAW_THREADS \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x15, struct lkmdbg_freeze_request)
+#define LKMDBG_IOC_QUERY_THREADS \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x16, struct lkmdbg_thread_query_request)
+#define LKMDBG_IOC_GET_REGS \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x17, struct lkmdbg_thread_regs_request)
+#define LKMDBG_IOC_SET_REGS \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x18, struct lkmdbg_thread_regs_request)
 
 #endif

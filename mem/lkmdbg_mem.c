@@ -320,7 +320,8 @@ static long lkmdbg_mem_xfer(struct lkmdbg_session *session, void __user *argp,
 long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp)
 {
 	struct lkmdbg_target_request req;
-	struct task_struct *task;
+	struct task_struct *task = NULL;
+	pid_t target_tid;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
 		return -EFAULT;
@@ -336,8 +337,19 @@ long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp)
 		return -ESRCH;
 	put_task_struct(task);
 
+	target_tid = req.tid > 0 ? req.tid : req.tgid;
+	task = get_pid_task(find_vpid(target_tid), PIDTYPE_PID);
+	if (!task)
+		return -ESRCH;
+	if (task->tgid != req.tgid) {
+		put_task_struct(task);
+		return -ESRCH;
+	}
+	put_task_struct(task);
+
 	mutex_lock(&session->lock);
 	session->target_tgid = req.tgid;
+	session->target_tid = target_tid;
 	mutex_unlock(&session->lock);
 
 	return 0;

@@ -25,7 +25,8 @@ lkmdbg-mem-y := \
 	mem/lkmdbg_vma.o
 
 lkmdbg-task-y := \
-	task/lkmdbg_freeze.o
+	task/lkmdbg_freeze.o \
+	task/lkmdbg_thread.o
 
 lkmdbg-ui-y := \
 	ui/lkmdbg_debugfs.o

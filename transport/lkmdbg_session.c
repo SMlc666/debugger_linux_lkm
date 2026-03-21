@@ -227,6 +227,12 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_mem_write(session, argp);
 	case LKMDBG_IOC_QUERY_VMAS:
 		return lkmdbg_vma_query(session, argp);
+	case LKMDBG_IOC_QUERY_THREADS:
+		return lkmdbg_query_threads(session, argp);
+	case LKMDBG_IOC_GET_REGS:
+		return lkmdbg_get_regs(session, argp);
+	case LKMDBG_IOC_SET_REGS:
+		return lkmdbg_set_regs(session, argp);
 	case LKMDBG_IOC_FREEZE_THREADS:
 		return lkmdbg_freeze_threads(session, argp);
 	case LKMDBG_IOC_THAW_THREADS:

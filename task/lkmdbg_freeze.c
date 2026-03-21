@@ -80,6 +80,19 @@ static void lkmdbg_freezer_put(struct lkmdbg_freezer *freezer)
 	kref_put(&freezer->refcount, lkmdbg_freezer_release);
 }
 
+static struct lkmdbg_freezer *
+lkmdbg_session_freezer_get(struct lkmdbg_session *session)
+{
+	struct lkmdbg_freezer *freezer;
+
+	mutex_lock(&session->lock);
+	freezer = session->freezer;
+	if (freezer)
+		lkmdbg_freezer_get(freezer);
+	mutex_unlock(&session->lock);
+	return freezer;
+}
+
 static struct lkmdbg_freeze_thread *
 lkmdbg_freezer_find_thread_locked(struct lkmdbg_freezer *freezer, pid_t tid)
 {
@@ -592,6 +605,31 @@ int lkmdbg_session_freeze_on_target_change(struct lkmdbg_session *session)
 {
 	lkmdbg_session_freeze_release(session);
 	return 0;
+}
+
+u32 lkmdbg_freeze_thread_flags(struct lkmdbg_session *session, pid_t tid)
+{
+	struct lkmdbg_freezer *freezer;
+	struct lkmdbg_freeze_thread *entry;
+	u32 flags = 0;
+
+	freezer = lkmdbg_session_freezer_get(session);
+	if (!freezer)
+		return 0;
+
+	mutex_lock(&freezer->lock);
+	entry = lkmdbg_freezer_find_thread_locked(freezer, tid);
+	if (entry) {
+		flags |= LKMDBG_THREAD_FLAG_FREEZE_TRACKED;
+		if (lkmdbg_freezer_thread_settled_locked(entry))
+			flags |= LKMDBG_THREAD_FLAG_FREEZE_SETTLED;
+		if (entry->parked)
+			flags |= LKMDBG_THREAD_FLAG_FREEZE_PARKED;
+	}
+	mutex_unlock(&freezer->lock);
+
+	lkmdbg_freezer_put(freezer);
+	return flags;
 }
 
 void lkmdbg_session_freeze_release(struct lkmdbg_session *session)
