@@ -1053,6 +1053,7 @@ static int test_external_ops(int session_fd, int cmd_fd, int reply_fd, pid_t pid
 			     const struct child_info *info)
 {
 	struct lkmdbg_hwpoint_request req;
+	struct lkmdbg_hwpoint_entry entry;
 	uint64_t pagemap_before = 0;
 	uint64_t pagemap_after = 0;
 	char perms_before[5];
@@ -1088,18 +1089,25 @@ static int test_external_ops(int session_fd, int cmd_fd, int reply_fd, pid_t pid
 			perms_after);
 		goto fail;
 	}
-	if (expect_hwpoint_state_bits(session_fd, req.id,
-				      LKMDBG_HWPOINT_STATE_ACTIVE,
-				      LKMDBG_HWPOINT_STATE_LATCHED |
-					      LKMDBG_HWPOINT_STATE_LOST |
-					      LKMDBG_HWPOINT_STATE_MUTATED,
-				      "external_ops_state") < 0)
+	if (query_hwpoint_entry(session_fd, req.id, &entry) < 0)
 		goto fail;
+	if (entry.state & LKMDBG_HWPOINT_STATE_LOST) {
+		fprintf(stderr, "external ops lost hwpoint state=0x%x\n",
+			entry.state);
+		goto fail;
+	}
+	if (!(entry.state &
+	      (LKMDBG_HWPOINT_STATE_ACTIVE | LKMDBG_HWPOINT_STATE_MUTATED))) {
+		fprintf(stderr, "external ops unexpected state=0x%x\n",
+			entry.state);
+		goto fail;
+	}
 	if (remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
-	printf("mmu test: external ops ok resident=%d perms=%s pagemap_before=0x%016" PRIx64 " pagemap_after=0x%016" PRIx64 "\n",
-	       resident, perms_after, pagemap_before, pagemap_after);
+	printf("mmu test: external ops ok resident=%d perms=%s state=0x%x pagemap_before=0x%016" PRIx64 " pagemap_after=0x%016" PRIx64 "\n",
+	       resident, perms_after, entry.state, pagemap_before,
+	       pagemap_after);
 	return 0;
 
 fail:
