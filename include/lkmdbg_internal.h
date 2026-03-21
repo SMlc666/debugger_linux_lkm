@@ -1,6 +1,7 @@
 #ifndef _LKMDBG_INTERNAL_H
 #define _LKMDBG_INTERNAL_H
 
+#include <linux/atomic.h>
 #include <linux/debugfs.h>
 #include <linux/fs.h>
 #include <linux/kprobes.h>
@@ -70,6 +71,18 @@ struct lkmdbg_state {
 	bool seq_read_hook_active;
 	u64 seq_read_hook_hits;
 	int seq_read_hook_last_ret;
+	atomic64_t hwpoint_callback_total;
+	atomic64_t breakpoint_callback_total;
+	atomic64_t watchpoint_callback_total;
+	atomic64_t target_stop_event_read_total;
+	atomic64_t breakpoint_stop_event_read_total;
+	atomic64_t watchpoint_stop_event_read_total;
+	pid_t hwpoint_last_tgid;
+	pid_t hwpoint_last_tid;
+	u32 hwpoint_last_reason;
+	u32 hwpoint_last_type;
+	u64 hwpoint_last_addr;
+	u64 hwpoint_last_ip;
 };
 
 struct lkmdbg_symbols {

@@ -326,6 +326,18 @@ int main(void)
 	qemu_expect_status_u64_at_least("proc_open_successes=", 1);
 	qemu_run_tool(open_session_argv);
 	qemu_run_tool(mem_test_argv);
+	printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
+	       qemu_read_status_u64("hwpoint_callback_total="),
+	       qemu_read_status_u64("breakpoint_callback_total="),
+	       qemu_read_status_u64("watchpoint_callback_total="),
+	       qemu_read_status_u64("target_stop_event_read_total="),
+	       qemu_read_status_u64("breakpoint_stop_event_read_total="),
+	       qemu_read_status_u64("watchpoint_stop_event_read_total="),
+	       qemu_read_status_u64("hwpoint_last_reason="),
+	       qemu_read_status_u64("hwpoint_last_type="),
+	       qemu_read_status_u64("hwpoint_last_addr="),
+	       qemu_read_status_u64("hwpoint_last_ip="));
+	fflush(stdout);
 	qemu_rmmod();
 
 	/*

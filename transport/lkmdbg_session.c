@@ -245,6 +245,14 @@ ssize_t lkmdbg_session_read(struct file *file, char __user *buf, size_t count,
 	if (copy_to_user(buf, &event, sizeof(event)))
 		return -EFAULT;
 
+	if (event.type == LKMDBG_EVENT_TARGET_STOP) {
+		atomic64_inc(&lkmdbg_state.target_stop_event_read_total);
+		if (event.code == LKMDBG_STOP_REASON_BREAKPOINT)
+			atomic64_inc(&lkmdbg_state.breakpoint_stop_event_read_total);
+		else if (event.code == LKMDBG_STOP_REASON_WATCHPOINT)
+			atomic64_inc(&lkmdbg_state.watchpoint_stop_event_read_total);
+	}
+
 	return sizeof(event);
 }
 

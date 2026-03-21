@@ -22,6 +22,14 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	u64 inline_hook_last_replacement;
 	u64 inline_hook_last_trampoline;
 	u64 seq_read_hook_hits;
+	u64 hwpoint_callback_total;
+	u64 breakpoint_callback_total;
+	u64 watchpoint_callback_total;
+	u64 target_stop_event_read_total;
+	u64 breakpoint_stop_event_read_total;
+	u64 watchpoint_stop_event_read_total;
+	u64 hwpoint_last_addr;
+	u64 hwpoint_last_ip;
 	bool hook_active;
 	bool selftest_enabled;
 	bool selftest_exec_pool_ready;
@@ -29,6 +37,10 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	bool selftest_exec_ready;
 	bool selftest_installed;
 	bool seq_read_hook_active;
+	pid_t hwpoint_last_tgid;
+	pid_t hwpoint_last_tid;
+	u32 hwpoint_last_reason;
+	u32 hwpoint_last_type;
 	int selftest_ret;
 	int inline_hook_last_ret;
 	int seq_read_hook_last_ret;
@@ -62,6 +74,24 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	seq_read_hook_hits = lkmdbg_state.seq_read_hook_hits;
 	seq_read_hook_last_ret = lkmdbg_state.seq_read_hook_last_ret;
 	mutex_unlock(&lkmdbg_state.lock);
+
+	hwpoint_callback_total = atomic64_read(&lkmdbg_state.hwpoint_callback_total);
+	breakpoint_callback_total =
+		atomic64_read(&lkmdbg_state.breakpoint_callback_total);
+	watchpoint_callback_total =
+		atomic64_read(&lkmdbg_state.watchpoint_callback_total);
+	target_stop_event_read_total =
+		atomic64_read(&lkmdbg_state.target_stop_event_read_total);
+	breakpoint_stop_event_read_total =
+		atomic64_read(&lkmdbg_state.breakpoint_stop_event_read_total);
+	watchpoint_stop_event_read_total =
+		atomic64_read(&lkmdbg_state.watchpoint_stop_event_read_total);
+	hwpoint_last_tgid = READ_ONCE(lkmdbg_state.hwpoint_last_tgid);
+	hwpoint_last_tid = READ_ONCE(lkmdbg_state.hwpoint_last_tid);
+	hwpoint_last_reason = READ_ONCE(lkmdbg_state.hwpoint_last_reason);
+	hwpoint_last_type = READ_ONCE(lkmdbg_state.hwpoint_last_type);
+	hwpoint_last_addr = READ_ONCE(lkmdbg_state.hwpoint_last_addr);
+	hwpoint_last_ip = READ_ONCE(lkmdbg_state.hwpoint_last_ip);
 
 	seq_printf(m, "tag=%s\n", tag);
 	seq_printf(m, "load_jiffies=%lu\n", lkmdbg_state.load_jiffies);
@@ -113,6 +143,26 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	seq_printf(m, "seq_read_hook_hits=%llu\n",
 		   (unsigned long long)seq_read_hook_hits);
 	seq_printf(m, "seq_read_hook_last_ret=%d\n", seq_read_hook_last_ret);
+	seq_printf(m, "hwpoint_callback_total=%llu\n",
+		   (unsigned long long)hwpoint_callback_total);
+	seq_printf(m, "breakpoint_callback_total=%llu\n",
+		   (unsigned long long)breakpoint_callback_total);
+	seq_printf(m, "watchpoint_callback_total=%llu\n",
+		   (unsigned long long)watchpoint_callback_total);
+	seq_printf(m, "target_stop_event_read_total=%llu\n",
+		   (unsigned long long)target_stop_event_read_total);
+	seq_printf(m, "breakpoint_stop_event_read_total=%llu\n",
+		   (unsigned long long)breakpoint_stop_event_read_total);
+	seq_printf(m, "watchpoint_stop_event_read_total=%llu\n",
+		   (unsigned long long)watchpoint_stop_event_read_total);
+	seq_printf(m, "hwpoint_last_tgid=%d\n", hwpoint_last_tgid);
+	seq_printf(m, "hwpoint_last_tid=%d\n", hwpoint_last_tid);
+	seq_printf(m, "hwpoint_last_reason=%u\n", hwpoint_last_reason);
+	seq_printf(m, "hwpoint_last_type=0x%x\n", hwpoint_last_type);
+	seq_printf(m, "hwpoint_last_addr=0x%llx\n",
+		   (unsigned long long)hwpoint_last_addr);
+	seq_printf(m, "hwpoint_last_ip=0x%llx\n",
+		   (unsigned long long)hwpoint_last_ip);
 	seq_printf(m, "bypass_kprobe_blacklist=%u\n", bypass_kprobe_blacklist);
 	seq_printf(m, "bypass_cfi=%u\n", bypass_cfi);
 

@@ -222,6 +222,18 @@ static void lkmdbg_hwpoint_event(struct perf_event *bp,
 	if (regs)
 		ip = instruction_pointer(regs);
 
+	atomic64_inc(&lkmdbg_state.hwpoint_callback_total);
+	if (reason == LKMDBG_STOP_REASON_BREAKPOINT)
+		atomic64_inc(&lkmdbg_state.breakpoint_callback_total);
+	else if (reason == LKMDBG_STOP_REASON_WATCHPOINT)
+		atomic64_inc(&lkmdbg_state.watchpoint_callback_total);
+	WRITE_ONCE(lkmdbg_state.hwpoint_last_tgid, entry->tgid);
+	WRITE_ONCE(lkmdbg_state.hwpoint_last_tid, current->pid);
+	WRITE_ONCE(lkmdbg_state.hwpoint_last_reason, reason);
+	WRITE_ONCE(lkmdbg_state.hwpoint_last_type, entry->type);
+	WRITE_ONCE(lkmdbg_state.hwpoint_last_addr, addr);
+	WRITE_ONCE(lkmdbg_state.hwpoint_last_ip, ip);
+
 	lkmdbg_session_queue_event_ex(entry->session, LKMDBG_EVENT_TARGET_STOP,
 				      reason, entry->tgid, current->pid,
 				      entry->type, addr, ip ? ip : entry->id);
