@@ -115,6 +115,13 @@ The current session ioctls include:
 - `LKMDBG_IOC_READ_MEM`
 - `LKMDBG_IOC_WRITE_MEM`
 
+Memory transfer requests now use a single batched shape:
+
+- one `READ_MEM` or `WRITE_MEM` ioctl carries an array of transfer ops
+- a single-op request is just `op_count=1`
+- the kernel processes ops against one target `mm` without faulting missing remote pages in
+- large contiguous transfers are handled as one op; sparse transfers can be grouped into one batched request
+
 Current session events include:
 
 - `LKMDBG_EVENT_SESSION_OPENED`

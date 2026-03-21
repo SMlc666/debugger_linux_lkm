@@ -19,14 +19,18 @@
 #define SELFTEST_THREAD_COUNT 4
 #define SELFTEST_THREAD_ITERS 64
 #define SELFTEST_SLOT_SIZE 64
+#define SELFTEST_LARGE_MAP_LEN (192U * 1024U)
+#define SELFTEST_BATCH_OPS 4
 
 struct child_info {
 	uintptr_t basic_addr;
 	uintptr_t slots_addr;
 	uintptr_t nofault_addr;
+	uintptr_t large_addr;
 	uint32_t page_size;
 	uint32_t slot_size;
 	uint32_t slot_count;
+	uint32_t large_len;
 };
 
 struct child_cmd {
@@ -90,6 +94,39 @@ static int set_target(int session_fd, pid_t pid)
 	return 0;
 }
 
+static unsigned char pattern_byte(size_t index, unsigned int seed)
+{
+	return (unsigned char)((index * 131U + seed * 17U + 29U) & 0xffU);
+}
+
+static void fill_pattern(unsigned char *buf, size_t len, unsigned int seed)
+{
+	size_t i;
+
+	for (i = 0; i < len; i++)
+		buf[i] = pattern_byte(i, seed);
+}
+
+static int verify_pattern_range(const unsigned char *buf, size_t len,
+				unsigned int seed, size_t base_index)
+{
+	size_t i;
+
+	for (i = 0; i < len; i++) {
+		unsigned char expected = pattern_byte(base_index + i, seed);
+
+		if (buf[i] != expected)
+			return -1;
+	}
+
+	return 0;
+}
+
+static int verify_pattern(const unsigned char *buf, size_t len, unsigned int seed)
+{
+	return verify_pattern_range(buf, len, seed, 0);
+}
+
 static ssize_t read_full(int fd, void *buf, size_t len)
 {
 	size_t done = 0;
@@ -128,53 +165,104 @@ static ssize_t write_full(int fd, const void *buf, size_t len)
 	return (ssize_t)done;
 }
 
-static int read_target_memory(int session_fd, uintptr_t remote_addr, void *buf,
-			      size_t len, uint32_t *bytes_done_out,
-			      int verbose)
+static int xfer_target_memory(int session_fd, struct lkmdbg_mem_op *ops,
+			      uint32_t op_count, int write,
+			      struct lkmdbg_mem_request *reply_out, int verbose)
 {
 	struct lkmdbg_mem_request req = {
 		.version = LKMDBG_PROTO_VERSION,
 		.size = sizeof(req),
+		.ops_addr = (uintptr_t)ops,
+		.op_count = op_count,
+	};
+	unsigned long cmd = write ? LKMDBG_IOC_WRITE_MEM : LKMDBG_IOC_READ_MEM;
+
+	if (ioctl(session_fd, cmd, &req) < 0) {
+		fprintf(stderr, "%s failed: %s\n",
+			write ? "WRITE_MEM" : "READ_MEM", strerror(errno));
+		return -1;
+	}
+
+	if (verbose)
+		printf("%s ops_done=%u bytes_done=%" PRIu64 "\n",
+		       write ? "WRITE_MEM" : "READ_MEM", req.ops_done,
+		       (uint64_t)req.bytes_done);
+
+	if (reply_out)
+		*reply_out = req;
+
+	return 0;
+}
+
+static int read_target_memory(int session_fd, uintptr_t remote_addr, void *buf,
+			      size_t len, uint32_t *bytes_done_out,
+			      int verbose)
+{
+	struct lkmdbg_mem_op op = {
 		.remote_addr = remote_addr,
 		.local_addr = (uintptr_t)buf,
 		.length = len,
 	};
+	struct lkmdbg_mem_request req;
 
-	if (ioctl(session_fd, LKMDBG_IOC_READ_MEM, &req) < 0) {
-		fprintf(stderr, "READ_MEM failed: %s\n", strerror(errno));
+	if (xfer_target_memory(session_fd, &op, 1, 0, &req, verbose) < 0)
 		return -1;
-	}
 
 	if (bytes_done_out)
-		*bytes_done_out = req.bytes_done;
-	if (verbose)
-		printf("READ_MEM bytes_done=%u\n", req.bytes_done);
+		*bytes_done_out = op.bytes_done;
 
-	return 0;
+	return req.ops_done == 1 || !op.bytes_done ? 0 : -1;
 }
 
 static int write_target_memory(int session_fd, uintptr_t remote_addr,
 			       const void *buf, size_t len,
 			       uint32_t *bytes_done_out, int verbose)
 {
-	struct lkmdbg_mem_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
+	struct lkmdbg_mem_op op = {
 		.remote_addr = remote_addr,
 		.local_addr = (uintptr_t)buf,
 		.length = len,
 	};
+	struct lkmdbg_mem_request req;
 
-	if (ioctl(session_fd, LKMDBG_IOC_WRITE_MEM, &req) < 0) {
-		fprintf(stderr, "WRITE_MEM failed: %s\n", strerror(errno));
+	if (xfer_target_memory(session_fd, &op, 1, 1, &req, verbose) < 0)
 		return -1;
-	}
 
 	if (bytes_done_out)
-		*bytes_done_out = req.bytes_done;
-	if (verbose)
-		printf("WRITE_MEM bytes_done=%u\n", req.bytes_done);
+		*bytes_done_out = op.bytes_done;
 
+	return req.ops_done == 1 || !op.bytes_done ? 0 : -1;
+}
+
+static int read_target_memoryv(int session_fd, struct lkmdbg_mem_op *ops,
+			       uint32_t op_count, uint32_t *ops_done_out,
+			       uint64_t *bytes_done_out, int verbose)
+{
+	struct lkmdbg_mem_request req;
+
+	if (xfer_target_memory(session_fd, ops, op_count, 0, &req, verbose) < 0)
+		return -1;
+
+	if (ops_done_out)
+		*ops_done_out = req.ops_done;
+	if (bytes_done_out)
+		*bytes_done_out = req.bytes_done;
+	return 0;
+}
+
+static int write_target_memoryv(int session_fd, struct lkmdbg_mem_op *ops,
+				uint32_t op_count, uint32_t *ops_done_out,
+				uint64_t *bytes_done_out, int verbose)
+{
+	struct lkmdbg_mem_request req;
+
+	if (xfer_target_memory(session_fd, ops, op_count, 1, &req, verbose) < 0)
+		return -1;
+
+	if (ops_done_out)
+		*ops_done_out = req.ops_done;
+	if (bytes_done_out)
+		*bytes_done_out = req.bytes_done;
 	return 0;
 }
 
@@ -194,6 +282,7 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	char child_buf[64] = "child-buffer-initial";
 	char *slots_map;
 	void *nofault_map;
+	unsigned char *large_map;
 	size_t page_size;
 	unsigned int i;
 
@@ -211,10 +300,16 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	if (nofault_map == MAP_FAILED)
 		return 2;
 
+	large_map = mmap(NULL, SELFTEST_LARGE_MAP_LEN, PROT_READ | PROT_WRITE,
+			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (large_map == MAP_FAILED)
+		return 2;
+
 	for (i = 0; i < SELFTEST_THREAD_COUNT; i++) {
 		snprintf(slots_map + (i * SELFTEST_SLOT_SIZE), SELFTEST_SLOT_SIZE,
 			 "slot-%u-initial", i);
 	}
+	fill_pattern(large_map, SELFTEST_LARGE_MAP_LEN, 1);
 
 	memset(nofault_map, 0xA5, page_size);
 	if (madvise(nofault_map, page_size, MADV_DONTNEED) < 0)
@@ -224,9 +319,11 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	info.basic_addr = (uintptr_t)child_buf;
 	info.slots_addr = (uintptr_t)slots_map;
 	info.nofault_addr = (uintptr_t)nofault_map;
+	info.large_addr = (uintptr_t)large_map;
 	info.page_size = (uint32_t)page_size;
 	info.slot_size = SELFTEST_SLOT_SIZE;
 	info.slot_count = SELFTEST_THREAD_COUNT;
+	info.large_len = SELFTEST_LARGE_MAP_LEN;
 
 	if (write_full(info_fd, &info, sizeof(info)) != (ssize_t)sizeof(info))
 		return 2;
@@ -337,7 +434,18 @@ static int run_selftest(const char *prog)
 	const char *payload = "patched-by-lkmdbg";
 	pthread_t threads[SELFTEST_THREAD_COUNT];
 	struct worker_ctx workers[SELFTEST_THREAD_COUNT];
+	unsigned char *large_buf = NULL;
+	unsigned char *batch_a = NULL;
+	unsigned char *batch_b = NULL;
+	unsigned char *batch_c = NULL;
+	unsigned char *batch_d = NULL;
+	struct lkmdbg_mem_op batch_ops[SELFTEST_BATCH_OPS];
+	static const uint32_t batch_lengths[SELFTEST_BATCH_OPS] = {
+		32768, 16384, 65536, 16384,
+	};
 	uint32_t bytes_done = 0;
+	uint32_t ops_done = 0;
+	uint64_t batch_bytes_done = 0;
 	unsigned int i;
 	int status;
 	int resident_before;
@@ -562,6 +670,163 @@ static int run_selftest(const char *prog)
 	printf("selftest nofault remote access ok resident_before=%d after_read=%d after_write=%d\n",
 	       resident_before, resident_after_read, resident_after_write);
 
+	large_buf = malloc(info.large_len);
+	batch_a = malloc(batch_lengths[0]);
+	batch_b = malloc(batch_lengths[1]);
+	batch_c = malloc(batch_lengths[2]);
+	batch_d = malloc(batch_lengths[3]);
+	if (!large_buf || !batch_a || !batch_b || !batch_c || !batch_d) {
+		fprintf(stderr, "large test allocation failed\n");
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		free(large_buf);
+		free(batch_a);
+		free(batch_b);
+		free(batch_c);
+		free(batch_d);
+		return 1;
+	}
+
+	memset(large_buf, 0, info.large_len);
+	if (read_target_memory(session_fd, info.large_addr, large_buf,
+			       info.large_len, &bytes_done, 1) < 0 ||
+	    bytes_done != info.large_len ||
+	    verify_pattern(large_buf, info.large_len, 1) != 0) {
+		fprintf(stderr, "large READ_MEM verify failed bytes_done=%u\n",
+			bytes_done);
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		free(large_buf);
+		free(batch_a);
+		free(batch_b);
+		free(batch_c);
+		free(batch_d);
+		return 1;
+	}
+
+	fill_pattern(large_buf, info.large_len, 2);
+	if (write_target_memory(session_fd, info.large_addr, large_buf,
+				info.large_len, &bytes_done, 1) < 0 ||
+	    bytes_done != info.large_len) {
+		fprintf(stderr, "large WRITE_MEM failed bytes_done=%u\n",
+			bytes_done);
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		free(large_buf);
+		free(batch_a);
+		free(batch_b);
+		free(batch_c);
+		free(batch_d);
+		return 1;
+	}
+
+	memset(batch_ops, 0, sizeof(batch_ops));
+	batch_ops[0].remote_addr = info.large_addr;
+	batch_ops[0].local_addr = (uintptr_t)batch_a;
+	batch_ops[0].length = batch_lengths[0];
+	batch_ops[1].remote_addr = info.large_addr + 49152;
+	batch_ops[1].local_addr = (uintptr_t)batch_b;
+	batch_ops[1].length = batch_lengths[1];
+	batch_ops[2].remote_addr = info.large_addr + 81920;
+	batch_ops[2].local_addr = (uintptr_t)batch_c;
+	batch_ops[2].length = batch_lengths[2];
+	batch_ops[3].remote_addr = info.large_addr + 163840;
+	batch_ops[3].local_addr = (uintptr_t)batch_d;
+	batch_ops[3].length = batch_lengths[3];
+
+	if (read_target_memoryv(session_fd, batch_ops, SELFTEST_BATCH_OPS,
+				&ops_done, &batch_bytes_done, 1) < 0 ||
+	    ops_done != SELFTEST_BATCH_OPS ||
+	    batch_bytes_done != (uint64_t)batch_lengths[0] +
+				    batch_lengths[1] + batch_lengths[2] +
+				    batch_lengths[3] ||
+	    verify_pattern_range(batch_a, batch_lengths[0], 2, 0) != 0 ||
+	    verify_pattern_range(batch_b, batch_lengths[1], 2, 49152) != 0 ||
+	    verify_pattern_range(batch_c, batch_lengths[2], 2, 81920) != 0 ||
+	    verify_pattern_range(batch_d, batch_lengths[3], 2, 163840) != 0) {
+		fprintf(stderr,
+			"READ_MEM batch verify failed ops_done=%u bytes_done=%" PRIu64 "\n",
+			ops_done, batch_bytes_done);
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		free(large_buf);
+		free(batch_a);
+		free(batch_b);
+		free(batch_c);
+		free(batch_d);
+		return 1;
+	}
+
+	fill_pattern(batch_a, batch_lengths[0], 11);
+	fill_pattern(batch_b, batch_lengths[1], 12);
+	fill_pattern(batch_c, batch_lengths[2], 13);
+	fill_pattern(batch_d, batch_lengths[3], 14);
+	if (write_target_memoryv(session_fd, batch_ops, SELFTEST_BATCH_OPS,
+				 &ops_done, &batch_bytes_done, 1) < 0 ||
+	    ops_done != SELFTEST_BATCH_OPS ||
+	    batch_bytes_done != (uint64_t)batch_lengths[0] +
+				    batch_lengths[1] + batch_lengths[2] +
+				    batch_lengths[3]) {
+		fprintf(stderr,
+			"WRITE_MEM batch failed ops_done=%u bytes_done=%" PRIu64 "\n",
+			ops_done, batch_bytes_done);
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		free(large_buf);
+		free(batch_a);
+		free(batch_b);
+		free(batch_c);
+		free(batch_d);
+		return 1;
+	}
+
+	memset(large_buf, 0, info.large_len);
+	if (read_target_memory(session_fd, info.large_addr, large_buf,
+			       info.large_len, &bytes_done, 0) < 0 ||
+	    bytes_done != info.large_len ||
+	    verify_pattern(large_buf, batch_lengths[0], 11) != 0 ||
+	    verify_pattern(large_buf + 49152, batch_lengths[1], 12) != 0 ||
+	    verify_pattern(large_buf + 81920, batch_lengths[2], 13) != 0 ||
+	    verify_pattern(large_buf + 163840, batch_lengths[3], 14) != 0) {
+		fprintf(stderr, "large batch writeback verify failed bytes_done=%u\n",
+			bytes_done);
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		free(large_buf);
+		free(batch_a);
+		free(batch_b);
+		free(batch_c);
+		free(batch_d);
+		return 1;
+	}
+
+	printf("selftest large and batched memory access ok len=%u batch_bytes=%" PRIu64 "\n",
+	       info.large_len, batch_bytes_done);
+
 	close(session_fd);
 	close(info_pipe[0]);
 
@@ -584,9 +849,19 @@ static int run_selftest(const char *prog)
 
 	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
 		fprintf(stderr, "child exited abnormally status=%d\n", status);
+		free(large_buf);
+		free(batch_a);
+		free(batch_b);
+		free(batch_c);
+		free(batch_d);
 		return 1;
 	}
 
+	free(large_buf);
+	free(batch_a);
+	free(batch_b);
+	free(batch_c);
+	free(batch_d);
 	return 0;
 }
 

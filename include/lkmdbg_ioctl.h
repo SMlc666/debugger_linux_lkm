@@ -46,15 +46,24 @@ struct lkmdbg_target_request {
 	__s32 tid;
 };
 
-struct lkmdbg_mem_request {
-	__u32 version;
-	__u32 size;
+struct lkmdbg_mem_op {
 	__u64 remote_addr;
 	__u64 local_addr;
 	__u32 length;
 	__u32 flags;
 	__u32 bytes_done;
 	__u32 reserved0;
+};
+
+struct lkmdbg_mem_request {
+	__u32 version;
+	__u32 size;
+	__u64 ops_addr;
+	__u32 op_count;
+	__u32 flags;
+	__u32 ops_done;
+	__u32 reserved0;
+	__u64 bytes_done;
 };
 
 struct lkmdbg_event_record {
