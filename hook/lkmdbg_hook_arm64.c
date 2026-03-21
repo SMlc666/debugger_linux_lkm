@@ -29,7 +29,16 @@ static DEFINE_MUTEX(lkmdbg_hook_lock);
 
 static int lkmdbg_write_text_insn(void *addr, u32 insn)
 {
-	if (!lkmdbg_symbols.aarch64_insn_write || !lkmdbg_symbols.flush_icache_range)
+	if (!lkmdbg_symbols.flush_icache_range)
+		return -ENOENT;
+
+	if (lkmdbg_symbols.aarch64_insn_patch_text_nosync) {
+		if (lkmdbg_symbols.aarch64_insn_patch_text_nosync(addr, insn))
+			return -EIO;
+		return 0;
+	}
+
+	if (!lkmdbg_symbols.aarch64_insn_write)
 		return -ENOENT;
 
 	if (lkmdbg_symbols.aarch64_insn_write(addr, insn))
@@ -177,6 +186,11 @@ int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
 
 	if (hook->active)
 		return -EALREADY;
+
+	pr_info("lkmdbg: kp hook patch backend=%s target=%px origin=%px\n",
+		lkmdbg_symbols.aarch64_insn_patch_text_nosync ?
+		"aarch64_insn_patch_text_nosync" : "aarch64_insn_write",
+		hook->target, hook->origin);
 
 	ret = lkmdbg_patch_target_words((void *)hook->core.origin_addr,
 					hook->core.tramp_insts,
