@@ -276,6 +276,9 @@ jobs:
             -o "$RUNNER_TEMP/qemu-smoke-init" \
             "$GITHUB_WORKSPACE/.github/scripts/qemu-smoke-init.c"
           ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/qemu-watchpoint-control" \
+            "$GITHUB_WORKSPACE/.github/scripts/qemu-watchpoint-control.c"
+          ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/lkmdbg_open_session" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_open_session.c"
           ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
@@ -286,6 +289,8 @@ jobs:
             "$INITRAMFS_DIR/sys/kernel/debug"
           install -m 0755 "$RUNNER_TEMP/qemu-smoke-init" \
             "$INITRAMFS_DIR/init"
+          install -m 0755 "$RUNNER_TEMP/qemu-watchpoint-control" \
+            "$INITRAMFS_DIR/qemu_watchpoint_control"
           install -m 0755 "$RUNNER_TEMP/lkmdbg_open_session" \
             "$INITRAMFS_DIR/lkmdbg_open_session"
           install -m 0755 "$RUNNER_TEMP/lkmdbg_mem_test" \
@@ -372,71 +377,4 @@ jobs:
         with:
           name: qemu-arm64-smoke-log
           path: ${{ runner.temp }}/qemu-smoke-tcg.log
-          if-no-files-found: ignore
-
-  qemu-arm64-smoke-kvm:
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-24.04-arm
-    needs: qemu-arm64-build-artifacts
-    timeout-minutes: 30
-    continue-on-error: true
-
-    steps:
-      - name: Download QEMU boot artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: qemu-arm64-boot
-          path: ${{ runner.temp }}/qemu-artifacts
-
-      - name: Install QEMU
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-arm
-
-      - name: Probe hosted ARM64 KVM support
-        run: |
-          LOG="$RUNNER_TEMP/qemu-kvm-probe.log"
-          {
-            echo "runner=$(uname -a)"
-            echo "qemu=$(qemu-system-aarch64 --version | head -n1)"
-            echo "accel_help=$(qemu-system-aarch64 -accel help | tr '\n' ' ')"
-            if [ -e /dev/kvm ]; then
-              ls -l /dev/kvm
-            else
-              echo "/dev/kvm missing"
-            fi
-          } | tee "$LOG"
-          test -e /dev/kvm
-
-      - name: Run QEMU smoke test (KVM)
-        run: |
-          KERNEL_IMAGE="$RUNNER_TEMP/qemu-artifacts/Image"
-          INITRAMFS="$RUNNER_TEMP/qemu-artifacts/initramfs.cpio.gz"
-          LOG="$RUNNER_TEMP/qemu-smoke-kvm.log"
-          timeout 180s qemu-system-aarch64 \
-            -machine virt,accel=kvm \
-            -cpu host \
-            -smp 2 \
-            -m 1024 \
-            -nographic \
-            -kernel "$KERNEL_IMAGE" \
-            -initrd "$INITRAMFS" \
-            -append "console=ttyAMA0 rdinit=/init panic=-1" \
-            -no-reboot | tee "$LOG"
-          grep -q 'LKMDBG_QEMU_SMOKE_OK' "$LOG"
-
-      - name: Upload QEMU KVM probe log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: qemu-arm64-smoke-kvm-probe-log
-          path: ${{ runner.temp }}/qemu-kvm-probe.log
-          if-no-files-found: ignore
-
-      - name: Upload QEMU KVM log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: qemu-arm64-smoke-kvm-log
-          path: ${{ runner.temp }}/qemu-smoke-kvm.log
           if-no-files-found: ignore

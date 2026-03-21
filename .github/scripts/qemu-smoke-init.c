@@ -26,6 +26,7 @@
 #define MODULE_NAME "lkmdbg"
 #define OPEN_SESSION_TOOL "/lkmdbg_open_session"
 #define MEM_TEST_TOOL "/lkmdbg_mem_test"
+#define WATCHPOINT_CTRL_TOOL "/qemu_watchpoint_control"
 
 static void qemu_poweroff(void)
 {
@@ -150,6 +151,27 @@ static void qemu_run_tool(char *const argv[])
 		   WEXITSTATUS(status));
 }
 
+static int qemu_run_tool_status(char *const argv[])
+{
+	pid_t pid;
+	int status;
+
+	pid = fork();
+	if (pid < 0)
+		qemu_fail("fork_%s errno=%d", argv[0], errno);
+
+	if (pid == 0) {
+		execv(argv[0], argv);
+		_exit(127);
+	}
+
+	if (waitpid(pid, &status, 0) < 0)
+		qemu_fail("waitpid_%s errno=%d", argv[0], errno);
+
+	qemu_check(WIFEXITED(status), "tool_signal_%s status=%d", argv[0], status);
+	return WEXITSTATUS(status);
+}
+
 static int qemu_open_session(void)
 {
 	struct lkmdbg_open_session_request req = {
@@ -255,6 +277,8 @@ int main(void)
 	unsigned int iter;
 	char *const open_session_argv[] = { OPEN_SESSION_TOOL, NULL };
 	char *const mem_test_argv[] = { MEM_TEST_TOOL, "selftest", NULL };
+	char *const watchpoint_ctrl_argv[] = { WATCHPOINT_CTRL_TOOL, NULL };
+	int watchpoint_ctrl_status;
 
 	mkdir("/dev", 0755);
 	mkdir("/proc", 0555);
@@ -268,6 +292,16 @@ int main(void)
 	qemu_mount_or_fail("debugfs", "/sys/kernel/debug", "debugfs");
 
 	printf("LKMDBG_QEMU_SMOKE_BEGIN\n");
+	fflush(stdout);
+
+	watchpoint_ctrl_status = qemu_run_tool_status(watchpoint_ctrl_argv);
+	if (watchpoint_ctrl_status == 0) {
+		printf("LKMDBG_QEMU_WATCHPOINT_CTRL_OK\n");
+	} else if (watchpoint_ctrl_status == 2) {
+		printf("LKMDBG_QEMU_WATCHPOINT_CTRL_SKIP\n");
+	} else {
+		qemu_fail("watchpoint_ctrl_exit_%d", watchpoint_ctrl_status);
+	}
 	fflush(stdout);
 
 	for (i = 0; i < sizeof(selftests) / sizeof(selftests[0]); i++) {
