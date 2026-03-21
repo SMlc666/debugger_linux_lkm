@@ -74,6 +74,10 @@ static int lkmdbg_resolve_runtime_symbols(void)
 	if (addr)
 		lkmdbg_symbols.module_memfree = (void (*)(void *region))addr;
 
+	addr = lkmdbg_symbols.kallsyms_lookup_name("init_mm");
+	if (addr)
+		lkmdbg_symbols.init_mm = (struct mm_struct *)addr;
+
 	return 0;
 }
 
@@ -94,4 +98,5 @@ void lkmdbg_symbols_exit(void)
 	lkmdbg_symbols.set_memory_x = NULL;
 	lkmdbg_symbols.module_alloc = NULL;
 	lkmdbg_symbols.module_memfree = NULL;
+	lkmdbg_symbols.init_mm = NULL;
 }

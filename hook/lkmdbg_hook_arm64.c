@@ -44,7 +44,10 @@ static pte_t *lkmdbg_lookup_kernel_pte(unsigned long addr)
 	pud_t *pudp;
 	pmd_t *pmdp;
 
-	pgdp = pgd_offset_k(addr);
+	if (!lkmdbg_symbols.init_mm)
+		return NULL;
+
+	pgdp = pgd_offset(lkmdbg_symbols.init_mm, addr);
 	if (pgd_none(*pgdp) || pgd_bad(*pgdp))
 		return NULL;
 
@@ -171,6 +174,13 @@ int lkmdbg_hooks_init(void)
 	lkmdbg_alias_page = vmalloc(PAGE_SIZE);
 	if (!lkmdbg_alias_page) {
 		pr_warn("lkmdbg: alias patch page allocation failed\n");
+		return 0;
+	}
+
+	if (!lkmdbg_symbols.init_mm) {
+		pr_warn("lkmdbg: init_mm lookup unavailable, alias patch backend disabled\n");
+		vfree(lkmdbg_alias_page);
+		lkmdbg_alias_page = NULL;
 		return 0;
 	}
 

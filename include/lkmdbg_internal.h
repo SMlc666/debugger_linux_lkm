@@ -17,6 +17,8 @@
 #define LKMDBG_TARGET_PATH "/proc/version"
 #define LKMDBG_SESSION_EVENT_CAPACITY 32
 
+struct mm_struct;
+
 struct lkmdbg_state {
 	struct dentry *debugfs_dir;
 	struct mutex lock;
@@ -50,6 +52,7 @@ struct lkmdbg_symbols {
 	int (*set_memory_x)(unsigned long addr, int numpages);
 	void *(*module_alloc)(unsigned long size);
 	void (*module_memfree)(void *region);
+	struct mm_struct *init_mm;
 };
 
 int lkmdbg_disable_kprobe_blacklist(void);
