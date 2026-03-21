@@ -72,9 +72,12 @@ sudo cat /sys/kernel/debug/lkmdbg/status
 
 Selftest modes:
 
-- `hook_selftest_mode=1`: prepare the inline hook and trampoline, but do not patch the target
-- `hook_selftest_mode=2`: prepare and install the hook, but do not invoke the hooked function
-- `hook_selftest_mode=3`: prepare, install, and invoke one module-local test call
+- `hook_selftest_mode=1`: prepare the inline hook only
+- `hook_selftest_mode=2`: prepare the exec pool only
+- `hook_selftest_mode=3`: allocate an exec trampoline slot only
+- `hook_selftest_mode=4`: populate the exec trampoline
+- `hook_selftest_mode=5`: install the hook, but do not invoke the hooked function
+- `hook_selftest_mode=6`: install the hook and invoke one module-local test call
 
 The hardening bypasses are now opt-in:
 
@@ -134,3 +137,7 @@ sudo ./tools/lkmdbg_mem_test write <pid> <remote_addr_hex> <ascii_data>
 The GitHub Actions workflow in this repository is only a host-side smoke test. It builds the module against Ubuntu kernel headers to catch obvious compile regressions. It does not validate Android 14 GKI 6.1 compatibility.
 
 For actual Android bring-up you should point `KDIR` at the exact `android14-6.1` kernel build tree or exported module build headers used by your target device.
+
+## License
+
+This project is licensed under `GPL-2.0-or-later`. See [LICENSE](/root/debugger_linux_lkm/LICENSE).
