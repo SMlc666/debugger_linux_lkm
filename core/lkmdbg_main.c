@@ -49,6 +49,18 @@ static noinline __aligned(PAGE_SIZE) u64 lkmdbg_selftest_target(u64 value)
 	return value;
 }
 
+static u64 lkmdbg_selftest_model(u64 value)
+{
+	if (value & 1)
+		value += 3;
+	else
+		value += 7;
+
+	value ^= 0x1122334455667788ULL;
+	value += 0x0102030405060708ULL;
+	return value;
+}
+
 static noinline __aligned(PAGE_SIZE) u64 lkmdbg_selftest_replacement(u64 value)
 {
 	u64 original;
@@ -70,13 +82,24 @@ static void lkmdbg_trace_stage(const char *stage)
 static int lkmdbg_run_hook_selftest(void)
 {
 	const u64 input = 0x41;
+	const u64 mask = 0x00FF00FF00FF00FFULL;
+	u64 baseline;
+	u64 direct;
 	u64 expected;
 	u64 actual;
 	void *orig_fn = NULL;
 	int ret;
 
-	expected = lkmdbg_selftest_target(input + 1) ^
-		   0x00FF00FF00FF00FFULL;
+	baseline = lkmdbg_selftest_model(input + 1);
+	direct = lkmdbg_selftest_target(input + 1);
+	expected = baseline ^ mask;
+
+	if (direct != baseline) {
+		pr_err("lkmdbg: hook selftest baseline mismatch direct=0x%llx model=0x%llx\n",
+		       (unsigned long long)direct,
+		       (unsigned long long)baseline);
+		return -EIO;
+	}
 
 	lkmdbg_trace_stage("hook_selftest_prepare_begin");
 	ret = lkmdbg_hook_create(lkmdbg_selftest_target,
@@ -176,6 +199,7 @@ static int lkmdbg_run_hook_selftest(void)
 
 	lkmdbg_trace_stage("hook_selftest_invoke_begin");
 	actual = lkmdbg_selftest_target(input);
+	expected = lkmdbg_selftest_model(input + 1) ^ mask;
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.hook_selftest_expected = expected;
