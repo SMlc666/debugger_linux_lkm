@@ -262,6 +262,7 @@ static int lkmdbg_register_hwpoint(struct lkmdbg_session *session,
 	attr.bp_addr = req->addr;
 	attr.bp_len = req->len;
 	attr.bp_type = req->type;
+	attr.disabled = 1;
 
 	mutex_lock(&session->lock);
 	session->next_hwpoint_id++;
@@ -287,6 +288,14 @@ static int lkmdbg_register_hwpoint(struct lkmdbg_session *session,
 
 	if (IS_ERR(entry->event)) {
 		ret = PTR_ERR(entry->event);
+		kfree(entry);
+		return ret;
+	}
+
+	attr.disabled = 0;
+	ret = modify_user_hw_breakpoint(entry->event, &attr);
+	if (ret) {
+		unregister_hw_breakpoint(entry->event);
 		kfree(entry);
 		return ret;
 	}
