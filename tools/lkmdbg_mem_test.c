@@ -3,14 +3,17 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <linux/memfd.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -23,6 +26,8 @@
 #define SELFTEST_SLOT_SIZE 64
 #define SELFTEST_LARGE_MAP_LEN (192U * 1024U)
 #define SELFTEST_BATCH_OPS 4
+#define VMA_QUERY_BATCH 64
+#define VMA_QUERY_NAMES_SIZE 65536
 
 struct child_info {
 	uintptr_t basic_addr;
@@ -31,6 +36,10 @@ struct child_info {
 	uintptr_t force_read_addr;
 	uintptr_t force_write_addr;
 	uintptr_t large_addr;
+	uintptr_t file_addr;
+	uint64_t file_inode;
+	uint32_t file_dev_major;
+	uint32_t file_dev_minor;
 	uint32_t page_size;
 	uint32_t slot_size;
 	uint32_t slot_count;
@@ -48,6 +57,11 @@ struct worker_ctx {
 	unsigned int thread_index;
 	int failed;
 	char final_payload[SELFTEST_SLOT_SIZE];
+};
+
+struct vma_query_buffer {
+	struct lkmdbg_vma_entry *entries;
+	char *names;
 };
 
 enum {
@@ -297,6 +311,288 @@ static int write_target_memoryv(int session_fd, struct lkmdbg_mem_op *ops,
 	return 0;
 }
 
+static int query_target_vmas(int session_fd, uint64_t start_addr,
+			     struct vma_query_buffer *buf,
+			     struct lkmdbg_vma_query_request *reply_out)
+{
+	struct lkmdbg_vma_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.start_addr = start_addr,
+		.entries_addr = (uintptr_t)buf->entries,
+		.max_entries = VMA_QUERY_BATCH,
+		.names_addr = (uintptr_t)buf->names,
+		.names_size = VMA_QUERY_NAMES_SIZE,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_VMAS, &req) < 0) {
+		fprintf(stderr, "QUERY_VMAS failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static const char *vma_name_ptr(const struct lkmdbg_vma_query_request *reply,
+				const struct lkmdbg_vma_entry *entry,
+				const struct vma_query_buffer *buf)
+{
+	if (!entry->name_size)
+		return "";
+
+	if ((uint64_t)entry->name_offset + entry->name_size > reply->names_used)
+		return "";
+
+	return buf->names + entry->name_offset;
+}
+
+static int lookup_target_vma(int session_fd, uintptr_t remote_addr,
+			     struct vma_query_buffer *buf,
+			     struct lkmdbg_vma_entry *entry_out,
+			     char *name_out, size_t name_out_size)
+{
+	struct lkmdbg_vma_query_request reply;
+	unsigned int i;
+
+	if (query_target_vmas(session_fd, remote_addr, buf, &reply) < 0)
+		return -1;
+
+	for (i = 0; i < reply.entries_filled; i++) {
+		const struct lkmdbg_vma_entry *entry = &buf->entries[i];
+		const char *name;
+
+		if (remote_addr < entry->start_addr || remote_addr >= entry->end_addr)
+			continue;
+
+		*entry_out = *entry;
+		if (!name_out || !name_out_size)
+			return 0;
+
+		name = vma_name_ptr(&reply, entry, buf);
+		snprintf(name_out, name_out_size, "%s", name);
+		return 0;
+	}
+
+	fprintf(stderr, "address 0x%" PRIxPTR " not covered by returned VMA batch\n",
+		remote_addr);
+	return -1;
+}
+
+static int verify_vma_iteration(int session_fd, const struct child_info *info,
+				struct vma_query_buffer *buf)
+{
+	uint64_t cursor = 0;
+	uint64_t prev_end = 0;
+	unsigned int passes = 0;
+	unsigned int total = 0;
+	int saw_force_read = 0;
+	int saw_file = 0;
+
+	for (;;) {
+		struct lkmdbg_vma_query_request reply;
+		unsigned int i;
+
+		if (query_target_vmas(session_fd, cursor, buf, &reply) < 0)
+			return -1;
+
+		if (!reply.entries_filled && !reply.done) {
+			fprintf(stderr, "QUERY_VMAS returned no entries without done\n");
+			return -1;
+		}
+
+		for (i = 0; i < reply.entries_filled; i++) {
+			const struct lkmdbg_vma_entry *entry = &buf->entries[i];
+
+			if (entry->start_addr >= entry->end_addr) {
+				fprintf(stderr,
+					"invalid VMA range start=0x%" PRIx64 " end=0x%" PRIx64 "\n",
+					(uint64_t)entry->start_addr,
+					(uint64_t)entry->end_addr);
+				return -1;
+			}
+
+			if (total == 0 && i == 0) {
+				prev_end = entry->end_addr;
+			} else if (prev_end > entry->start_addr) {
+				fprintf(stderr, "non-monotonic VMA iteration output\n");
+				return -1;
+			}
+
+			if (i > 0 && buf->entries[i - 1].end_addr > entry->start_addr) {
+				fprintf(stderr, "overlapping VMA iteration output\n");
+				return -1;
+			}
+
+			if (info->force_read_addr >= entry->start_addr &&
+			    info->force_read_addr < entry->end_addr)
+				saw_force_read = 1;
+			if (info->file_addr >= entry->start_addr &&
+			    info->file_addr < entry->end_addr)
+				saw_file = 1;
+
+			prev_end = entry->end_addr;
+		}
+
+		total += reply.entries_filled;
+		passes++;
+		if (reply.done)
+			break;
+
+		if (reply.next_addr <= cursor) {
+			fprintf(stderr,
+				"QUERY_VMAS cursor did not advance old=0x%" PRIx64 " new=0x%" PRIx64 "\n",
+				(uint64_t)cursor, (uint64_t)reply.next_addr);
+			return -1;
+		}
+		cursor = reply.next_addr;
+		if (passes > 1024) {
+			fprintf(stderr, "QUERY_VMAS iteration exceeded sane pass count\n");
+			return -1;
+		}
+	}
+
+	if (!saw_force_read || !saw_file || total < 4) {
+		fprintf(stderr,
+			"QUERY_VMAS iteration missing targets force=%d file=%d total=%u\n",
+			saw_force_read, saw_file, total);
+		return -1;
+	}
+
+	printf("selftest vma iteration ok passes=%u total=%u\n", passes, total);
+	return 0;
+}
+
+static int verify_vma_query(int session_fd, const struct child_info *info)
+{
+	struct vma_query_buffer buf = { 0 };
+	struct lkmdbg_vma_entry entry;
+	char name[256];
+	int ret = -1;
+
+	buf.entries = calloc(VMA_QUERY_BATCH, sizeof(*buf.entries));
+	buf.names = calloc(1, VMA_QUERY_NAMES_SIZE);
+	if (!buf.entries || !buf.names) {
+		fprintf(stderr, "VMA query allocation failed\n");
+		goto out;
+	}
+
+	memset(&entry, 0, sizeof(entry));
+	memset(name, 0, sizeof(name));
+	if (lookup_target_vma(session_fd, info->force_read_addr, &buf, &entry, name,
+			      sizeof(name)) < 0)
+		goto out;
+
+	if (!(entry.flags & LKMDBG_VMA_FLAG_ANON) ||
+	    (entry.prot & (LKMDBG_VMA_PROT_READ | LKMDBG_VMA_PROT_WRITE |
+			   LKMDBG_VMA_PROT_EXEC)) != 0 ||
+	    !(entry.prot & (LKMDBG_VMA_PROT_MAYREAD |
+			    LKMDBG_VMA_PROT_MAYWRITE))) {
+		fprintf(stderr,
+			"force_read VMA flags/prot mismatch flags=0x%x prot=0x%x\n",
+			entry.flags, entry.prot);
+		goto out;
+	}
+
+	memset(&entry, 0, sizeof(entry));
+	memset(name, 0, sizeof(name));
+	if (lookup_target_vma(session_fd, info->file_addr, &buf, &entry, name,
+			      sizeof(name)) < 0)
+		goto out;
+
+	if (!(entry.flags & LKMDBG_VMA_FLAG_FILE) ||
+	    entry.inode != info->file_inode ||
+	    entry.dev_major != info->file_dev_major ||
+	    entry.dev_minor != info->file_dev_minor ||
+	    !entry.name_size || strstr(name, "lkmdbg-vma") == NULL) {
+		fprintf(stderr,
+			"file VMA mismatch flags=0x%x inode=%" PRIu64 " dev=%u:%u name=%s\n",
+			entry.flags, (uint64_t)entry.inode, entry.dev_major,
+			entry.dev_minor,
+			name);
+		goto out;
+	}
+
+	if (verify_vma_iteration(session_fd, info, &buf) < 0)
+		goto out;
+
+	printf("selftest vma query ok file=%s inode=%" PRIu64 " dev=%u:%u\n",
+	       name, (uint64_t)info->file_inode, info->file_dev_major,
+	       info->file_dev_minor);
+	ret = 0;
+
+out:
+	free(buf.names);
+	free(buf.entries);
+	return ret;
+}
+
+static void print_vma_prot(uint32_t prot, char out[7])
+{
+	out[0] = (prot & LKMDBG_VMA_PROT_READ) ? 'r' : '-';
+	out[1] = (prot & LKMDBG_VMA_PROT_WRITE) ? 'w' : '-';
+	out[2] = (prot & LKMDBG_VMA_PROT_EXEC) ? 'x' : '-';
+	out[3] = (prot & LKMDBG_VMA_PROT_MAYREAD) ? 'R' : '-';
+	out[4] = (prot & LKMDBG_VMA_PROT_MAYWRITE) ? 'W' : '-';
+	out[5] = (prot & LKMDBG_VMA_PROT_MAYEXEC) ? 'X' : '-';
+	out[6] = '\0';
+}
+
+static int dump_target_vmas(int session_fd)
+{
+	struct vma_query_buffer buf = { 0 };
+	uint64_t cursor = 0;
+	int ret = -1;
+
+	buf.entries = calloc(VMA_QUERY_BATCH, sizeof(*buf.entries));
+	buf.names = calloc(1, VMA_QUERY_NAMES_SIZE);
+	if (!buf.entries || !buf.names) {
+		fprintf(stderr, "VMA dump allocation failed\n");
+		goto out;
+	}
+
+	for (;;) {
+		struct lkmdbg_vma_query_request reply;
+		unsigned int i;
+
+		if (query_target_vmas(session_fd, cursor, &buf, &reply) < 0)
+			goto out;
+
+		for (i = 0; i < reply.entries_filled; i++) {
+			const struct lkmdbg_vma_entry *entry = &buf.entries[i];
+			const char *name = vma_name_ptr(&reply, entry, &buf);
+			char prot[7];
+
+			print_vma_prot(entry->prot, prot);
+			printf("%016" PRIx64 "-%016" PRIx64 " %s flags=%08x vm=%016" PRIx64
+			       " pgoff=%" PRIu64 " inode=%" PRIu64 " dev=%u:%u %s\n",
+			       (uint64_t)entry->start_addr,
+			       (uint64_t)entry->end_addr, prot, entry->flags,
+			       (uint64_t)entry->vm_flags_raw,
+			       (uint64_t)entry->pgoff,
+			       (uint64_t)entry->inode,
+			       entry->dev_major, entry->dev_minor, name);
+		}
+
+		if (reply.done) {
+			ret = 0;
+			break;
+		}
+
+		if (reply.next_addr <= cursor) {
+			fprintf(stderr, "VMA dump cursor stalled\n");
+			goto out;
+		}
+		cursor = reply.next_addr;
+	}
+
+out:
+	free(buf.names);
+	free(buf.entries);
+	return ret;
+}
+
 static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
 					 const char *payload)
 {
@@ -373,6 +669,9 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	void *force_read_map;
 	char *force_write_map;
 	unsigned char *large_map;
+	void *file_map;
+	int file_fd;
+	struct stat st;
 	size_t page_size;
 	unsigned int i;
 
@@ -405,6 +704,20 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	if (large_map == MAP_FAILED)
 		return 2;
 
+	file_fd = memfd_create("lkmdbg-vma", MFD_CLOEXEC);
+	if (file_fd < 0)
+		return 2;
+
+	if (ftruncate(file_fd, (off_t)page_size) < 0)
+		return 2;
+
+	file_map = mmap(NULL, page_size, PROT_READ, MAP_PRIVATE, file_fd, 0);
+	if (file_map == MAP_FAILED)
+		return 2;
+
+	if (fstat(file_fd, &st) < 0)
+		return 2;
+
 	for (i = 0; i < SELFTEST_THREAD_COUNT; i++) {
 		snprintf(slots_map + (i * SELFTEST_SLOT_SIZE), SELFTEST_SLOT_SIZE,
 			 "slot-%u-initial", i);
@@ -430,6 +743,10 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	info.force_read_addr = (uintptr_t)force_read_map;
 	info.force_write_addr = (uintptr_t)force_write_map;
 	info.large_addr = (uintptr_t)large_map;
+	info.file_addr = (uintptr_t)file_map;
+	info.file_inode = (uint64_t)st.st_ino;
+	info.file_dev_major = (uint32_t)major(st.st_dev);
+	info.file_dev_minor = (uint32_t)minor(st.st_dev);
 	info.page_size = (uint32_t)page_size;
 	info.slot_size = SELFTEST_SLOT_SIZE;
 	info.slot_count = SELFTEST_THREAD_COUNT;
@@ -528,8 +845,9 @@ static void usage(const char *prog)
 		"Usage:\n"
 		"  %s selftest\n"
 		"  %s read <pid> <remote_addr_hex> <length>\n"
+		"  %s vmas <pid>\n"
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
-		prog, prog, prog);
+		prog, prog, prog, prog);
 }
 
 static int run_selftest(const char *prog)
@@ -603,12 +921,13 @@ static int run_selftest(const char *prog)
 		return 1;
 	}
 
-	printf("selftest child pid=%d basic=0x%llx slots=0x%llx nofault=0x%llx force_read=0x%llx force_write=0x%llx\n",
+	printf("selftest child pid=%d basic=0x%llx slots=0x%llx nofault=0x%llx force_read=0x%llx force_write=0x%llx file=0x%llx\n",
 	       child, (unsigned long long)info.basic_addr,
 	       (unsigned long long)info.slots_addr,
 	       (unsigned long long)info.nofault_addr,
 	       (unsigned long long)info.force_read_addr,
-	       (unsigned long long)info.force_write_addr);
+	       (unsigned long long)info.force_write_addr,
+	       (unsigned long long)info.file_addr);
 
 	session_fd = open_session_fd();
 	if (session_fd < 0) {
@@ -878,6 +1197,16 @@ static int run_selftest(const char *prog)
 
 	printf("selftest force-read and force-write on protected present pages ok\n");
 
+	if (verify_vma_query(session_fd, &info) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
 	if (expect_partial_write_progress(session_fd, info.basic_addr,
 					  partial_payload) < 0) {
 		close(session_fd);
@@ -1090,13 +1419,14 @@ int main(int argc, char **argv)
 {
 	int session_fd;
 	pid_t pid;
-	uintptr_t remote_addr;
+	uintptr_t remote_addr = 0;
 	char *endp;
+	int needs_remote_addr;
 
 	if (argc == 2 && strcmp(argv[1], "selftest") == 0)
 		return run_selftest(argv[0]);
 
-	if (argc < 5) {
+	if (argc < 3) {
 		usage(argv[0]);
 		return 1;
 	}
@@ -1107,10 +1437,19 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	remote_addr = (uintptr_t)strtoull(argv[3], &endp, 16);
-	if (*endp != '\0') {
-		fprintf(stderr, "invalid remote address: %s\n", argv[3]);
-		return 1;
+	needs_remote_addr = strcmp(argv[1], "read") == 0 ||
+			    strcmp(argv[1], "write") == 0;
+	if (needs_remote_addr) {
+		if (argc < 5) {
+			usage(argv[0]);
+			return 1;
+		}
+
+		remote_addr = (uintptr_t)strtoull(argv[3], &endp, 16);
+		if (*endp != '\0') {
+			fprintf(stderr, "invalid remote address: %s\n", argv[3]);
+			return 1;
+		}
 	}
 
 	session_fd = open_session_fd();
@@ -1159,6 +1498,11 @@ int main(int argc, char **argv)
 
 		if (write_target_memory(session_fd, remote_addr, data, len, NULL,
 					1) < 0) {
+			close(session_fd);
+			return 1;
+		}
+	} else if (strcmp(argv[1], "vmas") == 0) {
+		if (dump_target_vmas(session_fd) < 0) {
 			close(session_fd);
 			return 1;
 		}

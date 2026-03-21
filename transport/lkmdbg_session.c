@@ -221,6 +221,8 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_mem_read(session, argp);
 	case LKMDBG_IOC_WRITE_MEM:
 		return lkmdbg_mem_write(session, argp);
+	case LKMDBG_IOC_QUERY_VMAS:
+		return lkmdbg_vma_query(session, argp);
 	default:
 		return -ENOTTY;
 	}

@@ -137,9 +137,12 @@ ssize_t lkmdbg_session_read(struct file *file, char __user *buf, size_t count,
 			   loff_t *ppos);
 __poll_t lkmdbg_session_poll(struct file *file, poll_table *wait);
 void lkmdbg_session_broadcast_event(u32 type, u64 value0, u64 value1);
+int lkmdbg_get_target_mm(struct lkmdbg_session *session,
+			 struct mm_struct **mm_out);
 long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_read(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_write(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp);
 #ifdef CONFIG_COMPAT
 long lkmdbg_session_compat_ioctl(struct file *file, unsigned int cmd,
 				 unsigned long arg);

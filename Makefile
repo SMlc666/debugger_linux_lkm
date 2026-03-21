@@ -20,7 +20,9 @@ lkmdbg-transport-y := \
 	transport/lkmdbg_transport_proc.o
 
 lkmdbg-mem-y := \
-	mem/lkmdbg_mem.o
+	mem/lkmdbg_mem.o \
+	mem/lkmdbg_target.o \
+	mem/lkmdbg_vma.o
 
 lkmdbg-ui-y := \
 	ui/lkmdbg_debugfs.o

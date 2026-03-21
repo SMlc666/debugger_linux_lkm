@@ -15,6 +15,21 @@
 #define LKMDBG_EVENT_HOOK_REMOVED 17
 #define LKMDBG_EVENT_HOOK_HIT 18
 
+#define LKMDBG_VMA_PROT_READ 0x00000001U
+#define LKMDBG_VMA_PROT_WRITE 0x00000002U
+#define LKMDBG_VMA_PROT_EXEC 0x00000004U
+#define LKMDBG_VMA_PROT_MAYREAD 0x00000008U
+#define LKMDBG_VMA_PROT_MAYWRITE 0x00000010U
+#define LKMDBG_VMA_PROT_MAYEXEC 0x00000020U
+
+#define LKMDBG_VMA_FLAG_ANON 0x00000001U
+#define LKMDBG_VMA_FLAG_FILE 0x00000002U
+#define LKMDBG_VMA_FLAG_SHARED 0x00000004U
+#define LKMDBG_VMA_FLAG_STACK 0x00000008U
+#define LKMDBG_VMA_FLAG_HEAP 0x00000010U
+#define LKMDBG_VMA_FLAG_PFNMAP 0x00000020U
+#define LKMDBG_VMA_FLAG_IO 0x00000040U
+
 struct lkmdbg_open_session_request {
 	__u32 version;
 	__u32 size;
@@ -68,6 +83,36 @@ struct lkmdbg_mem_request {
 	__u64 bytes_done;
 };
 
+struct lkmdbg_vma_entry {
+	__u64 start_addr;
+	__u64 end_addr;
+	__u64 pgoff;
+	__u64 inode;
+	__u64 vm_flags_raw;
+	__u32 prot;
+	__u32 flags;
+	__u32 dev_major;
+	__u32 dev_minor;
+	__u32 name_offset;
+	__u32 name_size;
+};
+
+struct lkmdbg_vma_query_request {
+	__u32 version;
+	__u32 size;
+	__u64 start_addr;
+	__u64 entries_addr;
+	__u32 max_entries;
+	__u32 flags;
+	__u64 names_addr;
+	__u32 names_size;
+	__u32 entries_filled;
+	__u32 names_used;
+	__u32 done;
+	__u32 reserved0;
+	__u64 next_addr;
+};
+
 struct lkmdbg_event_record {
 	__u32 version;
 	__u32 type;
@@ -90,5 +135,7 @@ struct lkmdbg_event_record {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x11, struct lkmdbg_mem_request)
 #define LKMDBG_IOC_WRITE_MEM \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x12, struct lkmdbg_mem_request)
+#define LKMDBG_IOC_QUERY_VMAS \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x13, struct lkmdbg_vma_query_request)
 
 #endif
