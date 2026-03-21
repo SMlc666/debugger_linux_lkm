@@ -146,11 +146,14 @@ int main(void)
 	static const struct {
 		const char *params;
 		const char *status_line;
+		bool expect_installed;
 	} selftests[] = {
-		{ "hook_selftest_mode=1", "hook_selftest_enabled=1\n" },
-		{ "hook_selftest_mode=2", "hook_selftest_exec_pool_ready=1\n" },
-		{ "hook_selftest_mode=3", "hook_selftest_exec_allocated=1\n" },
-		{ "hook_selftest_mode=4", "hook_selftest_exec_ready=1\n" },
+		{ "hook_selftest_mode=1", "hook_selftest_enabled=1\n", false },
+		{ "hook_selftest_mode=2", "hook_selftest_exec_pool_ready=1\n", false },
+		{ "hook_selftest_mode=3", "hook_selftest_exec_allocated=1\n", false },
+		{ "hook_selftest_mode=4", "hook_selftest_exec_ready=1\n", false },
+		{ "hook_selftest_mode=5", "hook_selftest_exec_ready=1\n", true },
+		{ "hook_selftest_mode=6", "hook_selftest_actual=", true },
 	};
 	char version_buf[4096];
 	size_t i;
@@ -174,7 +177,10 @@ int main(void)
 	for (i = 0; i < sizeof(selftests) / sizeof(selftests[0]); i++) {
 		qemu_insmod(selftests[i].params);
 		qemu_expect_status_line(selftests[i].status_line);
-		qemu_expect_status_line("hook_selftest_installed=0\n");
+		if (selftests[i].expect_installed)
+			qemu_expect_status_line("hook_selftest_installed=1\n");
+		else
+			qemu_expect_status_line("hook_selftest_installed=0\n");
 		qemu_rmmod();
 	}
 
