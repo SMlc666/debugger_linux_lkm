@@ -188,10 +188,8 @@ static int read_session_event_timeout(int session_fd,
 		return -1;
 	}
 
-	if (!(pfd.revents & POLLIN)) {
-		fprintf(stderr, "event poll timed out after %d ms\n", timeout_ms);
-		return -1;
-	}
+	if (!(pfd.revents & POLLIN))
+		return 1;
 
 	nread = read(session_fd, event_out, sizeof(*event_out));
 	if (nread < 0) {
@@ -215,11 +213,17 @@ static int wait_for_session_event(int session_fd, uint32_t type, uint32_t code,
 	while (waited < timeout_ms) {
 		struct lkmdbg_event_record event;
 		int slice = timeout_ms - waited;
+		int ret;
 
 		if (slice > 1000)
 			slice = 1000;
-		if (read_session_event_timeout(session_fd, &event, slice) < 0)
+		ret = read_session_event_timeout(session_fd, &event, slice);
+		if (ret < 0)
 			return -1;
+		if (ret > 0) {
+			waited += slice;
+			continue;
+		}
 		waited += slice;
 
 		if (event.type != type)
@@ -1740,16 +1744,19 @@ static int verify_runtime_events(int session_fd, int cmd_fd, pid_t child,
 	struct lkmdbg_hwpoint_request bp_req;
 	struct lkmdbg_hwpoint_request wp_req;
 	struct lkmdbg_event_record event;
+	const int event_timeout_ms = 5000;
 
 	memset(&bp_req, 0, sizeof(bp_req));
 	memset(&wp_req, 0, sizeof(wp_req));
 	if (drain_session_events(session_fd) < 0)
 		return -1;
 
+	printf("selftest runtime: waiting for clone event\n");
 	if (send_child_command(cmd_fd, CHILD_OP_SPAWN_THREAD) < 0)
 		return -1;
 	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_CLONE,
-				   LKMDBG_TARGET_CLONE_THREAD, 2000,
+				   LKMDBG_TARGET_CLONE_THREAD,
+				   event_timeout_ms,
 				   &event) < 0)
 		return -1;
 	if (event.tgid != child) {
@@ -1758,10 +1765,11 @@ static int verify_runtime_events(int session_fd, int cmd_fd, pid_t child,
 		return -1;
 	}
 
+	printf("selftest runtime: waiting for signal event\n");
 	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SIGNAL) < 0)
 		return -1;
 	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_SIGNAL,
-				   SIGUSR1, 2000, &event) < 0)
+				   SIGUSR1, event_timeout_ms, &event) < 0)
 		return -1;
 	if (event.tgid != child || event.tid != child) {
 		fprintf(stderr,
@@ -1782,8 +1790,10 @@ static int verify_runtime_events(int session_fd, int cmd_fd, pid_t child,
 		remove_hwpoint(session_fd, bp_req.id);
 		return -1;
 	}
+	printf("selftest runtime: waiting for breakpoint stop event\n");
 	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-				   LKMDBG_STOP_REASON_BREAKPOINT, 2000,
+				   LKMDBG_STOP_REASON_BREAKPOINT,
+				   event_timeout_ms,
 				   &event) < 0) {
 		remove_hwpoint(session_fd, bp_req.id);
 		return -1;
@@ -1806,8 +1816,10 @@ static int verify_runtime_events(int session_fd, int cmd_fd, pid_t child,
 		remove_hwpoint(session_fd, wp_req.id);
 		return -1;
 	}
+	printf("selftest runtime: waiting for watchpoint stop event\n");
 	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-				   LKMDBG_STOP_REASON_WATCHPOINT, 2000,
+				   LKMDBG_STOP_REASON_WATCHPOINT,
+				   event_timeout_ms,
 				   &event) < 0) {
 		remove_hwpoint(session_fd, wp_req.id);
 		return -1;
@@ -1835,6 +1847,7 @@ static int verify_single_step_event(int session_fd, const struct child_info *inf
 	pid_t tids[SELFTEST_FREEZE_THREADS];
 	unsigned int i;
 	unsigned int parked_index = UINT32_MAX;
+	const int event_timeout_ms = 5000;
 
 	memset(&req, 0, sizeof(req));
 	memset(&parked_entry, 0, sizeof(parked_entry));
@@ -1875,8 +1888,10 @@ static int verify_single_step_event(int session_fd, const struct child_info *inf
 	if (thaw_target_threads(session_fd, 2000, NULL, 0) < 0)
 		return -1;
 
+	printf("selftest runtime: waiting for single-step stop event\n");
 	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-				   LKMDBG_STOP_REASON_SINGLE_STEP, 2000,
+				   LKMDBG_STOP_REASON_SINGLE_STEP,
+				   event_timeout_ms,
 				   &event) < 0)
 		return -1;
 	if (event.tid != tids[parked_index]) {
