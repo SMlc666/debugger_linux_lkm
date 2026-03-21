@@ -157,6 +157,9 @@ jobs:
           ccache "$TOOLCHAIN/${TARGET}-clang" -O2 -Wall -Wextra -pthread \
             -o "$GITHUB_WORKSPACE/out/android14-6.1/lkmdbg_mem_test" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_mem_test.c"
+          ccache "$TOOLCHAIN/${TARGET}-clang" -O2 -Wall -Wextra -pthread \
+            -o "$GITHUB_WORKSPACE/out/android14-6.1/lkmdbg_mmu_test" \
+            "$GITHUB_WORKSPACE/tools/lkmdbg_mmu_test.c"
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
@@ -166,6 +169,7 @@ jobs:
             lkmdbg.ko
             out/android14-6.1/lkmdbg_open_session
             out/android14-6.1/lkmdbg_mem_test
+            out/android14-6.1/lkmdbg_mmu_test
           if-no-files-found: error
 
       - name: Show ccache stats
@@ -284,6 +288,9 @@ jobs:
           ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
             -o "$RUNNER_TEMP/lkmdbg_mem_test" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_mem_test.c"
+          ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
+            -o "$RUNNER_TEMP/lkmdbg_mmu_test" \
+            "$GITHUB_WORKSPACE/tools/lkmdbg_mmu_test.c"
           mkdir -p "$INITRAMFS_DIR/dev" "$INITRAMFS_DIR/proc" \
             "$INITRAMFS_DIR/sys" "$INITRAMFS_DIR/sys/kernel" \
             "$INITRAMFS_DIR/sys/kernel/debug"
@@ -295,6 +302,8 @@ jobs:
             "$INITRAMFS_DIR/lkmdbg_open_session"
           install -m 0755 "$RUNNER_TEMP/lkmdbg_mem_test" \
             "$INITRAMFS_DIR/lkmdbg_mem_test"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_mmu_test" \
+            "$INITRAMFS_DIR/lkmdbg_mmu_test"
           cp "$GITHUB_WORKSPACE/lkmdbg.ko" "$INITRAMFS_DIR/lkmdbg.ko"
           (
             cd "$INITRAMFS_DIR"

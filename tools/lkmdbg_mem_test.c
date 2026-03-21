@@ -1913,6 +1913,9 @@ static int set_named_arm64_reg(struct lkmdbg_thread_regs_request *req,
 
 static int parse_hwpoint_type(const char *arg, uint32_t *type_out)
 {
+	uint32_t type = 0;
+	const char *p;
+
 	if (strcmp(arg, "r") == 0) {
 		*type_out = LKMDBG_HWPOINT_TYPE_READ;
 		return 0;
@@ -1930,7 +1933,27 @@ static int parse_hwpoint_type(const char *arg, uint32_t *type_out)
 		return 0;
 	}
 
-	return -1;
+	for (p = arg; *p; p++) {
+		switch (*p) {
+		case 'r':
+			type |= LKMDBG_HWPOINT_TYPE_READ;
+			break;
+		case 'w':
+			type |= LKMDBG_HWPOINT_TYPE_WRITE;
+			break;
+		case 'x':
+			type |= LKMDBG_HWPOINT_TYPE_EXEC;
+			break;
+		default:
+			return -1;
+		}
+	}
+
+	if (!type)
+		return -1;
+
+	*type_out = type;
+	return 0;
 }
 
 static int parse_hwpoint_flags(const char *arg, uint32_t *flags_out)
@@ -2631,7 +2654,7 @@ static void usage(const char *prog)
 		"  %s threads <pid>\n"
 		"  %s getregs <pid> <tid>\n"
 		"  %s setreg <pid> <tid> <reg> <value_hex>\n"
-		"  %s hwadd <pid> <tid> <r|w|rw|x> <addr_hex> <len> [stop|counter|mmu|flags]\n"
+		"  %s hwadd <pid> <tid> <r|w|rw|x|rx|wx|rwx> <addr_hex> <len> [stop|counter|mmu|flags]\n"
 		"  %s hwdel <pid> <id>\n"
 		"  %s hwrearm <pid> <id>\n"
 		"  %s hwlist <pid>\n"

@@ -26,6 +26,7 @@
 #define MODULE_NAME "lkmdbg"
 #define OPEN_SESSION_TOOL "/lkmdbg_open_session"
 #define MEM_TEST_TOOL "/lkmdbg_mem_test"
+#define MMU_TEST_TOOL "/lkmdbg_mmu_test"
 #define WATCHPOINT_CTRL_TOOL "/qemu_watchpoint_control"
 
 static void qemu_poweroff(void)
@@ -277,6 +278,7 @@ int main(void)
 	unsigned int iter;
 	char *const open_session_argv[] = { OPEN_SESSION_TOOL, NULL };
 	char *const mem_test_argv[] = { MEM_TEST_TOOL, "selftest", NULL };
+	char *const mmu_test_argv[] = { MMU_TEST_TOOL, "selftest", NULL };
 	char *const watchpoint_ctrl_argv[] = { WATCHPOINT_CTRL_TOOL, NULL };
 	int watchpoint_ctrl_status;
 
@@ -326,6 +328,7 @@ int main(void)
 	qemu_expect_status_u64_at_least("proc_open_successes=", 1);
 	qemu_run_tool(open_session_argv);
 	qemu_run_tool(mem_test_argv);
+	qemu_run_tool(mmu_test_argv);
 	printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
 	       qemu_read_status_u64("hwpoint_callback_total="),
 	       qemu_read_status_u64("breakpoint_callback_total="),
