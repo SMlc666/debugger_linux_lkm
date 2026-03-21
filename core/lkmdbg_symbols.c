@@ -3,6 +3,26 @@
 
 #include "lkmdbg_internal.h"
 
+static unsigned long lkmdbg_lookup_runtime_symbol(const char *name)
+{
+	struct kprobe kp = {
+		.symbol_name = name,
+	};
+	unsigned long addr = 0;
+
+	if (lkmdbg_symbols.kallsyms_lookup_name)
+		addr = lkmdbg_symbols.kallsyms_lookup_name(name);
+	if (addr)
+		return addr;
+
+	if (register_kprobe(&kp))
+		return 0;
+
+	addr = (unsigned long)kp.addr;
+	unregister_kprobe(&kp);
+	return addr;
+}
+
 static int lkmdbg_resolve_runtime_symbols(void)
 {
 	static struct kprobe kp = {
@@ -103,15 +123,15 @@ static int lkmdbg_resolve_runtime_symbols(void)
 	if (addr)
 		lkmdbg_symbols.user_disable_single_step_sym = addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("for_each_kernel_tracepoint");
+	addr = lkmdbg_lookup_runtime_symbol("for_each_kernel_tracepoint");
 	if (addr)
 		lkmdbg_symbols.for_each_kernel_tracepoint_sym = addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("tracepoint_probe_register");
+	addr = lkmdbg_lookup_runtime_symbol("tracepoint_probe_register");
 	if (addr)
 		lkmdbg_symbols.tracepoint_probe_register_sym = addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("tracepoint_probe_unregister");
+	addr = lkmdbg_lookup_runtime_symbol("tracepoint_probe_unregister");
 	if (addr)
 		lkmdbg_symbols.tracepoint_probe_unregister_sym = addr;
 
