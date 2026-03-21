@@ -37,7 +37,7 @@ struct lkmdbg_symbols lkmdbg_symbols;
 static struct lkmdbg_inline_hook *lkmdbg_selftest_hook;
 static u64 (*lkmdbg_selftest_orig)(u64 value);
 
-static noinline u64 lkmdbg_selftest_target(u64 value)
+static noinline __aligned(PAGE_SIZE) u64 lkmdbg_selftest_target(u64 value)
 {
 	if (value & 1)
 		value += 3;
@@ -49,7 +49,7 @@ static noinline u64 lkmdbg_selftest_target(u64 value)
 	return value;
 }
 
-static noinline u64 lkmdbg_selftest_replacement(u64 value)
+static noinline __aligned(PAGE_SIZE) u64 lkmdbg_selftest_replacement(u64 value)
 {
 	u64 original;
 

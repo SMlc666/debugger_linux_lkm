@@ -1,10 +1,14 @@
+#include <asm/pgtable.h>
+#include <asm/tlbflush.h>
 #include <linux/cpu.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
+#include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
 #include <linux/stop_machine.h>
+#include <linux/vmalloc.h>
 
 #include "kp_hook.h"
 #include "lkmdbg_internal.h"
@@ -26,24 +30,100 @@ struct lkmdbg_patch_ctx {
 
 static LIST_HEAD(lkmdbg_hook_list);
 static DEFINE_MUTEX(lkmdbg_hook_lock);
+static void *lkmdbg_alias_page;
+static pte_t *lkmdbg_alias_ptep;
+static pte_t lkmdbg_alias_pte;
+
+static pte_t *lkmdbg_lookup_kernel_pte(unsigned long addr)
+{
+	pgd_t *pgdp;
+	p4d_t *p4dp;
+	pud_t *pudp;
+	pmd_t *pmdp;
+
+	pgdp = pgd_offset_k(addr);
+	if (pgd_none(*pgdp) || pgd_bad(*pgdp))
+		return NULL;
+
+	p4dp = p4d_offset(pgdp, addr);
+	if (p4d_none(*p4dp) || p4d_bad(*p4dp))
+		return NULL;
+
+	pudp = pud_offset(p4dp, addr);
+	if (pud_none(*pudp) || pud_bad(*pudp) || pud_sect(*pudp))
+		return NULL;
+
+	pmdp = pmd_offset(pudp, addr);
+	if (pmd_none(*pmdp) || pmd_bad(*pmdp) || pmd_sect(*pmdp))
+		return NULL;
+
+	return pte_offset_kernel(pmdp, addr);
+}
+
+static phys_addr_t lkmdbg_text_phys_base(void *addr)
+{
+	unsigned long base = (unsigned long)addr & PAGE_MASK;
+	struct page *page;
+
+	if (is_vmalloc_or_module_addr((const void *)base)) {
+		page = vmalloc_to_page((const void *)base);
+		if (!page)
+			return 0;
+		return page_to_phys(page);
+	}
+
+	return __pa_symbol(base);
+}
+
+static int lkmdbg_alias_map_page(void *addr, void **alias_out)
+{
+	unsigned long offset;
+	phys_addr_t phys;
+	pte_t new_pte;
+
+	if (!lkmdbg_alias_page || !lkmdbg_alias_ptep)
+		return -EOPNOTSUPP;
+
+	phys = lkmdbg_text_phys_base(addr);
+	if (!phys)
+		return -EFAULT;
+
+	new_pte = pfn_pte(PHYS_PFN(phys), pte_pgprot(lkmdbg_alias_pte));
+	set_pte(lkmdbg_alias_ptep, new_pte);
+	flush_tlb_kernel_range((unsigned long)lkmdbg_alias_page,
+			       (unsigned long)lkmdbg_alias_page + PAGE_SIZE);
+
+	offset = (unsigned long)addr & ~PAGE_MASK;
+	*alias_out = (void *)((unsigned long)lkmdbg_alias_page + offset);
+	return 0;
+}
+
+static void lkmdbg_alias_unmap_page(void)
+{
+	if (!lkmdbg_alias_page || !lkmdbg_alias_ptep)
+		return;
+
+	set_pte(lkmdbg_alias_ptep, lkmdbg_alias_pte);
+	flush_tlb_kernel_range((unsigned long)lkmdbg_alias_page,
+			       (unsigned long)lkmdbg_alias_page + PAGE_SIZE);
+}
 
 static int lkmdbg_write_text_insn(void *addr, u32 insn)
 {
+	void *alias_addr;
+	int ret;
+
 	if (!lkmdbg_symbols.flush_icache_range)
 		return -ENOENT;
 
-	if (lkmdbg_symbols.aarch64_insn_patch_text_nosync) {
-		if (lkmdbg_symbols.aarch64_insn_patch_text_nosync(addr, insn))
-			return -EIO;
-		return 0;
-	}
+	ret = lkmdbg_alias_map_page(addr, &alias_addr);
+	if (ret)
+		return ret;
 
-	if (!lkmdbg_symbols.aarch64_insn_write)
-		return -ENOENT;
-
-	if (lkmdbg_symbols.aarch64_insn_write(addr, insn))
-		return -EIO;
-
+	WRITE_ONCE(*(u32 *)alias_addr, insn);
+	lkmdbg_symbols.flush_icache_range((unsigned long)addr,
+					  (unsigned long)addr + sizeof(insn));
+	lkmdbg_alias_unmap_page();
 	return 0;
 }
 
@@ -85,6 +165,24 @@ static int lkmdbg_patch_target_words(void *addr, const u32 *insns, u32 words)
 
 int lkmdbg_hooks_init(void)
 {
+	lkmdbg_alias_page = vmalloc(PAGE_SIZE);
+	if (!lkmdbg_alias_page) {
+		pr_warn("lkmdbg: alias patch page allocation failed\n");
+		return 0;
+	}
+
+	lkmdbg_alias_ptep = lkmdbg_lookup_kernel_pte((unsigned long)lkmdbg_alias_page);
+	if (!lkmdbg_alias_ptep) {
+		pr_warn("lkmdbg: alias patch pte lookup failed alias=%px\n",
+			lkmdbg_alias_page);
+		vfree(lkmdbg_alias_page);
+		lkmdbg_alias_page = NULL;
+		return 0;
+	}
+
+	lkmdbg_alias_pte = READ_ONCE(*lkmdbg_alias_ptep);
+	pr_info("lkmdbg: alias patch backend ready alias=%px pte=%px\n",
+		lkmdbg_alias_page, lkmdbg_alias_ptep);
 	return 0;
 }
 
@@ -101,6 +199,13 @@ void lkmdbg_hooks_exit(void)
 		mutex_lock(&lkmdbg_hook_lock);
 	}
 	mutex_unlock(&lkmdbg_hook_lock);
+
+	if (lkmdbg_alias_page) {
+		lkmdbg_alias_unmap_page();
+		vfree(lkmdbg_alias_page);
+		lkmdbg_alias_page = NULL;
+		lkmdbg_alias_ptep = NULL;
+	}
 }
 
 int lkmdbg_hooks_prepare_exec_pool(void)
@@ -188,8 +293,7 @@ int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
 		return -EALREADY;
 
 	pr_info("lkmdbg: kp hook patch backend=%s target=%px origin=%px\n",
-		lkmdbg_symbols.aarch64_insn_patch_text_nosync ?
-		"aarch64_insn_patch_text_nosync" : "aarch64_insn_write",
+		lkmdbg_alias_page ? "alias-vmalloc" : "unavailable",
 		hook->target, hook->origin);
 
 	ret = lkmdbg_patch_target_words((void *)hook->core.origin_addr,
