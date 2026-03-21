@@ -296,7 +296,8 @@ static int set_target_regs(int session_fd,
 }
 
 static int add_hwpoint(int session_fd, pid_t tid, uint64_t addr, uint32_t type,
-		       uint32_t len, struct lkmdbg_hwpoint_request *reply_out)
+		       uint32_t len, uint32_t flags,
+		       struct lkmdbg_hwpoint_request *reply_out)
 {
 	struct lkmdbg_hwpoint_request req = {
 		.version = LKMDBG_PROTO_VERSION,
@@ -305,6 +306,7 @@ static int add_hwpoint(int session_fd, pid_t tid, uint64_t addr, uint32_t type,
 		.tid = tid,
 		.type = type,
 		.len = len,
+		.flags = flags,
 	};
 
 	if (ioctl(session_fd, LKMDBG_IOC_ADD_HWPOINT, &req) < 0) {
@@ -1472,6 +1474,25 @@ static int parse_hwpoint_type(const char *arg, uint32_t *type_out)
 	return -1;
 }
 
+static int parse_hwpoint_flags(const char *arg, uint32_t *flags_out)
+{
+	char *endp = NULL;
+
+	if (strcmp(arg, "stop") == 0 || strcmp(arg, "0") == 0) {
+		*flags_out = 0;
+		return 0;
+	}
+	if (strcmp(arg, "counter") == 0 || strcmp(arg, "count") == 0) {
+		*flags_out = LKMDBG_HWPOINT_FLAG_COUNTER_MODE;
+		return 0;
+	}
+
+	*flags_out = (uint32_t)strtoul(arg, &endp, 0);
+	if (*endp != '\0' || (*flags_out & ~LKMDBG_HWPOINT_FLAG_COUNTER_MODE))
+		return -1;
+	return 0;
+}
+
 static int dump_target_threads(int session_fd)
 {
 	struct lkmdbg_thread_entry entries[THREAD_QUERY_BATCH];
@@ -1788,7 +1809,7 @@ static int verify_runtime_events(int session_fd, int cmd_fd, pid_t child,
 
 breakpoint_checks:
 	if (add_hwpoint(session_fd, child, info->exec_target_addr,
-			LKMDBG_HWPOINT_TYPE_EXEC, 4, &bp_req) < 0)
+			LKMDBG_HWPOINT_TYPE_EXEC, 4, 0, &bp_req) < 0)
 		return -1;
 	if (find_hwpoint_id(session_fd, bp_req.id) < 0) {
 		remove_hwpoint(session_fd, bp_req.id);
@@ -1819,7 +1840,7 @@ breakpoint_checks:
 		return -1;
 
 	if (add_hwpoint(session_fd, child, info->watch_addr,
-			LKMDBG_HWPOINT_TYPE_WRITE, 8, &wp_req) < 0)
+			LKMDBG_HWPOINT_TYPE_WRITE, 8, 0, &wp_req) < 0)
 		return -1;
 	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_WATCH) < 0) {
 		remove_hwpoint(session_fd, wp_req.id);
@@ -1930,7 +1951,7 @@ static void usage(const char *prog)
 		"  %s threads <pid>\n"
 		"  %s getregs <pid> <tid>\n"
 		"  %s setreg <pid> <tid> <reg> <value_hex>\n"
-		"  %s hwadd <pid> <tid> <r|w|rw|x> <addr_hex> <len>\n"
+		"  %s hwadd <pid> <tid> <r|w|rw|x> <addr_hex> <len> [stop|counter|flags]\n"
 		"  %s hwdel <pid> <id>\n"
 		"  %s hwlist <pid>\n"
 		"  %s step <pid> <tid>\n"
@@ -2562,6 +2583,7 @@ int main(int argc, char **argv)
 	uint64_t hwpoint_addr = 0;
 	uint32_t hwpoint_type = 0;
 	uint32_t hwpoint_len = 0;
+	uint32_t hwpoint_flags = 0;
 
 	if (argc == 2 && strcmp(argv[1], "selftest") == 0)
 		return run_selftest(argv[0]);
@@ -2662,6 +2684,12 @@ int main(int argc, char **argv)
 			fprintf(stderr, "invalid hwpoint length: %s\n", argv[6]);
 			return 1;
 		}
+
+		if (argc >= 8 &&
+		    parse_hwpoint_flags(argv[7], &hwpoint_flags) < 0) {
+			fprintf(stderr, "invalid hwpoint flags: %s\n", argv[7]);
+			return 1;
+		}
 	}
 
 	if (strcmp(argv[1], "hwdel") == 0) {
@@ -2737,12 +2765,13 @@ int main(int argc, char **argv)
 
 		memset(&reply, 0, sizeof(reply));
 		if (add_hwpoint(session_fd, tid, hwpoint_addr, hwpoint_type,
-				hwpoint_len, &reply) < 0) {
+				hwpoint_len, hwpoint_flags, &reply) < 0) {
 			close(session_fd);
 			return 1;
 		}
 		printf("hwpoint.id=%" PRIu64 "\n", (uint64_t)reply.id);
 		printf("hwpoint.tid=%d\n", reply.tid);
+		printf("hwpoint.flags=0x%x\n", reply.flags);
 	} else if (strcmp(argv[1], "hwdel") == 0) {
 		if (remove_hwpoint(session_fd, hwpoint_id) < 0) {
 			close(session_fd);
@@ -2765,10 +2794,12 @@ int main(int argc, char **argv)
 			}
 
 			for (i = 0; i < reply.entries_filled; i++) {
-				printf("id=%" PRIu64 " tgid=%d tid=%d type=0x%x len=%u addr=0x%" PRIx64 "\n",
+				printf("id=%" PRIu64 " tgid=%d tid=%d type=0x%x len=%u flags=0x%x state=0x%x hits=%" PRIu64 " addr=0x%" PRIx64 "\n",
 				       (uint64_t)entries[i].id, entries[i].tgid,
 				       entries[i].tid, entries[i].type,
-				       entries[i].len,
+				       entries[i].len, entries[i].flags,
+				       entries[i].state,
+				       (uint64_t)entries[i].hits,
 				       (uint64_t)entries[i].addr);
 			}
 

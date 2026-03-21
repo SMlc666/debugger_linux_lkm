@@ -35,6 +35,7 @@ struct lkmdbg_hwpoint {
 	u32 type;
 	u32 len;
 	u32 flags;
+	atomic64_t hits;
 	atomic_t stop_latched;
 };
 
@@ -92,7 +93,7 @@ static int lkmdbg_validate_hwpoint_request(struct lkmdbg_hwpoint_request *req,
 	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
 		return -EINVAL;
 
-	if (req->flags)
+	if (req->flags & ~LKMDBG_HWPOINT_FLAG_COUNTER_MODE)
 		return -EINVAL;
 
 	if (remove)
@@ -195,11 +196,15 @@ static void lkmdbg_hwpoint_fill_entry(struct lkmdbg_hwpoint_entry *dst,
 	memset(dst, 0, sizeof(*dst));
 	dst->id = src->id;
 	dst->addr = src->addr;
+	dst->hits = atomic64_read(&src->hits);
 	dst->tgid = src->tgid;
 	dst->tid = src->tid;
 	dst->type = src->type;
 	dst->len = src->len;
 	dst->flags = src->flags;
+	dst->state = LKMDBG_HWPOINT_STATE_ACTIVE;
+	if (atomic_read(&src->stop_latched))
+		dst->state |= LKMDBG_HWPOINT_STATE_LATCHED;
 }
 
 static void lkmdbg_hwpoint_event(struct perf_event *bp,
@@ -228,12 +233,15 @@ static void lkmdbg_hwpoint_event(struct perf_event *bp,
 		atomic64_inc(&lkmdbg_state.breakpoint_callback_total);
 	else if (reason == LKMDBG_STOP_REASON_WATCHPOINT)
 		atomic64_inc(&lkmdbg_state.watchpoint_callback_total);
+	atomic64_inc(&entry->hits);
 	WRITE_ONCE(lkmdbg_state.hwpoint_last_tgid, entry->tgid);
 	WRITE_ONCE(lkmdbg_state.hwpoint_last_tid, current->pid);
 	WRITE_ONCE(lkmdbg_state.hwpoint_last_reason, reason);
 	WRITE_ONCE(lkmdbg_state.hwpoint_last_type, entry->type);
 	WRITE_ONCE(lkmdbg_state.hwpoint_last_addr, addr);
 	WRITE_ONCE(lkmdbg_state.hwpoint_last_ip, ip);
+	if (entry->flags & LKMDBG_HWPOINT_FLAG_COUNTER_MODE)
+		return;
 	if (atomic_xchg(&entry->stop_latched, 1))
 		return;
 
@@ -282,6 +290,7 @@ static int lkmdbg_register_hwpoint(struct lkmdbg_session *session,
 	entry->type = req->type;
 	entry->len = req->len;
 	entry->flags = req->flags;
+	atomic64_set(&entry->hits, 0);
 	atomic_set(&entry->stop_latched, 0);
 	put_task_struct(task);
 

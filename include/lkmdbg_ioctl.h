@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 2
+#define LKMDBG_PROTO_VERSION 3
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 2
 
@@ -44,6 +44,11 @@
 #define LKMDBG_HWPOINT_TYPE_READWRITE \
 	(LKMDBG_HWPOINT_TYPE_READ | LKMDBG_HWPOINT_TYPE_WRITE)
 #define LKMDBG_HWPOINT_TYPE_EXEC 0x00000004U
+
+#define LKMDBG_HWPOINT_FLAG_COUNTER_MODE 0x00000001U
+
+#define LKMDBG_HWPOINT_STATE_ACTIVE 0x00000001U
+#define LKMDBG_HWPOINT_STATE_LATCHED 0x00000002U
 
 #define LKMDBG_VMA_PROT_READ 0x00000001U
 #define LKMDBG_VMA_PROT_WRITE 0x00000002U
@@ -206,12 +211,13 @@ struct lkmdbg_hwpoint_request {
 struct lkmdbg_hwpoint_entry {
 	__u64 id;
 	__u64 addr;
+	__u64 hits;
 	__s32 tgid;
 	__s32 tid;
 	__u32 type;
 	__u32 len;
 	__u32 flags;
-	__u32 reserved0;
+	__u32 state;
 };
 
 struct lkmdbg_hwpoint_query_request {
