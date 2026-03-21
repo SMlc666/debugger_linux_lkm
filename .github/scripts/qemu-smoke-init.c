@@ -219,9 +219,11 @@ int main(void)
 	}
 
 	qemu_insmod("hook_proc_version=1");
+	qemu_expect_status_u64_at_least("inline_hook_active=", 1);
 	qemu_read_file("/proc/version", version_buf, sizeof(version_buf));
 	qemu_check(version_buf[0] != '\0', "empty_proc_version");
 	qemu_expect_status_line("proc_version_hook_active=1\n");
+	qemu_expect_status_u64_at_least("proc_open_successes=", 1);
 	qemu_run_tool(open_session_argv);
 	qemu_run_tool(mem_test_argv);
 	qemu_rmmod();
