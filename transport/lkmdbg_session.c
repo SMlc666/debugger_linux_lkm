@@ -13,6 +13,7 @@
 
 static LIST_HEAD(lkmdbg_session_list);
 static DEFINE_SPINLOCK(lkmdbg_session_list_lock);
+#define LKMDBG_SESSION_READ_BATCH 16U
 static void lkmdbg_session_stop_workfn(struct work_struct *work);
 
 static void lkmdbg_session_zero_stop(struct lkmdbg_stop_state *stop)
@@ -475,7 +476,7 @@ ssize_t lkmdbg_session_read(struct file *file, char __user *buf, size_t count,
 			    loff_t *ppos)
 {
 	struct lkmdbg_session *session = file->private_data;
-	struct lkmdbg_event_record events[LKMDBG_SESSION_EVENT_CAPACITY];
+	struct lkmdbg_event_record events[LKMDBG_SESSION_READ_BATCH];
 	size_t max_events;
 	size_t copied = 0;
 	size_t bytes;
@@ -490,8 +491,8 @@ ssize_t lkmdbg_session_read(struct file *file, char __user *buf, size_t count,
 	max_events = count / sizeof(events[0]);
 	if (!max_events)
 		return -EINVAL;
-	if (max_events > ARRAY_SIZE(events))
-		max_events = ARRAY_SIZE(events);
+	if (max_events > LKMDBG_SESSION_READ_BATCH)
+		max_events = LKMDBG_SESSION_READ_BATCH;
 
 	for (;;) {
 		spin_lock_irq(&session->event_lock);
