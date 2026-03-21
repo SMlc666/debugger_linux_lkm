@@ -75,6 +75,9 @@ static int lkmdbg_capture_thread_refs(pid_t target_tgid,
 
 	rcu_read_lock();
 	for_each_thread(leader, task) {
+		if (task == leader)
+			continue;
+
 		if (count == LKMDBG_THREAD_MAX_ENTRIES) {
 			ret = -E2BIG;
 			rcu_read_unlock();

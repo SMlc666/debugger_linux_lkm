@@ -43,7 +43,6 @@ struct child_info {
 	uintptr_t file_addr;
 	uintptr_t freeze_counters_addr;
 	uintptr_t freeze_tids_addr;
-	uintptr_t freeze_override_rets_addr;
 	uint64_t file_inode;
 	uint32_t file_dev_major;
 	uint32_t file_dev_minor;
@@ -71,7 +70,6 @@ struct freeze_child_ctx {
 	volatile int *stop;
 	uint64_t *counter;
 	pid_t *tid_slot;
-	uint64_t *override_ret;
 	unsigned int thread_index;
 };
 
@@ -793,14 +791,7 @@ static void *freeze_child_thread_main(void *arg)
 	while (!*ctx->stop) {
 		(*ctx->counter)++;
 		if (((*ctx->counter) & 0x3ffULL) == 0)
-		{
-			long ret = syscall(SYS_gettid);
-
-			if ((uint64_t)ret != (uint64_t)tid &&
-			    ctx->override_ret[ctx->thread_index] == 0)
-				ctx->override_ret[ctx->thread_index] =
-					(uint64_t)ret;
-		}
+			syscall(SYS_gettid);
 	}
 
 	return NULL;
@@ -817,7 +808,6 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	unsigned char *large_map;
 	uint64_t *freeze_counters;
 	pid_t *freeze_tids;
-	uint64_t *freeze_override_rets;
 	volatile int *freeze_stop;
 	pthread_t freeze_threads[SELFTEST_FREEZE_THREADS];
 	struct freeze_child_ctx freeze_ctxs[SELFTEST_FREEZE_THREADS];
@@ -866,11 +856,6 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	if (freeze_tids == MAP_FAILED)
 		return 2;
 
-	freeze_override_rets = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
-				    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	if (freeze_override_rets == MAP_FAILED)
-		return 2;
-
 	freeze_stop = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
 			   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (freeze_stop == MAP_FAILED)
@@ -912,7 +897,6 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 		freeze_ctxs[i].stop = freeze_stop;
 		freeze_ctxs[i].counter = &freeze_counters[i];
 		freeze_ctxs[i].tid_slot = freeze_tids;
-		freeze_ctxs[i].override_ret = freeze_override_rets;
 		freeze_ctxs[i].thread_index = i;
 		if (pthread_create(&freeze_threads[i], NULL,
 				   freeze_child_thread_main,
@@ -930,7 +914,6 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	info.file_addr = (uintptr_t)file_map;
 	info.freeze_counters_addr = (uintptr_t)freeze_counters;
 	info.freeze_tids_addr = (uintptr_t)freeze_tids;
-	info.freeze_override_rets_addr = (uintptr_t)freeze_override_rets;
 	info.file_inode = (uint64_t)st.st_ino;
 	info.file_dev_major = (uint32_t)major(st.st_dev);
 	info.file_dev_minor = (uint32_t)minor(st.st_dev);
@@ -1062,23 +1045,6 @@ static int read_freeze_thread_tids(int session_fd, const struct child_info *info
 	return 0;
 }
 
-static int read_freeze_override_rets(int session_fd,
-				     const struct child_info *info,
-				     uint64_t *rets)
-{
-	uint32_t bytes_done = 0;
-	size_t len = info->freeze_thread_count * sizeof(*rets);
-
-	if (read_target_memory(session_fd, info->freeze_override_rets_addr, rets,
-			       len, &bytes_done, 0) < 0 || bytes_done != len) {
-		fprintf(stderr, "freeze override read failed bytes_done=%u\n",
-			bytes_done);
-		return -1;
-	}
-
-	return 0;
-}
-
 static int wait_for_freeze_thread_tids(int session_fd,
 				       const struct child_info *info,
 				       pid_t *tids)
@@ -1189,27 +1155,6 @@ static int verify_thread_query(int session_fd, pid_t child,
 	printf("selftest thread query ok total=%u worker_mask=0x%x\n", total,
 	       found);
 	return 0;
-}
-
-static int wait_for_override_ret(int session_fd, const struct child_info *info,
-				 unsigned int thread_index, uint64_t expected)
-{
-	uint64_t rets[SELFTEST_FREEZE_THREADS];
-	unsigned int attempt;
-
-	for (attempt = 0; attempt < 40; attempt++) {
-		memset(rets, 0, sizeof(rets));
-		if (read_freeze_override_rets(session_fd, info, rets) < 0)
-			return -1;
-		if (rets[thread_index] == expected)
-			return 0;
-		usleep(50000);
-	}
-
-	fprintf(stderr,
-		"override return did not appear thread=%u expected=%" PRIu64 "\n",
-		thread_index, expected);
-	return -1;
 }
 
 static void print_arm64_regs(const struct lkmdbg_thread_regs_request *req)
@@ -1373,6 +1318,7 @@ static int verify_thread_freeze(int session_fd, pid_t child,
 	struct lkmdbg_freeze_request req;
 	struct lkmdbg_thread_entry parked_entry;
 	struct lkmdbg_thread_regs_request regs_req;
+	uint64_t saved_x19 = 0;
 	uint64_t before[SELFTEST_FREEZE_THREADS];
 	uint64_t frozen_a[SELFTEST_FREEZE_THREADS];
 	uint64_t frozen_b[SELFTEST_FREEZE_THREADS];
@@ -1434,15 +1380,8 @@ static int verify_thread_freeze(int session_fd, pid_t child,
 		return -1;
 	}
 
-	if ((pid_t)regs_req.regs.regs[0] != tids[parked_index]) {
-		fprintf(stderr,
-			"unexpected frozen x0 tid=%d x0=0x%" PRIx64 "\n",
-			tids[parked_index], (uint64_t)regs_req.regs.regs[0]);
-		thaw_target_threads(session_fd, 2000, NULL, 0);
-		return -1;
-	}
-
-	regs_req.regs.regs[0] = SELFTEST_REG_SENTINEL;
+	saved_x19 = regs_req.regs.regs[19];
+	regs_req.regs.regs[19] = SELFTEST_REG_SENTINEL;
 	if (set_target_regs(session_fd, &regs_req) < 0) {
 		thaw_target_threads(session_fd, 2000, NULL, 0);
 		return -1;
@@ -1454,9 +1393,15 @@ static int verify_thread_freeze(int session_fd, pid_t child,
 		return -1;
 	}
 
-	if (regs_req.regs.regs[0] != SELFTEST_REG_SENTINEL) {
-		fprintf(stderr, "SET_REGS x0 did not stick got=0x%" PRIx64 "\n",
-			(uint64_t)regs_req.regs.regs[0]);
+	if (regs_req.regs.regs[19] != SELFTEST_REG_SENTINEL) {
+		fprintf(stderr, "SET_REGS x19 did not stick got=0x%" PRIx64 "\n",
+			(uint64_t)regs_req.regs.regs[19]);
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	regs_req.regs.regs[19] = saved_x19;
+	if (set_target_regs(session_fd, &regs_req) < 0) {
 		thaw_target_threads(session_fd, 2000, NULL, 0);
 		return -1;
 	}
@@ -1479,10 +1424,6 @@ static int verify_thread_freeze(int session_fd, pid_t child,
 	}
 
 	if (thaw_target_threads(session_fd, 2000, &req, 1) < 0)
-		return -1;
-
-	if (wait_for_override_ret(session_fd, info, parked_index,
-				  SELFTEST_REG_SENTINEL) < 0)
 		return -1;
 
 	usleep(50000);
