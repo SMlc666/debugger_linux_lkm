@@ -285,5 +285,7 @@ struct lkmdbg_event_record {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x1B, struct lkmdbg_hwpoint_query_request)
 #define LKMDBG_IOC_SINGLE_STEP \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x1C, struct lkmdbg_single_step_request)
+#define LKMDBG_IOC_REARM_HWPOINT \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x1D, struct lkmdbg_hwpoint_request)
 
 #endif

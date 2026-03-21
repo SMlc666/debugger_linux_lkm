@@ -335,6 +335,25 @@ static int remove_hwpoint(int session_fd, uint64_t id)
 	return 0;
 }
 
+static int rearm_hwpoint(int session_fd, uint64_t id,
+			 struct lkmdbg_hwpoint_request *reply_out)
+{
+	struct lkmdbg_hwpoint_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.id = id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_REARM_HWPOINT, &req) < 0) {
+		fprintf(stderr, "REARM_HWPOINT failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
 static int query_hwpoints(int session_fd, uint64_t start_id,
 			  struct lkmdbg_hwpoint_entry *entries,
 			  uint32_t max_entries,
@@ -1953,6 +1972,7 @@ static void usage(const char *prog)
 		"  %s setreg <pid> <tid> <reg> <value_hex>\n"
 		"  %s hwadd <pid> <tid> <r|w|rw|x> <addr_hex> <len> [stop|counter|flags]\n"
 		"  %s hwdel <pid> <id>\n"
+		"  %s hwrearm <pid> <id>\n"
 		"  %s hwlist <pid>\n"
 		"  %s step <pid> <tid>\n"
 		"  %s freeze <pid> [timeout_ms]\n"
@@ -1960,7 +1980,7 @@ static void usage(const char *prog)
 		"  %s vmas <pid>\n"
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog, prog);
+		prog, prog, prog);
 }
 
 static int run_selftest(const char *prog)
@@ -2692,7 +2712,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (strcmp(argv[1], "hwdel") == 0) {
+	if (strcmp(argv[1], "hwdel") == 0 || strcmp(argv[1], "hwrearm") == 0) {
 		if (argc < 4) {
 			usage(argv[0]);
 			return 1;
@@ -2777,6 +2797,17 @@ int main(int argc, char **argv)
 			close(session_fd);
 			return 1;
 		}
+	} else if (strcmp(argv[1], "hwrearm") == 0) {
+		struct lkmdbg_hwpoint_request reply;
+
+		memset(&reply, 0, sizeof(reply));
+		if (rearm_hwpoint(session_fd, hwpoint_id, &reply) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		printf("hwpoint.id=%" PRIu64 "\n", (uint64_t)reply.id);
+		printf("hwpoint.tid=%d\n", reply.tid);
+		printf("hwpoint.flags=0x%x\n", reply.flags);
 	} else if (strcmp(argv[1], "hwlist") == 0) {
 		struct lkmdbg_hwpoint_entry entries[16];
 		uint64_t cursor = 0;

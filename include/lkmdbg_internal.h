@@ -203,6 +203,7 @@ void lkmdbg_thread_ctrl_release(struct lkmdbg_session *session);
 long lkmdbg_add_hwpoint(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_remove_hwpoint(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_query_hwpoints(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_rearm_hwpoint(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_freeze_threads(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_thaw_threads(struct lkmdbg_session *session, void __user *argp);

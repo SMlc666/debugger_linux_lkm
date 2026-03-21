@@ -327,6 +327,8 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_remove_hwpoint(session, argp);
 	case LKMDBG_IOC_QUERY_HWPOINTS:
 		return lkmdbg_query_hwpoints(session, argp);
+	case LKMDBG_IOC_REARM_HWPOINT:
+		return lkmdbg_rearm_hwpoint(session, argp);
 	case LKMDBG_IOC_SINGLE_STEP:
 		return lkmdbg_single_step(session, argp);
 	case LKMDBG_IOC_FREEZE_THREADS:

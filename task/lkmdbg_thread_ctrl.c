@@ -36,6 +36,7 @@ struct lkmdbg_hwpoint {
 	u32 len;
 	u32 flags;
 	atomic64_t hits;
+	bool armed;
 	atomic_t stop_latched;
 };
 
@@ -202,7 +203,7 @@ static void lkmdbg_hwpoint_fill_entry(struct lkmdbg_hwpoint_entry *dst,
 	dst->type = src->type;
 	dst->len = src->len;
 	dst->flags = src->flags;
-	dst->state = LKMDBG_HWPOINT_STATE_ACTIVE;
+	dst->state = src->armed ? LKMDBG_HWPOINT_STATE_ACTIVE : 0;
 	if (atomic_read(&src->stop_latched))
 		dst->state |= LKMDBG_HWPOINT_STATE_LATCHED;
 }
@@ -244,6 +245,8 @@ static void lkmdbg_hwpoint_event(struct perf_event *bp,
 		return;
 	if (atomic_xchg(&entry->stop_latched, 1))
 		return;
+	perf_event_disable_local(bp);
+	WRITE_ONCE(entry->armed, false);
 
 	lkmdbg_session_queue_event_ex(entry->session, LKMDBG_EVENT_TARGET_STOP,
 				      reason, entry->tgid, current->pid,
@@ -291,6 +294,7 @@ static int lkmdbg_register_hwpoint(struct lkmdbg_session *session,
 	entry->len = req->len;
 	entry->flags = req->flags;
 	atomic64_set(&entry->hits, 0);
+	entry->armed = false;
 	atomic_set(&entry->stop_latched, 0);
 	put_task_struct(task);
 
@@ -312,6 +316,7 @@ static int lkmdbg_register_hwpoint(struct lkmdbg_session *session,
 		kfree(entry);
 		return ret;
 	}
+	entry->armed = true;
 
 	mutex_lock(&session->lock);
 	list_add_tail(&entry->node, &session->hwpoints);
@@ -338,6 +343,33 @@ static int lkmdbg_unregister_hwpoint(struct lkmdbg_session *session, u64 id)
 
 	unregister_hw_breakpoint(entry->event);
 	kfree(entry);
+	return 0;
+}
+
+static int lkmdbg_rearm_hwpoint_locked(struct lkmdbg_hwpoint *entry)
+{
+	struct perf_event_attr attr;
+	int ret;
+
+	if (!entry->event)
+		return -EINVAL;
+	if (entry->flags & LKMDBG_HWPOINT_FLAG_COUNTER_MODE)
+		return -EINVAL;
+	if (entry->armed && !atomic_read(&entry->stop_latched))
+		return 0;
+
+	ptrace_breakpoint_init(&attr);
+	attr.bp_addr = entry->addr;
+	attr.bp_len = entry->len;
+	attr.bp_type = entry->type;
+	attr.disabled = 0;
+
+	ret = modify_user_hw_breakpoint(entry->event, &attr);
+	if (ret)
+		return ret;
+
+	atomic_set(&entry->stop_latched, 0);
+	WRITE_ONCE(entry->armed, true);
 	return 0;
 }
 
@@ -720,6 +752,39 @@ long lkmdbg_query_hwpoints(struct lkmdbg_session *session, void __user *argp)
 		argp, &req, entries, req.max_entries * sizeof(*entries));
 	kfree(entries);
 	return ret;
+}
+
+long lkmdbg_rearm_hwpoint(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_hwpoint_request req;
+	struct lkmdbg_hwpoint *entry;
+	long ret;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	ret = lkmdbg_validate_hwpoint_request(&req, true);
+	if (ret)
+		return ret;
+
+	mutex_lock(&session->lock);
+	entry = lkmdbg_find_hwpoint_locked(session, req.id);
+	if (!entry) {
+		mutex_unlock(&session->lock);
+		return lkmdbg_hwpoint_copy_reply(argp, &req, -ENOENT);
+	}
+
+	ret = lkmdbg_rearm_hwpoint_locked(entry);
+	if (!ret) {
+		req.tid = entry->tid;
+		req.addr = entry->addr;
+		req.type = entry->type;
+		req.len = entry->len;
+		req.flags = entry->flags;
+	}
+	mutex_unlock(&session->lock);
+
+	return lkmdbg_hwpoint_copy_reply(argp, &req, ret);
 }
 
 long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp)
