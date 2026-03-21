@@ -40,8 +40,12 @@ static void print_event(const struct lkmdbg_event_record *event)
 	printf("event.version=%u\n", event->version);
 	printf("event.type=%u\n", event->type);
 	printf("event.size=%u\n", event->size);
+	printf("event.code=%u\n", event->code);
 	printf("event.session_id=%" PRIu64 "\n", (uint64_t)event->session_id);
 	printf("event.seq=%" PRIu64 "\n", (uint64_t)event->seq);
+	printf("event.tgid=%d\n", event->tgid);
+	printf("event.tid=%d\n", event->tid);
+	printf("event.flags=0x%x\n", event->flags);
 	printf("event.value0=%" PRIu64 "\n", (uint64_t)event->value0);
 	printf("event.value1=%" PRIu64 "\n", (uint64_t)event->value1);
 }

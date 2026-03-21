@@ -296,6 +296,17 @@ static int __init lkmdbg_init(void)
 	}
 	lkmdbg_trace_stage("runtime_hooks_ready");
 
+	ret = lkmdbg_thread_ctrl_init();
+	if (ret) {
+		lkmdbg_runtime_hooks_exit();
+		lkmdbg_transport_exit();
+		lkmdbg_hooks_exit();
+		lkmdbg_symbols_exit();
+		lkmdbg_debugfs_exit();
+		return ret;
+	}
+	lkmdbg_trace_stage("thread_ctrl_ready");
+
 	pr_info("lkmdbg: loaded tag=%s hook_proc_version=%u hook_selftest_mode=%u hook_seq_read=%u kprobe_patched=%d cfi_patched=%d\n",
 		tag, hook_proc_version, hook_selftest_mode, hook_seq_read,
 		blacklist_patched, cfi_patched);
@@ -304,6 +315,7 @@ static int __init lkmdbg_init(void)
 
 static void __exit lkmdbg_exit(void)
 {
+	lkmdbg_thread_ctrl_exit();
 	lkmdbg_runtime_hooks_exit();
 	lkmdbg_transport_exit();
 	lkmdbg_selftest_hook = NULL;

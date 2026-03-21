@@ -26,6 +26,7 @@ lkmdbg-mem-y := \
 
 lkmdbg-task-y := \
 	task/lkmdbg_freeze.o \
+	task/lkmdbg_thread_ctrl.o \
 	task/lkmdbg_thread.o
 
 lkmdbg-ui-y := \

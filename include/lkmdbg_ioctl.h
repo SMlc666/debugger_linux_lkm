@@ -4,9 +4,9 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 1
+#define LKMDBG_PROTO_VERSION 2
 #define LKMDBG_IOC_MAGIC 0xBD
-#define LKMDBG_EVENT_VERSION 1
+#define LKMDBG_EVENT_VERSION 2
 
 #define LKMDBG_EVENT_SESSION_OPENED 1
 #define LKMDBG_EVENT_SESSION_RESET 2
@@ -14,6 +14,11 @@
 #define LKMDBG_EVENT_HOOK_INSTALLED 16
 #define LKMDBG_EVENT_HOOK_REMOVED 17
 #define LKMDBG_EVENT_HOOK_HIT 18
+#define LKMDBG_EVENT_TARGET_CLONE 32
+#define LKMDBG_EVENT_TARGET_EXEC 33
+#define LKMDBG_EVENT_TARGET_EXIT 34
+#define LKMDBG_EVENT_TARGET_SIGNAL 35
+#define LKMDBG_EVENT_TARGET_STOP 36
 
 #define LKMDBG_THREAD_COMM_MAX 16
 
@@ -23,6 +28,22 @@
 #define LKMDBG_THREAD_FLAG_FREEZE_SETTLED 0x00000008U
 #define LKMDBG_THREAD_FLAG_FREEZE_PARKED 0x00000010U
 #define LKMDBG_THREAD_FLAG_EXITING 0x00000020U
+
+#define LKMDBG_TARGET_CLONE_THREAD 1U
+#define LKMDBG_TARGET_CLONE_PROCESS 2U
+
+#define LKMDBG_SIGNAL_EVENT_GROUP 0x00000001U
+
+#define LKMDBG_STOP_REASON_FREEZE 1U
+#define LKMDBG_STOP_REASON_BREAKPOINT 2U
+#define LKMDBG_STOP_REASON_WATCHPOINT 3U
+#define LKMDBG_STOP_REASON_SINGLE_STEP 4U
+
+#define LKMDBG_HWPOINT_TYPE_READ 0x00000001U
+#define LKMDBG_HWPOINT_TYPE_WRITE 0x00000002U
+#define LKMDBG_HWPOINT_TYPE_READWRITE \
+	(LKMDBG_HWPOINT_TYPE_READ | LKMDBG_HWPOINT_TYPE_WRITE)
+#define LKMDBG_HWPOINT_TYPE_EXEC 0x00000004U
 
 #define LKMDBG_VMA_PROT_READ 0x00000001U
 #define LKMDBG_VMA_PROT_WRITE 0x00000002U
@@ -171,13 +192,58 @@ struct lkmdbg_thread_regs_request {
 	struct lkmdbg_regs_arm64 regs;
 };
 
+struct lkmdbg_hwpoint_request {
+	__u32 version;
+	__u32 size;
+	__u64 id;
+	__u64 addr;
+	__s32 tid;
+	__u32 type;
+	__u32 len;
+	__u32 flags;
+};
+
+struct lkmdbg_hwpoint_entry {
+	__u64 id;
+	__u64 addr;
+	__s32 tgid;
+	__s32 tid;
+	__u32 type;
+	__u32 len;
+	__u32 flags;
+	__u32 reserved0;
+};
+
+struct lkmdbg_hwpoint_query_request {
+	__u32 version;
+	__u32 size;
+	__u64 entries_addr;
+	__u32 max_entries;
+	__u32 flags;
+	__u64 start_id;
+	__u32 entries_filled;
+	__u32 done;
+	__u64 next_id;
+};
+
+struct lkmdbg_single_step_request {
+	__u32 version;
+	__u32 size;
+	__s32 tid;
+	__u32 flags;
+};
+
 struct lkmdbg_event_record {
 	__u32 version;
 	__u32 type;
 	__u32 size;
-	__u32 reserved0;
+	__u32 code;
 	__u64 session_id;
 	__u64 seq;
+	__s32 tgid;
+	__s32 tid;
+	__u32 flags;
+	__u32 reserved0;
 	__u64 value0;
 	__u64 value1;
 };
@@ -205,5 +271,13 @@ struct lkmdbg_event_record {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x17, struct lkmdbg_thread_regs_request)
 #define LKMDBG_IOC_SET_REGS \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x18, struct lkmdbg_thread_regs_request)
+#define LKMDBG_IOC_ADD_HWPOINT \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x19, struct lkmdbg_hwpoint_request)
+#define LKMDBG_IOC_REMOVE_HWPOINT \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x1A, struct lkmdbg_hwpoint_request)
+#define LKMDBG_IOC_QUERY_HWPOINTS \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x1B, struct lkmdbg_hwpoint_query_request)
+#define LKMDBG_IOC_SINGLE_STEP \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x1C, struct lkmdbg_single_step_request)
 
 #endif

@@ -550,6 +550,13 @@ long lkmdbg_freeze_threads(struct lkmdbg_session *session, void __user *argp)
 		lkmdbg_freezer_detach_session(session, freezer);
 		lkmdbg_freezer_begin_thaw(freezer);
 		lkmdbg_freezer_put(freezer);
+	} else {
+		u64 counts = ((u64)req.threads_settled << 32) | req.threads_parked;
+
+		lkmdbg_session_queue_event_ex(session, LKMDBG_EVENT_TARGET_STOP,
+					      LKMDBG_STOP_REASON_FREEZE,
+					      target_tgid, 0, 0,
+					      req.threads_total, counts);
 	}
 
 	return lkmdbg_freezer_copy_reply(argp, &req, ret);

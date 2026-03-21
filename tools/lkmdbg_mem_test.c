@@ -11,6 +11,7 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <poll.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/syscall.h>
@@ -41,6 +42,8 @@ struct child_info {
 	uintptr_t force_write_addr;
 	uintptr_t large_addr;
 	uintptr_t file_addr;
+	uintptr_t exec_target_addr;
+	uintptr_t watch_addr;
 	uintptr_t freeze_counters_addr;
 	uintptr_t freeze_tids_addr;
 	uint64_t file_inode;
@@ -81,6 +84,10 @@ struct vma_query_buffer {
 enum {
 	CHILD_OP_QUERY_NOFAULT = 1,
 	CHILD_OP_EXIT = 2,
+	CHILD_OP_TRIGGER_EXEC = 3,
+	CHILD_OP_TRIGGER_WATCH = 4,
+	CHILD_OP_TRIGGER_SIGNAL = 5,
+	CHILD_OP_SPAWN_THREAD = 6,
 };
 
 static int open_session_fd(void)
@@ -132,6 +139,103 @@ static int set_target(int session_fd, pid_t pid)
 	return set_target_ex(session_fd, pid, 0);
 }
 
+static int drain_session_events(int session_fd)
+{
+	struct lkmdbg_event_record event;
+
+	for (;;) {
+		struct pollfd pfd = {
+			.fd = session_fd,
+			.events = POLLIN,
+		};
+		ssize_t nread;
+
+		if (poll(&pfd, 1, 0) < 0) {
+			fprintf(stderr, "drain poll failed: %s\n",
+				strerror(errno));
+			return -1;
+		}
+		if (!(pfd.revents & POLLIN))
+			return 0;
+
+		nread = read(session_fd, &event, sizeof(event));
+		if (nread == (ssize_t)sizeof(event))
+			continue;
+		if (nread < 0) {
+			fprintf(stderr, "drain event failed: %s\n",
+				strerror(errno));
+			return -1;
+		}
+		if (nread == 0)
+			return 0;
+		fprintf(stderr, "short event drain read: %zd\n", nread);
+		return -1;
+	}
+}
+
+static int read_session_event_timeout(int session_fd,
+				      struct lkmdbg_event_record *event_out,
+				      int timeout_ms)
+{
+	struct pollfd pfd = {
+		.fd = session_fd,
+		.events = POLLIN,
+	};
+	ssize_t nread;
+
+	if (poll(&pfd, 1, timeout_ms) < 0) {
+		fprintf(stderr, "event poll failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (!(pfd.revents & POLLIN)) {
+		fprintf(stderr, "event poll timed out after %d ms\n", timeout_ms);
+		return -1;
+	}
+
+	nread = read(session_fd, event_out, sizeof(*event_out));
+	if (nread < 0) {
+		fprintf(stderr, "event read failed: %s\n", strerror(errno));
+		return -1;
+	}
+	if (nread != (ssize_t)sizeof(*event_out)) {
+		fprintf(stderr, "short event read: %zd\n", nread);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int wait_for_session_event(int session_fd, uint32_t type, uint32_t code,
+				  int timeout_ms,
+				  struct lkmdbg_event_record *event_out)
+{
+	int waited = 0;
+
+	while (waited < timeout_ms) {
+		struct lkmdbg_event_record event;
+		int slice = timeout_ms - waited;
+
+		if (slice > 1000)
+			slice = 1000;
+		if (read_session_event_timeout(session_fd, &event, slice) < 0)
+			return -1;
+		waited += slice;
+
+		if (event.type != type)
+			continue;
+		if (code && event.code != code)
+			continue;
+
+		if (event_out)
+			*event_out = event;
+		return 0;
+	}
+
+	fprintf(stderr, "event wait timed out type=%u code=%u\n", type, code);
+	return -1;
+}
+
 static int query_target_threads(int session_fd, int32_t start_tid,
 				struct lkmdbg_thread_entry *entries,
 				uint32_t max_entries,
@@ -181,6 +285,83 @@ static int set_target_regs(int session_fd,
 
 	if (ioctl(session_fd, LKMDBG_IOC_SET_REGS, &req) < 0) {
 		fprintf(stderr, "SET_REGS failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	return 0;
+}
+
+static int add_hwpoint(int session_fd, pid_t tid, uint64_t addr, uint32_t type,
+		       uint32_t len, struct lkmdbg_hwpoint_request *reply_out)
+{
+	struct lkmdbg_hwpoint_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.addr = addr,
+		.tid = tid,
+		.type = type,
+		.len = len,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_ADD_HWPOINT, &req) < 0) {
+		fprintf(stderr, "ADD_HWPOINT failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int remove_hwpoint(int session_fd, uint64_t id)
+{
+	struct lkmdbg_hwpoint_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.id = id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_HWPOINT, &req) < 0) {
+		fprintf(stderr, "REMOVE_HWPOINT failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	return 0;
+}
+
+static int query_hwpoints(int session_fd, uint64_t start_id,
+			  struct lkmdbg_hwpoint_entry *entries,
+			  uint32_t max_entries,
+			  struct lkmdbg_hwpoint_query_request *reply_out)
+{
+	struct lkmdbg_hwpoint_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = max_entries,
+		.start_id = start_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_HWPOINTS, &req) < 0) {
+		fprintf(stderr, "QUERY_HWPOINTS failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int single_step_thread(int session_fd, pid_t tid)
+{
+	struct lkmdbg_single_step_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.tid = tid,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_SINGLE_STEP, &req) < 0) {
+		fprintf(stderr, "SINGLE_STEP failed: %s\n", strerror(errno));
 		return -1;
 	}
 
@@ -782,6 +963,28 @@ static int query_mincore_resident(void *addr, size_t len)
 	return !!(vec & 1);
 }
 
+static volatile uint64_t child_watch_value;
+
+static void child_signal_handler(int signo)
+{
+	(void)signo;
+}
+
+static __attribute__((noinline)) void
+child_exec_target(volatile uint64_t *counter)
+{
+	(*counter)++;
+	asm volatile("" ::: "memory");
+}
+
+static void *child_spawn_thread_main(void *arg)
+{
+	volatile uint64_t *exec_counter = arg;
+
+	child_exec_target(exec_counter);
+	return NULL;
+}
+
 static void *freeze_child_thread_main(void *arg)
 {
 	struct freeze_child_ctx *ctx = arg;
@@ -812,6 +1015,7 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	pthread_t freeze_threads[SELFTEST_FREEZE_THREADS];
 	struct freeze_child_ctx freeze_ctxs[SELFTEST_FREEZE_THREADS];
 	void *file_map;
+	volatile uint64_t exec_counter = 0;
 	int file_fd;
 	struct stat st;
 	size_t page_size;
@@ -865,6 +1069,9 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	if (file_fd < 0)
 		return 2;
 
+	if (signal(SIGUSR1, child_signal_handler) == SIG_ERR)
+		return 2;
+
 	if (ftruncate(file_fd, (off_t)page_size) < 0)
 		return 2;
 
@@ -912,6 +1119,8 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	info.force_write_addr = (uintptr_t)force_write_map;
 	info.large_addr = (uintptr_t)large_map;
 	info.file_addr = (uintptr_t)file_map;
+	info.exec_target_addr = (uintptr_t)child_exec_target;
+	info.watch_addr = (uintptr_t)&child_watch_value;
 	info.freeze_counters_addr = (uintptr_t)freeze_counters;
 	info.freeze_tids_addr = (uintptr_t)freeze_tids;
 	info.file_inode = (uint64_t)st.st_ino;
@@ -940,6 +1149,27 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 			    (ssize_t)sizeof(resident))
 				return 2;
 			break;
+		case CHILD_OP_TRIGGER_EXEC:
+			child_exec_target(&exec_counter);
+			break;
+		case CHILD_OP_TRIGGER_WATCH:
+			child_watch_value++;
+			break;
+		case CHILD_OP_TRIGGER_SIGNAL:
+			if (kill(getpid(), SIGUSR1) < 0)
+				return 2;
+			break;
+		case CHILD_OP_SPAWN_THREAD:
+		{
+			pthread_t temp_thread;
+
+			if (pthread_create(&temp_thread, NULL,
+					   child_spawn_thread_main,
+					   (void *)&exec_counter) != 0)
+				return 2;
+			pthread_join(temp_thread, NULL);
+			break;
+		}
 		case CHILD_OP_EXIT:
 			*freeze_stop = 1;
 			for (i = 0; i < SELFTEST_FREEZE_THREADS; i++)
@@ -975,6 +1205,20 @@ static int child_query_nofault_residency(int cmd_fd, int resp_fd)
 	}
 
 	return resident;
+}
+
+static int send_child_command(int cmd_fd, uint32_t op)
+{
+	struct child_cmd cmd = {
+		.op = op,
+	};
+
+	if (write_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
+		fprintf(stderr, "failed to send child command op=%u\n", op);
+		return -1;
+	}
+
+	return 0;
 }
 
 static void *worker_thread_main(void *arg)
@@ -1200,6 +1444,28 @@ static int set_named_arm64_reg(struct lkmdbg_thread_regs_request *req,
 
 	req->regs.regs[index] = value;
 	return 0;
+}
+
+static int parse_hwpoint_type(const char *arg, uint32_t *type_out)
+{
+	if (strcmp(arg, "r") == 0) {
+		*type_out = LKMDBG_HWPOINT_TYPE_READ;
+		return 0;
+	}
+	if (strcmp(arg, "w") == 0) {
+		*type_out = LKMDBG_HWPOINT_TYPE_WRITE;
+		return 0;
+	}
+	if (strcmp(arg, "rw") == 0) {
+		*type_out = LKMDBG_HWPOINT_TYPE_READWRITE;
+		return 0;
+	}
+	if (strcmp(arg, "x") == 0) {
+		*type_out = LKMDBG_HWPOINT_TYPE_EXEC;
+		return 0;
+	}
+
+	return -1;
 }
 
 static int dump_target_threads(int session_fd)
@@ -1440,6 +1706,190 @@ static int verify_thread_freeze(int session_fd, pid_t child,
 	return 0;
 }
 
+static int find_hwpoint_id(int session_fd, uint64_t id)
+{
+	struct lkmdbg_hwpoint_entry entries[16];
+	uint64_t cursor = 0;
+
+	for (;;) {
+		struct lkmdbg_hwpoint_query_request reply;
+		uint32_t i;
+
+		if (query_hwpoints(session_fd, cursor, entries,
+				   (uint32_t)(sizeof(entries) / sizeof(entries[0])),
+				   &reply) < 0)
+			return -1;
+
+		for (i = 0; i < reply.entries_filled; i++) {
+			if (entries[i].id == id)
+				return 0;
+		}
+
+		if (reply.done)
+			break;
+		cursor = reply.next_id;
+	}
+
+	fprintf(stderr, "hwpoint %" PRIu64 " not found in query\n", id);
+	return -1;
+}
+
+static int verify_runtime_events(int session_fd, int cmd_fd, pid_t child,
+				 const struct child_info *info)
+{
+	struct lkmdbg_hwpoint_request bp_req;
+	struct lkmdbg_hwpoint_request wp_req;
+	struct lkmdbg_event_record event;
+
+	memset(&bp_req, 0, sizeof(bp_req));
+	memset(&wp_req, 0, sizeof(wp_req));
+	if (drain_session_events(session_fd) < 0)
+		return -1;
+
+	if (send_child_command(cmd_fd, CHILD_OP_SPAWN_THREAD) < 0)
+		return -1;
+	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_CLONE,
+				   LKMDBG_TARGET_CLONE_THREAD, 2000,
+				   &event) < 0)
+		return -1;
+	if (event.tgid != child) {
+		fprintf(stderr, "clone event tgid mismatch got=%d expected=%d\n",
+			event.tgid, child);
+		return -1;
+	}
+
+	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SIGNAL) < 0)
+		return -1;
+	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_SIGNAL,
+				   SIGUSR1, 2000, &event) < 0)
+		return -1;
+	if (event.tgid != child || event.tid != child) {
+		fprintf(stderr,
+			"signal event task mismatch tgid=%d tid=%d expected leader=%d\n",
+			event.tgid, event.tid, child);
+		return -1;
+	}
+
+	if (add_hwpoint(session_fd, child, info->exec_target_addr,
+			LKMDBG_HWPOINT_TYPE_EXEC, 4, &bp_req) < 0)
+		return -1;
+	if (find_hwpoint_id(session_fd, bp_req.id) < 0) {
+		remove_hwpoint(session_fd, bp_req.id);
+		return -1;
+	}
+
+	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
+		remove_hwpoint(session_fd, bp_req.id);
+		return -1;
+	}
+	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+				   LKMDBG_STOP_REASON_BREAKPOINT, 2000,
+				   &event) < 0) {
+		remove_hwpoint(session_fd, bp_req.id);
+		return -1;
+	}
+	if (event.value0 != info->exec_target_addr ||
+	    event.flags != LKMDBG_HWPOINT_TYPE_EXEC) {
+		fprintf(stderr,
+			"breakpoint event mismatch addr=0x%" PRIx64 " flags=0x%x\n",
+			(uint64_t)event.value0, event.flags);
+		remove_hwpoint(session_fd, bp_req.id);
+		return -1;
+	}
+	if (remove_hwpoint(session_fd, bp_req.id) < 0)
+		return -1;
+
+	if (add_hwpoint(session_fd, child, info->watch_addr,
+			LKMDBG_HWPOINT_TYPE_WRITE, 8, &wp_req) < 0)
+		return -1;
+	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_WATCH) < 0) {
+		remove_hwpoint(session_fd, wp_req.id);
+		return -1;
+	}
+	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+				   LKMDBG_STOP_REASON_WATCHPOINT, 2000,
+				   &event) < 0) {
+		remove_hwpoint(session_fd, wp_req.id);
+		return -1;
+	}
+	if (event.value0 != info->watch_addr ||
+	    event.flags != LKMDBG_HWPOINT_TYPE_WRITE) {
+		fprintf(stderr,
+			"watchpoint event mismatch addr=0x%" PRIx64 " flags=0x%x\n",
+			(uint64_t)event.value0, event.flags);
+		remove_hwpoint(session_fd, wp_req.id);
+		return -1;
+	}
+	if (remove_hwpoint(session_fd, wp_req.id) < 0)
+		return -1;
+
+	printf("selftest runtime events ok clone signal breakpoint watchpoint\n");
+	return 0;
+}
+
+static int verify_single_step_event(int session_fd, const struct child_info *info)
+{
+	struct lkmdbg_freeze_request req;
+	struct lkmdbg_thread_entry parked_entry;
+	struct lkmdbg_event_record event;
+	pid_t tids[SELFTEST_FREEZE_THREADS];
+	unsigned int i;
+	unsigned int parked_index = UINT32_MAX;
+
+	memset(&req, 0, sizeof(req));
+	memset(&parked_entry, 0, sizeof(parked_entry));
+	memset(tids, 0, sizeof(tids));
+
+	if (wait_for_freeze_thread_tids(session_fd, info, tids) < 0)
+		return -1;
+	if (freeze_target_threads(session_fd, 2000, &req, 0) < 0)
+		return -1;
+
+	for (i = 0; i < info->freeze_thread_count; i++) {
+		if (find_target_thread_entry(session_fd, tids[i], &parked_entry) < 0) {
+			thaw_target_threads(session_fd, 2000, NULL, 0);
+			return -1;
+		}
+		if (!(parked_entry.flags & LKMDBG_THREAD_FLAG_FREEZE_PARKED))
+			continue;
+		parked_index = i;
+		break;
+	}
+
+	if (parked_index == UINT32_MAX) {
+		fprintf(stderr, "no parked thread available for single-step\n");
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	if (drain_session_events(session_fd) < 0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	if (single_step_thread(session_fd, tids[parked_index]) < 0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	if (thaw_target_threads(session_fd, 2000, NULL, 0) < 0)
+		return -1;
+
+	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+				   LKMDBG_STOP_REASON_SINGLE_STEP, 2000,
+				   &event) < 0)
+		return -1;
+	if (event.tid != tids[parked_index]) {
+		fprintf(stderr, "single-step event tid mismatch got=%d expected=%d\n",
+			event.tid, tids[parked_index]);
+		return -1;
+	}
+
+	printf("selftest single-step event ok tid=%d pc=0x%" PRIx64 "\n",
+	       event.tid, (uint64_t)event.value0);
+	return 0;
+}
+
 static void usage(const char *prog)
 {
 	fprintf(stderr,
@@ -1449,11 +1899,16 @@ static void usage(const char *prog)
 		"  %s threads <pid>\n"
 		"  %s getregs <pid> <tid>\n"
 		"  %s setreg <pid> <tid> <reg> <value_hex>\n"
+		"  %s hwadd <pid> <tid> <r|w|rw|x> <addr_hex> <len>\n"
+		"  %s hwdel <pid> <id>\n"
+		"  %s hwlist <pid>\n"
+		"  %s step <pid> <tid>\n"
 		"  %s freeze <pid> [timeout_ms]\n"
 		"  %s thaw <pid> [timeout_ms]\n"
 		"  %s vmas <pid>\n"
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
-		prog, prog, prog, prog, prog, prog, prog, prog, prog);
+		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
+		prog, prog);
 }
 
 static int run_selftest(const char *prog)
@@ -1546,6 +2001,16 @@ static int run_selftest(const char *prog)
 	}
 
 	if (set_target(session_fd, child) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	if (drain_session_events(session_fd) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
 		close(cmd_pipe[1]);
@@ -1823,6 +2288,26 @@ static int run_selftest(const char *prog)
 		return 1;
 	}
 
+	if (verify_runtime_events(session_fd, cmd_pipe[1], child, &info) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	if (verify_single_step_event(session_fd, &info) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
 	if (expect_partial_write_progress(session_fd, info.basic_addr,
 					  partial_payload) < 0) {
 		close(session_fd);
@@ -2042,6 +2527,10 @@ int main(int argc, char **argv)
 	pid_t target_tid = 0;
 	uint32_t timeout_ms = 0;
 	uint64_t reg_value = 0;
+	uint64_t hwpoint_id = 0;
+	uint64_t hwpoint_addr = 0;
+	uint32_t hwpoint_type = 0;
+	uint32_t hwpoint_len = 0;
 
 	if (argc == 2 && strcmp(argv[1], "selftest") == 0)
 		return run_selftest(argv[0]);
@@ -2095,6 +2584,64 @@ int main(int argc, char **argv)
 		reg_value = strtoull(argv[5], &endp, 16);
 		if (*endp != '\0') {
 			fprintf(stderr, "invalid register value: %s\n", argv[5]);
+			return 1;
+		}
+	}
+
+	if (strcmp(argv[1], "step") == 0) {
+		if (argc < 4) {
+			usage(argv[0]);
+			return 1;
+		}
+
+		tid = (pid_t)strtol(argv[3], &endp, 10);
+		if (*endp != '\0' || tid <= 0) {
+			fprintf(stderr, "invalid tid: %s\n", argv[3]);
+			return 1;
+		}
+		target_tid = tid;
+	}
+
+	if (strcmp(argv[1], "hwadd") == 0) {
+		if (argc < 7) {
+			usage(argv[0]);
+			return 1;
+		}
+
+		tid = (pid_t)strtol(argv[3], &endp, 10);
+		if (*endp != '\0' || tid <= 0) {
+			fprintf(stderr, "invalid tid: %s\n", argv[3]);
+			return 1;
+		}
+		target_tid = tid;
+
+		if (parse_hwpoint_type(argv[4], &hwpoint_type) < 0) {
+			fprintf(stderr, "invalid hwpoint type: %s\n", argv[4]);
+			return 1;
+		}
+
+		hwpoint_addr = strtoull(argv[5], &endp, 16);
+		if (*endp != '\0') {
+			fprintf(stderr, "invalid hwpoint address: %s\n", argv[5]);
+			return 1;
+		}
+
+		hwpoint_len = (uint32_t)strtoul(argv[6], &endp, 0);
+		if (*endp != '\0' || !hwpoint_len) {
+			fprintf(stderr, "invalid hwpoint length: %s\n", argv[6]);
+			return 1;
+		}
+	}
+
+	if (strcmp(argv[1], "hwdel") == 0) {
+		if (argc < 4) {
+			usage(argv[0]);
+			return 1;
+		}
+
+		hwpoint_id = strtoull(argv[3], &endp, 0);
+		if (*endp != '\0' || !hwpoint_id) {
+			fprintf(stderr, "invalid hwpoint id: %s\n", argv[3]);
 			return 1;
 		}
 	}
@@ -2153,6 +2700,82 @@ int main(int argc, char **argv)
 		if (set_and_verify_reg(session_fd, tid, argv[4], reg_value) < 0) {
 			close(session_fd);
 			return 1;
+		}
+	} else if (strcmp(argv[1], "hwadd") == 0) {
+		struct lkmdbg_hwpoint_request reply;
+
+		memset(&reply, 0, sizeof(reply));
+		if (add_hwpoint(session_fd, tid, hwpoint_addr, hwpoint_type,
+				hwpoint_len, &reply) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		printf("hwpoint.id=%" PRIu64 "\n", (uint64_t)reply.id);
+		printf("hwpoint.tid=%d\n", reply.tid);
+	} else if (strcmp(argv[1], "hwdel") == 0) {
+		if (remove_hwpoint(session_fd, hwpoint_id) < 0) {
+			close(session_fd);
+			return 1;
+		}
+	} else if (strcmp(argv[1], "hwlist") == 0) {
+		struct lkmdbg_hwpoint_entry entries[16];
+		uint64_t cursor = 0;
+
+		for (;;) {
+			struct lkmdbg_hwpoint_query_request reply;
+			uint32_t i;
+
+			if (query_hwpoints(session_fd, cursor, entries,
+					   (uint32_t)(sizeof(entries) /
+						      sizeof(entries[0])),
+					   &reply) < 0) {
+				close(session_fd);
+				return 1;
+			}
+
+			for (i = 0; i < reply.entries_filled; i++) {
+				printf("id=%" PRIu64 " tgid=%d tid=%d type=0x%x len=%u addr=0x%" PRIx64 "\n",
+				       (uint64_t)entries[i].id, entries[i].tgid,
+				       entries[i].tid, entries[i].type,
+				       entries[i].len,
+				       (uint64_t)entries[i].addr);
+			}
+
+			if (reply.done)
+				break;
+			cursor = reply.next_id;
+		}
+	} else if (strcmp(argv[1], "step") == 0) {
+		if (freeze_target_threads(session_fd, 2000, NULL, 1) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		if (drain_session_events(session_fd) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		if (single_step_thread(session_fd, tid) < 0) {
+			thaw_target_threads(session_fd, 2000, NULL, 0);
+			close(session_fd);
+			return 1;
+		}
+		if (thaw_target_threads(session_fd, 2000, NULL, 1) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		{
+			struct lkmdbg_event_record event;
+
+			if (wait_for_session_event(session_fd,
+						   LKMDBG_EVENT_TARGET_STOP,
+						   LKMDBG_STOP_REASON_SINGLE_STEP,
+						   2000, &event) < 0) {
+				close(session_fd);
+				return 1;
+			}
+			printf("single_step.tid=%d\n", event.tid);
+			printf("single_step.pc=0x%" PRIx64 "\n",
+			       (uint64_t)event.value0);
 		}
 	} else if (strcmp(argv[1], "write") == 0) {
 		const char *data = argv[4];

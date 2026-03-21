@@ -7,6 +7,7 @@
 #include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/poll.h>
+#include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/wait.h>
@@ -23,6 +24,7 @@ struct mm_struct;
 struct seq_file;
 struct task_struct;
 struct lkmdbg_freezer;
+struct perf_event;
 
 struct lkmdbg_hook_registry_entry {
 	struct list_head node;
@@ -85,6 +87,18 @@ struct lkmdbg_symbols {
 	unsigned long task_work_cancel_match_sym;
 	unsigned long task_work_cancel_func_sym;
 	unsigned long task_work_cancel_sym;
+	unsigned long register_user_step_hook_sym;
+	unsigned long unregister_user_step_hook_sym;
+	unsigned long user_enable_single_step_sym;
+	unsigned long user_disable_single_step_sym;
+	unsigned long register_trace_sched_process_fork_sym;
+	unsigned long unregister_trace_sched_process_fork_sym;
+	unsigned long register_trace_sched_process_exec_sym;
+	unsigned long unregister_trace_sched_process_exec_sym;
+	unsigned long register_trace_sched_process_exit_sym;
+	unsigned long unregister_trace_sched_process_exit_sym;
+	unsigned long register_trace_signal_generate_sym;
+	unsigned long unregister_trace_signal_generate_sym;
 };
 
 int lkmdbg_disable_kprobe_blacklist(void);
@@ -93,7 +107,9 @@ int lkmdbg_cfi_bypass(void);
 struct lkmdbg_session {
 	struct list_head node;
 	struct mutex lock;
+	spinlock_t event_lock;
 	wait_queue_head_t readq;
+	wait_queue_head_t async_waitq;
 	u64 session_id;
 	u64 ioctl_calls;
 	u64 event_seq;
@@ -102,6 +118,12 @@ struct lkmdbg_session {
 	pid_t owner_tgid;
 	pid_t target_tgid;
 	pid_t target_tid;
+	struct list_head hwpoints;
+	u64 next_hwpoint_id;
+	pid_t step_tgid;
+	pid_t step_tid;
+	bool step_armed;
+	atomic_t async_refs;
 	struct lkmdbg_freezer *freezer;
 	struct lkmdbg_event_record events[LKMDBG_SESSION_EVENT_CAPACITY];
 };
@@ -144,7 +166,16 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 ssize_t lkmdbg_session_read(struct file *file, char __user *buf, size_t count,
 			   loff_t *ppos);
 __poll_t lkmdbg_session_poll(struct file *file, poll_table *wait);
+void lkmdbg_session_queue_event_ex(struct lkmdbg_session *session, u32 type,
+				   u32 code, pid_t tgid, pid_t tid, u32 flags,
+				   u64 value0, u64 value1);
+struct lkmdbg_session *lkmdbg_session_consume_single_step(pid_t tgid,
+							  pid_t tid);
+void lkmdbg_session_async_put(struct lkmdbg_session *session);
 void lkmdbg_session_broadcast_event(u32 type, u64 value0, u64 value1);
+void lkmdbg_session_broadcast_target_event(pid_t target_tgid, u32 type,
+					   u32 code, pid_t tid, u32 flags,
+					   u64 value0, u64 value1);
 int lkmdbg_get_target_mm(struct lkmdbg_session *session,
 			 struct mm_struct **mm_out);
 int lkmdbg_get_target_identity(struct lkmdbg_session *session, pid_t *tgid_out,
@@ -158,6 +189,13 @@ long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_query_threads(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_get_regs(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_set_regs(struct lkmdbg_session *session, void __user *argp);
+int lkmdbg_thread_ctrl_init(void);
+void lkmdbg_thread_ctrl_exit(void);
+void lkmdbg_thread_ctrl_release(struct lkmdbg_session *session);
+long lkmdbg_add_hwpoint(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_remove_hwpoint(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_query_hwpoints(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_freeze_threads(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_thaw_threads(struct lkmdbg_session *session, void __user *argp);
 void lkmdbg_session_freeze_release(struct lkmdbg_session *session);
