@@ -193,19 +193,10 @@ jobs:
             flex \
             gcc-aarch64-linux-gnu \
             git \
+            libc6-dev-arm64-cross \
             libelf-dev \
             libssl-dev \
-            qemu-system-arm \
-            wget
-
-      - name: Fetch arm64 busybox
-        run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          mkdir -p "$RUNNER_TEMP/busybox-arm64"
-          cd "$RUNNER_TEMP"
-          apt download busybox-static:arm64
-          dpkg-deb -x busybox-static_*_arm64.deb "$RUNNER_TEMP/busybox-arm64"
+            qemu-system-arm
 
       - name: Fetch upstream Linux
         run: |
@@ -238,14 +229,13 @@ jobs:
       - name: Build QEMU initramfs
         run: |
           INITRAMFS_DIR="$RUNNER_TEMP/initramfs"
-          BUSYBOX_DIR="$RUNNER_TEMP/busybox-arm64"
-          mkdir -p "$INITRAMFS_DIR/bin" "$INITRAMFS_DIR/dev" \
-            "$INITRAMFS_DIR/proc" "$INITRAMFS_DIR/sys" "$INITRAMFS_DIR/sbin"
-          cp "$BUSYBOX_DIR/bin/busybox" "$INITRAMFS_DIR/bin/busybox"
-          for applet in sh mount uname grep cat insmod rmmod poweroff; do
-            ln -s /bin/busybox "$INITRAMFS_DIR/bin/$applet"
-          done
-          install -m 0755 "$GITHUB_WORKSPACE/.github/scripts/qemu-smoke-init.sh" \
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/qemu-smoke-init" \
+            "$GITHUB_WORKSPACE/.github/scripts/qemu-smoke-init.c"
+          mkdir -p "$INITRAMFS_DIR/dev" "$INITRAMFS_DIR/proc" \
+            "$INITRAMFS_DIR/sys" "$INITRAMFS_DIR/sys/kernel" \
+            "$INITRAMFS_DIR/sys/kernel/debug"
+          install -m 0755 "$RUNNER_TEMP/qemu-smoke-init" \
             "$INITRAMFS_DIR/init"
           cp "$GITHUB_WORKSPACE/lkmdbg.ko" "$INITRAMFS_DIR/lkmdbg.ko"
           (

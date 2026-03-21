@@ -1,13 +1,16 @@
-#include <asm/pgtable.h>
-#include <asm/tlbflush.h>
 #include <linux/cpu.h>
+#include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
-#include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
 #include <linux/stop_machine.h>
+
+#ifdef CONFIG_ARM64
+#include <asm/pgtable.h>
+#include <asm/tlbflush.h>
+#include <linux/mm.h>
 #include <linux/vmalloc.h>
 
 #include "kp_hook.h"
@@ -367,3 +370,83 @@ void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook)
 
 	kfree(hook);
 }
+#else
+#include "lkmdbg_internal.h"
+
+struct lkmdbg_inline_hook {
+	int unsupported;
+};
+
+int lkmdbg_hooks_init(void)
+{
+	return 0;
+}
+
+void lkmdbg_hooks_exit(void)
+{
+}
+
+int lkmdbg_hooks_prepare_exec_pool(void)
+{
+	return 0;
+}
+
+int lkmdbg_hook_alloc_exec(struct lkmdbg_inline_hook *hook)
+{
+	return hook ? -EOPNOTSUPP : -EINVAL;
+}
+
+int lkmdbg_hook_create(void *target, void *replacement,
+		       struct lkmdbg_inline_hook **hook_out,
+		       void **orig_out)
+{
+	if (!target || !replacement || !hook_out || !orig_out)
+		return -EINVAL;
+
+	*hook_out = NULL;
+	*orig_out = NULL;
+	return -EOPNOTSUPP;
+}
+
+int lkmdbg_hook_prepare_exec(struct lkmdbg_inline_hook *hook, void **orig_out)
+{
+	if (!hook)
+		return -EINVAL;
+
+	if (orig_out)
+		*orig_out = NULL;
+	return -EOPNOTSUPP;
+}
+
+int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
+{
+	if (!hook)
+		return -EINVAL;
+
+	if (orig_out)
+		*orig_out = NULL;
+	return -EOPNOTSUPP;
+}
+
+int lkmdbg_hook_activate(struct lkmdbg_inline_hook *hook, void **orig_out)
+{
+	return lkmdbg_hook_patch_target(hook, orig_out);
+}
+
+int lkmdbg_hook_install(void *target, void *replacement,
+			struct lkmdbg_inline_hook **hook_out,
+			void **orig_out)
+{
+	if (!target || !replacement || !hook_out || !orig_out)
+		return -EINVAL;
+
+	*hook_out = NULL;
+	*orig_out = NULL;
+	return -EOPNOTSUPP;
+}
+
+void lkmdbg_hook_remove(struct lkmdbg_inline_hook *hook)
+{
+	(void)hook;
+}
+#endif
