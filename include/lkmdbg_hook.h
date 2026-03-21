@@ -5,6 +5,7 @@ struct lkmdbg_inline_hook;
 
 int lkmdbg_hooks_init(void);
 void lkmdbg_hooks_exit(void);
+int lkmdbg_hooks_prepare_exec_pool(void);
 
 int lkmdbg_hook_create(void *target, void *replacement,
 		       struct lkmdbg_inline_hook **hook_out,

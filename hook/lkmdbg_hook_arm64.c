@@ -126,6 +126,9 @@ static int lkmdbg_exec_pool_init(void)
 	void *pool;
 	int ret;
 
+	if (lkmdbg_exec_pool)
+		return 0;
+
 	pool = NULL;
 	ret = 0;
 
@@ -617,6 +620,11 @@ static int lkmdbg_patch_stop_machine(void *data)
 
 int lkmdbg_hooks_init(void)
 {
+	return 0;
+}
+
+int lkmdbg_hooks_prepare_exec_pool(void)
+{
 	return lkmdbg_exec_pool_init();
 }
 
@@ -686,6 +694,10 @@ int lkmdbg_hook_alloc_exec(struct lkmdbg_inline_hook *hook)
 
 	if (hook->trampoline_is_exec)
 		return 0;
+
+	ret = lkmdbg_hooks_prepare_exec_pool();
+	if (ret)
+		return ret;
 
 	pr_emerg("lkmdbg: hook_activate stage=exec_alloc_begin target=%px origin=%px\n",
 		 hook->target, hook->origin);

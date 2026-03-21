@@ -17,7 +17,7 @@ MODULE_PARM_DESC(hook_proc_version,
 unsigned int hook_selftest_mode;
 module_param(hook_selftest_mode, uint, 0644);
 MODULE_PARM_DESC(hook_selftest_mode,
-		 "0=off, 1=prepare only, 2=allocate exec trampoline only, 3=populate exec trampoline, 4=install only, 5=install and invoke a module-local arm64 inline hook");
+		 "0=off, 1=prepare only, 2=prepare exec pool only, 3=allocate exec trampoline only, 4=populate exec trampoline, 5=install only, 6=install and invoke a module-local arm64 inline hook");
 
 bool bypass_kprobe_blacklist;
 module_param(bypass_kprobe_blacklist, bool, 0644);
@@ -85,6 +85,7 @@ static int lkmdbg_run_hook_selftest(void)
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.hook_selftest_enabled = true;
+	lkmdbg_state.hook_selftest_exec_pool_ready = false;
 	lkmdbg_state.hook_selftest_exec_allocated = false;
 	lkmdbg_state.hook_selftest_exec_ready = false;
 	lkmdbg_state.hook_selftest_installed = false;
@@ -101,6 +102,23 @@ static int lkmdbg_run_hook_selftest(void)
 		return 0;
 	}
 
+	lkmdbg_trace_stage("hook_selftest_exec_pool_begin");
+	ret = lkmdbg_hooks_prepare_exec_pool();
+	mutex_lock(&lkmdbg_state.lock);
+	lkmdbg_state.hook_selftest_ret = ret;
+	mutex_unlock(&lkmdbg_state.lock);
+	if (ret)
+		return ret;
+
+	mutex_lock(&lkmdbg_state.lock);
+	lkmdbg_state.hook_selftest_exec_pool_ready = true;
+	mutex_unlock(&lkmdbg_state.lock);
+
+	if (hook_selftest_mode < 3) {
+		lkmdbg_trace_stage("hook_selftest_exec_pool_done");
+		return 0;
+	}
+
 	lkmdbg_trace_stage("hook_selftest_exec_alloc_begin");
 	ret = lkmdbg_hook_alloc_exec(lkmdbg_selftest_hook);
 	mutex_lock(&lkmdbg_state.lock);
@@ -113,7 +131,7 @@ static int lkmdbg_run_hook_selftest(void)
 	lkmdbg_state.hook_selftest_exec_allocated = true;
 	mutex_unlock(&lkmdbg_state.lock);
 
-	if (hook_selftest_mode < 3) {
+	if (hook_selftest_mode < 4) {
 		lkmdbg_trace_stage("hook_selftest_exec_alloc_done");
 		return 0;
 	}
@@ -132,7 +150,7 @@ static int lkmdbg_run_hook_selftest(void)
 	lkmdbg_state.hook_selftest_exec_ready = true;
 	mutex_unlock(&lkmdbg_state.lock);
 
-	if (hook_selftest_mode < 4) {
+	if (hook_selftest_mode < 5) {
 		lkmdbg_trace_stage("hook_selftest_exec_prepare_done");
 		return 0;
 	}
@@ -151,7 +169,7 @@ static int lkmdbg_run_hook_selftest(void)
 	lkmdbg_state.hook_selftest_installed = true;
 	mutex_unlock(&lkmdbg_state.lock);
 
-	if (hook_selftest_mode < 5) {
+	if (hook_selftest_mode < 6) {
 		lkmdbg_trace_stage("hook_selftest_install_done");
 		return 0;
 	}
