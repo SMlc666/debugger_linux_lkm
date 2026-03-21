@@ -364,7 +364,6 @@ static long lkmdbg_mem_xfer(struct lkmdbg_session *session, void __user *argp,
 		ret = 0;
 	ret = lkmdbg_mem_copy_reply(argp, &req, ops, ops_bytes, ret);
 
-out_mm:
 	mmput(mm);
 	kfree(ops);
 	return ret;
