@@ -103,38 +103,6 @@ static int lkmdbg_resolve_runtime_symbols(void)
 	if (addr)
 		lkmdbg_symbols.user_disable_single_step_sym = addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("register_trace_sched_process_fork");
-	if (addr)
-		lkmdbg_symbols.register_trace_sched_process_fork_sym = addr;
-
-	addr = lkmdbg_symbols.kallsyms_lookup_name("unregister_trace_sched_process_fork");
-	if (addr)
-		lkmdbg_symbols.unregister_trace_sched_process_fork_sym = addr;
-
-	addr = lkmdbg_symbols.kallsyms_lookup_name("register_trace_sched_process_exec");
-	if (addr)
-		lkmdbg_symbols.register_trace_sched_process_exec_sym = addr;
-
-	addr = lkmdbg_symbols.kallsyms_lookup_name("unregister_trace_sched_process_exec");
-	if (addr)
-		lkmdbg_symbols.unregister_trace_sched_process_exec_sym = addr;
-
-	addr = lkmdbg_symbols.kallsyms_lookup_name("register_trace_sched_process_exit");
-	if (addr)
-		lkmdbg_symbols.register_trace_sched_process_exit_sym = addr;
-
-	addr = lkmdbg_symbols.kallsyms_lookup_name("unregister_trace_sched_process_exit");
-	if (addr)
-		lkmdbg_symbols.unregister_trace_sched_process_exit_sym = addr;
-
-	addr = lkmdbg_symbols.kallsyms_lookup_name("register_trace_signal_generate");
-	if (addr)
-		lkmdbg_symbols.register_trace_signal_generate_sym = addr;
-
-	addr = lkmdbg_symbols.kallsyms_lookup_name("unregister_trace_signal_generate");
-	if (addr)
-		lkmdbg_symbols.unregister_trace_signal_generate_sym = addr;
-
 	return 0;
 }
 
@@ -163,12 +131,4 @@ void lkmdbg_symbols_exit(void)
 	lkmdbg_symbols.unregister_user_step_hook_sym = 0;
 	lkmdbg_symbols.user_enable_single_step_sym = 0;
 	lkmdbg_symbols.user_disable_single_step_sym = 0;
-	lkmdbg_symbols.register_trace_sched_process_fork_sym = 0;
-	lkmdbg_symbols.unregister_trace_sched_process_fork_sym = 0;
-	lkmdbg_symbols.register_trace_sched_process_exec_sym = 0;
-	lkmdbg_symbols.unregister_trace_sched_process_exec_sym = 0;
-	lkmdbg_symbols.register_trace_sched_process_exit_sym = 0;
-	lkmdbg_symbols.unregister_trace_sched_process_exit_sym = 0;
-	lkmdbg_symbols.register_trace_signal_generate_sym = 0;
-	lkmdbg_symbols.unregister_trace_signal_generate_sym = 0;
 }

@@ -91,14 +91,6 @@ struct lkmdbg_symbols {
 	unsigned long unregister_user_step_hook_sym;
 	unsigned long user_enable_single_step_sym;
 	unsigned long user_disable_single_step_sym;
-	unsigned long register_trace_sched_process_fork_sym;
-	unsigned long unregister_trace_sched_process_fork_sym;
-	unsigned long register_trace_sched_process_exec_sym;
-	unsigned long unregister_trace_sched_process_exec_sym;
-	unsigned long register_trace_sched_process_exit_sym;
-	unsigned long unregister_trace_sched_process_exit_sym;
-	unsigned long register_trace_signal_generate_sym;
-	unsigned long unregister_trace_signal_generate_sym;
 };
 
 int lkmdbg_disable_kprobe_blacklist(void);
