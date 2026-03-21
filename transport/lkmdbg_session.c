@@ -13,6 +13,12 @@
 
 static LIST_HEAD(lkmdbg_session_list);
 static DEFINE_SPINLOCK(lkmdbg_session_list_lock);
+static void lkmdbg_session_stop_workfn(struct work_struct *work);
+
+static void lkmdbg_session_zero_stop(struct lkmdbg_stop_state *stop)
+{
+	memset(stop, 0, sizeof(*stop));
+}
 
 static bool lkmdbg_session_has_events(struct lkmdbg_session *session)
 {
@@ -121,6 +127,135 @@ void lkmdbg_session_broadcast_event(u32 type, u64 value0, u64 value1)
 	spin_unlock_irqrestore(&lkmdbg_session_list_lock, irqflags);
 }
 
+void lkmdbg_session_commit_stop(struct lkmdbg_session *session, u32 reason,
+				pid_t tgid, pid_t tid, u32 event_flags,
+				u32 stop_flags, u64 value0, u64 value1,
+				const struct lkmdbg_regs_arm64 *regs)
+{
+	struct lkmdbg_stop_state stop;
+
+	lkmdbg_session_zero_stop(&stop);
+	stop.reason = reason;
+	stop.flags = stop_flags | LKMDBG_STOP_FLAG_ACTIVE;
+	stop.tgid = tgid;
+	stop.tid = tid;
+	stop.event_flags = event_flags;
+	stop.value0 = value0;
+	stop.value1 = value1;
+	if (regs) {
+		stop.regs = *regs;
+		stop.flags |= LKMDBG_STOP_FLAG_REGS_VALID;
+	}
+
+	mutex_lock(&session->lock);
+	session->next_stop_cookie++;
+	stop.cookie = session->next_stop_cookie;
+	session->stop_state = stop;
+	mutex_unlock(&session->lock);
+}
+
+void lkmdbg_session_clear_stop(struct lkmdbg_session *session)
+{
+	mutex_lock(&session->lock);
+	lkmdbg_session_zero_stop(&session->stop_state);
+	mutex_unlock(&session->lock);
+}
+
+static void lkmdbg_session_stop_workfn(struct work_struct *work)
+{
+	struct lkmdbg_session *session =
+		container_of(work, struct lkmdbg_session, stop_work);
+	struct lkmdbg_stop_state stop;
+	struct lkmdbg_freeze_request freeze_req;
+	u64 target_gen;
+	bool closing;
+	int ret;
+
+	lkmdbg_session_zero_stop(&stop);
+	memset(&freeze_req, 0, sizeof(freeze_req));
+
+	mutex_lock(&session->lock);
+	stop = session->pending_stop;
+	target_gen = session->stop_work_target_gen;
+	closing = session->closing;
+	lkmdbg_session_zero_stop(&session->pending_stop);
+	mutex_unlock(&session->lock);
+
+	if (closing || !stop.reason)
+		goto out;
+
+	mutex_lock(&session->lock);
+	if (session->target_gen != target_gen || session->target_tgid != stop.tgid) {
+		mutex_unlock(&session->lock);
+		goto out;
+	}
+	mutex_unlock(&session->lock);
+
+	ret = lkmdbg_session_freeze_target(session, 1000, &freeze_req);
+	if (ret) {
+		pr_warn("lkmdbg: async stop freeze failed tgid=%d tid=%d reason=%u ret=%d\n",
+			stop.tgid, stop.tid, stop.reason, ret);
+		goto out;
+	}
+
+	lkmdbg_session_commit_stop(session, stop.reason, stop.tgid, stop.tid,
+				   stop.event_flags,
+				   stop.flags | LKMDBG_STOP_FLAG_FROZEN,
+				   stop.value0, stop.value1,
+				   (stop.flags & LKMDBG_STOP_FLAG_REGS_VALID) ?
+					   &stop.regs :
+					   NULL);
+	lkmdbg_session_queue_event_ex(session, LKMDBG_EVENT_TARGET_STOP,
+				      stop.reason, stop.tgid, stop.tid,
+				      stop.event_flags, stop.value0,
+				      stop.value1);
+
+out:
+	mutex_lock(&session->lock);
+	session->stop_work_pending = false;
+	mutex_unlock(&session->lock);
+	lkmdbg_session_async_put(session);
+}
+
+void lkmdbg_session_request_async_stop(struct lkmdbg_session *session,
+				       u32 reason, pid_t tgid, pid_t tid,
+				       u32 event_flags, u32 stop_flags,
+				       u64 value0, u64 value1,
+				       const struct lkmdbg_regs_arm64 *regs)
+{
+	bool scheduled = false;
+
+	if (!session || tgid <= 0)
+		return;
+
+	mutex_lock(&session->lock);
+	if (!session->closing && session->target_tgid == tgid &&
+	    !(session->stop_state.flags & LKMDBG_STOP_FLAG_ACTIVE) &&
+	    !session->stop_work_pending && !session->freezer) {
+		lkmdbg_session_zero_stop(&session->pending_stop);
+		session->pending_stop.reason = reason;
+		session->pending_stop.flags =
+			stop_flags | LKMDBG_STOP_FLAG_ASYNC;
+		session->pending_stop.tgid = tgid;
+		session->pending_stop.tid = tid;
+		session->pending_stop.event_flags = event_flags;
+		session->pending_stop.value0 = value0;
+		session->pending_stop.value1 = value1;
+		if (regs) {
+			session->pending_stop.regs = *regs;
+			session->pending_stop.flags |= LKMDBG_STOP_FLAG_REGS_VALID;
+		}
+		session->stop_work_pending = true;
+		session->stop_work_target_gen = session->target_gen;
+		atomic_inc(&session->async_refs);
+		scheduled = true;
+	}
+	mutex_unlock(&session->lock);
+
+	if (scheduled)
+		schedule_work(&session->stop_work);
+}
+
 void lkmdbg_session_broadcast_target_event(pid_t target_tgid, u32 type,
 					   u32 code, pid_t tid, u32 flags,
 					   u64 value0, u64 value1)
@@ -182,6 +317,96 @@ static int lkmdbg_session_copy_status_to_user(struct lkmdbg_session *session,
 	return 0;
 }
 
+static int lkmdbg_validate_stop_query(struct lkmdbg_stop_query_request *req)
+{
+	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
+		return -EINVAL;
+	if (req->flags)
+		return -EINVAL;
+	return 0;
+}
+
+long lkmdbg_get_stop_state(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_stop_query_request req;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	if (lkmdbg_validate_stop_query(&req))
+		return -EINVAL;
+
+	mutex_lock(&session->lock);
+	req.stop = session->stop_state;
+	mutex_unlock(&session->lock);
+
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
+}
+
+static int lkmdbg_validate_continue_request(struct lkmdbg_continue_request *req)
+{
+	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
+		return -EINVAL;
+	if (req->flags & ~LKMDBG_CONTINUE_FLAG_REARM_HWPOINTS)
+		return -EINVAL;
+	return 0;
+}
+
+long lkmdbg_continue_target(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_continue_request req;
+	struct lkmdbg_stop_state stop;
+	struct lkmdbg_freeze_request thaw_req;
+	long ret = 0;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	ret = lkmdbg_validate_continue_request(&req);
+	if (ret)
+		return ret;
+
+	lkmdbg_session_zero_stop(&stop);
+	memset(&thaw_req, 0, sizeof(thaw_req));
+
+	mutex_lock(&session->lock);
+	stop = session->stop_state;
+	mutex_unlock(&session->lock);
+
+	if ((stop.flags & LKMDBG_STOP_FLAG_ACTIVE) && req.stop_cookie &&
+	    req.stop_cookie != stop.cookie)
+		return -ESTALE;
+
+	if (req.flags & LKMDBG_CONTINUE_FLAG_REARM_HWPOINTS) {
+		ret = lkmdbg_rearm_all_hwpoints(session);
+		if (ret)
+			return ret;
+	}
+
+	lkmdbg_session_clear_stop(session);
+	ret = lkmdbg_session_thaw_target(session, req.timeout_ms, &thaw_req);
+	if (ret && ret != -ENODEV) {
+		if (stop.flags & LKMDBG_STOP_FLAG_ACTIVE) {
+			mutex_lock(&session->lock);
+			session->stop_state = stop;
+			mutex_unlock(&session->lock);
+		}
+		return ret;
+	}
+
+	req.threads_total = thaw_req.threads_total;
+	req.threads_settled = thaw_req.threads_settled;
+	req.threads_parked = thaw_req.threads_parked;
+
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
+}
+
 static int lkmdbg_session_release(struct inode *inode, struct file *file)
 {
 	struct lkmdbg_session *session = file->private_data;
@@ -192,6 +417,11 @@ static int lkmdbg_session_release(struct inode *inode, struct file *file)
 	if (!list_empty(&session->node))
 		list_del_init(&session->node);
 	spin_unlock(&lkmdbg_session_list_lock);
+
+	mutex_lock(&session->lock);
+	session->closing = true;
+	mutex_unlock(&session->lock);
+	flush_work(&session->stop_work);
 
 	lkmdbg_thread_ctrl_release(session);
 	lkmdbg_session_freeze_release(session);
@@ -313,6 +543,8 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_mem_read(session, argp);
 	case LKMDBG_IOC_WRITE_MEM:
 		return lkmdbg_mem_write(session, argp);
+	case LKMDBG_IOC_QUERY_PAGES:
+		return lkmdbg_page_query(session, argp);
 	case LKMDBG_IOC_QUERY_VMAS:
 		return lkmdbg_vma_query(session, argp);
 	case LKMDBG_IOC_QUERY_THREADS:
@@ -321,6 +553,10 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_get_regs(session, argp);
 	case LKMDBG_IOC_SET_REGS:
 		return lkmdbg_set_regs(session, argp);
+	case LKMDBG_IOC_GET_STOP_STATE:
+		return lkmdbg_get_stop_state(session, argp);
+	case LKMDBG_IOC_CONTINUE_TARGET:
+		return lkmdbg_continue_target(session, argp);
 	case LKMDBG_IOC_ADD_HWPOINT:
 		return lkmdbg_add_hwpoint(session, argp);
 	case LKMDBG_IOC_REMOVE_HWPOINT:
@@ -382,6 +618,7 @@ int lkmdbg_open_session(void __user *argp)
 	init_waitqueue_head(&session->async_waitq);
 	INIT_LIST_HEAD(&session->node);
 	INIT_LIST_HEAD(&session->hwpoints);
+	INIT_WORK(&session->stop_work, lkmdbg_session_stop_workfn);
 	atomic_set(&session->async_refs, 0);
 	session->owner_tgid = current->tgid;
 

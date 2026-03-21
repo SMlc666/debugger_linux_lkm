@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 3
+#define LKMDBG_PROTO_VERSION 4
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 2
 
@@ -39,6 +39,12 @@
 #define LKMDBG_STOP_REASON_WATCHPOINT 3U
 #define LKMDBG_STOP_REASON_SINGLE_STEP 4U
 
+#define LKMDBG_STOP_FLAG_ACTIVE 0x00000001U
+#define LKMDBG_STOP_FLAG_FROZEN 0x00000002U
+#define LKMDBG_STOP_FLAG_ASYNC 0x00000004U
+#define LKMDBG_STOP_FLAG_REARM_REQUIRED 0x00000008U
+#define LKMDBG_STOP_FLAG_REGS_VALID 0x00000010U
+
 #define LKMDBG_HWPOINT_TYPE_READ 0x00000001U
 #define LKMDBG_HWPOINT_TYPE_WRITE 0x00000002U
 #define LKMDBG_HWPOINT_TYPE_READWRITE \
@@ -49,6 +55,8 @@
 
 #define LKMDBG_HWPOINT_STATE_ACTIVE 0x00000001U
 #define LKMDBG_HWPOINT_STATE_LATCHED 0x00000002U
+
+#define LKMDBG_CONTINUE_FLAG_REARM_HWPOINTS 0x00000001U
 
 #define LKMDBG_VMA_PROT_READ 0x00000001U
 #define LKMDBG_VMA_PROT_WRITE 0x00000002U
@@ -64,6 +72,24 @@
 #define LKMDBG_VMA_FLAG_HEAP 0x00000010U
 #define LKMDBG_VMA_FLAG_PFNMAP 0x00000020U
 #define LKMDBG_VMA_FLAG_IO 0x00000040U
+
+#define LKMDBG_PAGE_FLAG_MAPPED 0x00000001U
+#define LKMDBG_PAGE_FLAG_PRESENT 0x00000002U
+#define LKMDBG_PAGE_FLAG_NOFAULT_READ 0x00000004U
+#define LKMDBG_PAGE_FLAG_NOFAULT_WRITE 0x00000008U
+#define LKMDBG_PAGE_FLAG_FORCE_READ 0x00000010U
+#define LKMDBG_PAGE_FLAG_FORCE_WRITE 0x00000020U
+#define LKMDBG_PAGE_FLAG_PROT_READ 0x00000040U
+#define LKMDBG_PAGE_FLAG_PROT_WRITE 0x00000080U
+#define LKMDBG_PAGE_FLAG_PROT_EXEC 0x00000100U
+#define LKMDBG_PAGE_FLAG_MAYREAD 0x00000200U
+#define LKMDBG_PAGE_FLAG_MAYWRITE 0x00000400U
+#define LKMDBG_PAGE_FLAG_MAYEXEC 0x00000800U
+#define LKMDBG_PAGE_FLAG_ANON 0x00001000U
+#define LKMDBG_PAGE_FLAG_FILE 0x00002000U
+#define LKMDBG_PAGE_FLAG_SHARED 0x00004000U
+#define LKMDBG_PAGE_FLAG_PFNMAP 0x00008000U
+#define LKMDBG_PAGE_FLAG_IO 0x00010000U
 
 struct lkmdbg_open_session_request {
 	__u32 version;
@@ -197,6 +223,39 @@ struct lkmdbg_thread_regs_request {
 	struct lkmdbg_regs_arm64 regs;
 };
 
+struct lkmdbg_stop_state {
+	__u64 cookie;
+	__u32 reason;
+	__u32 flags;
+	__s32 tgid;
+	__s32 tid;
+	__u32 event_flags;
+	__u32 reserved0;
+	__u64 value0;
+	__u64 value1;
+	struct lkmdbg_regs_arm64 regs;
+};
+
+struct lkmdbg_stop_query_request {
+	__u32 version;
+	__u32 size;
+	__u32 flags;
+	__u32 reserved0;
+	struct lkmdbg_stop_state stop;
+};
+
+struct lkmdbg_continue_request {
+	__u32 version;
+	__u32 size;
+	__u32 flags;
+	__u32 timeout_ms;
+	__u64 stop_cookie;
+	__u32 threads_total;
+	__u32 threads_settled;
+	__u32 threads_parked;
+	__u32 reserved0;
+};
+
 struct lkmdbg_hwpoint_request {
 	__u32 version;
 	__u32 size;
@@ -237,6 +296,30 @@ struct lkmdbg_single_step_request {
 	__u32 size;
 	__s32 tid;
 	__u32 flags;
+};
+
+struct lkmdbg_page_entry {
+	__u64 page_addr;
+	__u64 pgoff;
+	__u64 inode;
+	__u64 vm_flags_raw;
+	__u32 flags;
+	__u32 dev_major;
+	__u32 dev_minor;
+	__u32 reserved0;
+};
+
+struct lkmdbg_page_query_request {
+	__u32 version;
+	__u32 size;
+	__u64 start_addr;
+	__u64 length;
+	__u64 entries_addr;
+	__u32 max_entries;
+	__u32 flags;
+	__u32 entries_filled;
+	__u32 done;
+	__u64 next_addr;
 };
 
 struct lkmdbg_event_record {
@@ -287,5 +370,11 @@ struct lkmdbg_event_record {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x1C, struct lkmdbg_single_step_request)
 #define LKMDBG_IOC_REARM_HWPOINT \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x1D, struct lkmdbg_hwpoint_request)
+#define LKMDBG_IOC_GET_STOP_STATE \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x1E, struct lkmdbg_stop_query_request)
+#define LKMDBG_IOC_CONTINUE_TARGET \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x1F, struct lkmdbg_continue_request)
+#define LKMDBG_IOC_QUERY_PAGES \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x20, struct lkmdbg_page_query_request)
 
 #endif

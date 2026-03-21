@@ -494,12 +494,112 @@ static int lkmdbg_session_target_tgid(struct lkmdbg_session *session,
 	return 0;
 }
 
-long lkmdbg_freeze_threads(struct lkmdbg_session *session, void __user *argp)
+int lkmdbg_session_freeze_target(struct lkmdbg_session *session,
+				 u32 timeout_ms,
+				 struct lkmdbg_freeze_request *req_out)
 {
-	struct lkmdbg_freeze_request req;
 	struct lkmdbg_freezer *freezer = NULL;
 	unsigned long deadline = 0;
 	pid_t target_tgid;
+	long ret;
+
+	ret = lkmdbg_session_target_tgid(session, &target_tgid);
+	if (ret)
+		return ret;
+
+	mutex_lock(&session->lock);
+	if (session->freezer) {
+		mutex_unlock(&session->lock);
+		return -EBUSY;
+	}
+	mutex_unlock(&session->lock);
+
+	ret = lkmdbg_freezer_create(&freezer, target_tgid);
+	if (ret)
+		return ret;
+
+	mutex_lock(&lkmdbg_freeze_owner_lock);
+	if (lkmdbg_freeze_owner) {
+		mutex_unlock(&lkmdbg_freeze_owner_lock);
+		lkmdbg_freezer_put(freezer);
+		return -EBUSY;
+	}
+	lkmdbg_freeze_owner = freezer;
+	mutex_unlock(&lkmdbg_freeze_owner_lock);
+
+	mutex_lock(&session->lock);
+	session->freezer = freezer;
+	mutex_unlock(&session->lock);
+
+	deadline = jiffies +
+		   msecs_to_jiffies(timeout_ms ? timeout_ms :
+						      LKMDBG_FREEZE_DEFAULT_TIMEOUT_MS);
+	ret = lkmdbg_freezer_expand_until_stable(freezer, deadline);
+
+	if (req_out) {
+		memset(req_out, 0, sizeof(*req_out));
+		req_out->version = LKMDBG_PROTO_VERSION;
+		req_out->size = sizeof(*req_out);
+		mutex_lock(&freezer->lock);
+		lkmdbg_freezer_fill_reply_locked(freezer, req_out);
+		mutex_unlock(&freezer->lock);
+	}
+
+	if (ret) {
+		lkmdbg_freezer_detach_session(session, freezer);
+		lkmdbg_freezer_begin_thaw(freezer);
+		lkmdbg_freezer_put(freezer);
+	}
+
+	return ret;
+}
+
+int lkmdbg_session_thaw_target(struct lkmdbg_session *session, u32 timeout_ms,
+			       struct lkmdbg_freeze_request *req_out)
+{
+	struct lkmdbg_freezer *freezer;
+	unsigned long deadline;
+	long ret = 0;
+
+	mutex_lock(&session->lock);
+	freezer = session->freezer;
+	mutex_unlock(&session->lock);
+	if (!freezer)
+		return -ENODEV;
+
+	lkmdbg_freezer_detach_session(session, freezer);
+	lkmdbg_freezer_begin_thaw(freezer);
+
+	deadline = jiffies +
+		   msecs_to_jiffies(timeout_ms ? timeout_ms :
+						      LKMDBG_FREEZE_DEFAULT_TIMEOUT_MS);
+	wait_event_timeout(
+		freezer->waitq,
+		({ bool done; \
+			mutex_lock(&freezer->lock); \
+			done = lkmdbg_freezer_all_completed_locked(freezer); \
+			if (req_out) \
+				lkmdbg_freezer_fill_reply_locked(freezer, req_out); \
+			mutex_unlock(&freezer->lock); \
+			done; }),
+		(long)(deadline - jiffies) > 0 ? (long)(deadline - jiffies) : 1);
+
+	mutex_lock(&freezer->lock);
+	if (req_out)
+		lkmdbg_freezer_fill_reply_locked(freezer, req_out);
+	if (!lkmdbg_freezer_all_completed_locked(freezer))
+		ret = -ETIMEDOUT;
+	mutex_unlock(&freezer->lock);
+
+	lkmdbg_freezer_put(freezer);
+	return ret;
+}
+
+long lkmdbg_freeze_threads(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_freeze_request req;
+	pid_t target_tgid;
+	u64 counts;
 	long ret;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
@@ -513,61 +613,27 @@ long lkmdbg_freeze_threads(struct lkmdbg_session *session, void __user *argp)
 	if (ret)
 		return lkmdbg_freezer_copy_reply(argp, &req, ret);
 
-	mutex_lock(&session->lock);
-	if (session->freezer) {
-		mutex_unlock(&session->lock);
-		return lkmdbg_freezer_copy_reply(argp, &req, -EBUSY);
-	}
-	mutex_unlock(&session->lock);
-
-	ret = lkmdbg_freezer_create(&freezer, target_tgid);
+	ret = lkmdbg_session_freeze_target(session, req.timeout_ms, &req);
 	if (ret)
 		return lkmdbg_freezer_copy_reply(argp, &req, ret);
 
-	mutex_lock(&lkmdbg_freeze_owner_lock);
-	if (lkmdbg_freeze_owner) {
-		mutex_unlock(&lkmdbg_freeze_owner_lock);
-		lkmdbg_freezer_put(freezer);
-		return lkmdbg_freezer_copy_reply(argp, &req, -EBUSY);
-	}
-	lkmdbg_freeze_owner = freezer;
-	mutex_unlock(&lkmdbg_freeze_owner_lock);
-
-	mutex_lock(&session->lock);
-	session->freezer = freezer;
-	mutex_unlock(&session->lock);
-
-	deadline = jiffies +
-		   msecs_to_jiffies(req.timeout_ms ? req.timeout_ms :
-						      LKMDBG_FREEZE_DEFAULT_TIMEOUT_MS);
-	ret = lkmdbg_freezer_expand_until_stable(freezer, deadline);
-
-	mutex_lock(&freezer->lock);
-	lkmdbg_freezer_fill_reply_locked(freezer, &req);
-	mutex_unlock(&freezer->lock);
-
-	if (ret) {
-		lkmdbg_freezer_detach_session(session, freezer);
-		lkmdbg_freezer_begin_thaw(freezer);
-		lkmdbg_freezer_put(freezer);
-	} else {
-		u64 counts = ((u64)req.threads_settled << 32) | req.threads_parked;
-
-		lkmdbg_session_queue_event_ex(session, LKMDBG_EVENT_TARGET_STOP,
-					      LKMDBG_STOP_REASON_FREEZE,
-					      target_tgid, 0, 0,
-					      req.threads_total, counts);
-	}
-
-	return lkmdbg_freezer_copy_reply(argp, &req, ret);
+	counts = ((u64)req.threads_settled << 32) | req.threads_parked;
+	lkmdbg_session_commit_stop(session, LKMDBG_STOP_REASON_FREEZE,
+				   target_tgid, 0, 0,
+				   LKMDBG_STOP_FLAG_FROZEN,
+				   req.threads_total, counts, NULL);
+	lkmdbg_session_queue_event_ex(session, LKMDBG_EVENT_TARGET_STOP,
+				      LKMDBG_STOP_REASON_FREEZE,
+				      target_tgid, 0, 0,
+				      req.threads_total, counts);
+	return lkmdbg_freezer_copy_reply(argp, &req, 0);
 }
 
 long lkmdbg_thaw_threads(struct lkmdbg_session *session, void __user *argp)
 {
 	struct lkmdbg_freeze_request req;
-	struct lkmdbg_freezer *freezer;
-	unsigned long deadline;
-	long ret = 0;
+	struct lkmdbg_stop_state stop;
+	long ret;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
 		return -EFAULT;
@@ -576,41 +642,30 @@ long lkmdbg_thaw_threads(struct lkmdbg_session *session, void __user *argp)
 	if (ret)
 		return ret;
 
+	memset(&stop, 0, sizeof(stop));
 	mutex_lock(&session->lock);
-	freezer = session->freezer;
+	stop = session->stop_state;
 	mutex_unlock(&session->lock);
-	if (!freezer)
-		return lkmdbg_freezer_copy_reply(argp, &req, -ENODEV);
+	lkmdbg_session_clear_stop(session);
 
-	lkmdbg_freezer_detach_session(session, freezer);
-	lkmdbg_freezer_begin_thaw(freezer);
-
-	deadline = jiffies +
-		   msecs_to_jiffies(req.timeout_ms ? req.timeout_ms :
-						      LKMDBG_FREEZE_DEFAULT_TIMEOUT_MS);
-	wait_event_timeout(
-		freezer->waitq,
-		({ bool done; \
-			mutex_lock(&freezer->lock); \
-			done = lkmdbg_freezer_all_completed_locked(freezer); \
-			lkmdbg_freezer_fill_reply_locked(freezer, &req); \
-			mutex_unlock(&freezer->lock); \
-			done; }),
-		(long)(deadline - jiffies) > 0 ? (long)(deadline - jiffies) : 1);
-
-	mutex_lock(&freezer->lock);
-	lkmdbg_freezer_fill_reply_locked(freezer, &req);
-	if (!lkmdbg_freezer_all_completed_locked(freezer))
-		ret = -ETIMEDOUT;
-	mutex_unlock(&freezer->lock);
-
-	lkmdbg_freezer_put(freezer);
+	ret = lkmdbg_session_thaw_target(session, req.timeout_ms, &req);
+	if (ret && ret != -ENODEV && (stop.flags & LKMDBG_STOP_FLAG_ACTIVE)) {
+		mutex_lock(&session->lock);
+		session->stop_state = stop;
+		mutex_unlock(&session->lock);
+	}
 	return lkmdbg_freezer_copy_reply(argp, &req, ret);
 }
 
 int lkmdbg_session_freeze_on_target_change(struct lkmdbg_session *session)
 {
+	mutex_lock(&session->lock);
+	session->target_gen++;
+	session->target_tgid = 0;
+	session->target_tid = 0;
+	mutex_unlock(&session->lock);
 	lkmdbg_session_freeze_release(session);
+	lkmdbg_session_clear_stop(session);
 	return 0;
 }
 
@@ -652,4 +707,5 @@ void lkmdbg_session_freeze_release(struct lkmdbg_session *session)
 	lkmdbg_freezer_detach_session(session, freezer);
 	lkmdbg_freezer_begin_thaw(freezer);
 	lkmdbg_freezer_put(freezer);
+	lkmdbg_session_clear_stop(session);
 }

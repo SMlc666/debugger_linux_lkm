@@ -33,6 +33,7 @@
 #define VMA_QUERY_BATCH 64
 #define VMA_QUERY_NAMES_SIZE 65536
 #define THREAD_QUERY_BATCH 64
+#define PAGE_QUERY_BATCH 64
 
 struct child_info {
 	uintptr_t basic_addr;
@@ -81,6 +82,10 @@ struct vma_query_buffer {
 	char *names;
 };
 
+struct page_query_buffer {
+	struct lkmdbg_page_entry *entries;
+};
+
 enum {
 	CHILD_OP_QUERY_NOFAULT = 1,
 	CHILD_OP_EXIT = 2,
@@ -89,6 +94,9 @@ enum {
 	CHILD_OP_TRIGGER_SIGNAL = 5,
 	CHILD_OP_SPAWN_THREAD = 6,
 };
+
+static int get_stop_state(int session_fd,
+			  struct lkmdbg_stop_query_request *reply_out);
 
 static int open_session_fd(void)
 {
@@ -238,6 +246,30 @@ static int wait_for_session_event(int session_fd, uint32_t type, uint32_t code,
 
 	fprintf(stderr, "event wait timed out type=%u code=%u\n", type, code);
 	return -ETIMEDOUT;
+}
+
+static int expect_stop_state(int session_fd, uint32_t reason,
+			     struct lkmdbg_stop_query_request *reply_out)
+{
+	struct lkmdbg_stop_query_request stop_req;
+
+	memset(&stop_req, 0, sizeof(stop_req));
+	if (get_stop_state(session_fd, &stop_req) < 0)
+		return -1;
+
+	if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_ACTIVE)) {
+		fprintf(stderr, "stop state inactive\n");
+		return -1;
+	}
+	if (reason && stop_req.stop.reason != reason) {
+		fprintf(stderr, "stop reason mismatch got=%u expected=%u\n",
+			stop_req.stop.reason, reason);
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = stop_req;
+	return 0;
 }
 
 static int query_target_threads(int session_fd, int32_t start_tid,
@@ -393,6 +425,46 @@ static int single_step_thread(int session_fd, pid_t tid)
 	return 0;
 }
 
+static int get_stop_state(int session_fd,
+			  struct lkmdbg_stop_query_request *reply_out)
+{
+	struct lkmdbg_stop_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_GET_STOP_STATE, &req) < 0) {
+		fprintf(stderr, "GET_STOP_STATE failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int continue_target(int session_fd, uint64_t stop_cookie,
+			   uint32_t timeout_ms, uint32_t flags,
+			   struct lkmdbg_continue_request *reply_out)
+{
+	struct lkmdbg_continue_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.flags = flags,
+		.timeout_ms = timeout_ms,
+		.stop_cookie = stop_cookie,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_CONTINUE_TARGET, &req) < 0) {
+		fprintf(stderr, "CONTINUE_TARGET failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
 static int control_target_threads(int session_fd, int thaw, uint32_t timeout_ms,
 				  struct lkmdbg_freeze_request *reply_out,
 				  int verbose)
@@ -438,6 +510,30 @@ static int thaw_target_threads(int session_fd, uint32_t timeout_ms,
 {
 	return control_target_threads(session_fd, 1, timeout_ms, reply_out,
 				      verbose);
+}
+
+static int query_target_pages(int session_fd, uint64_t start_addr,
+			      uint64_t length,
+			      struct page_query_buffer *buf,
+			      struct lkmdbg_page_query_request *reply_out)
+{
+	struct lkmdbg_page_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.start_addr = start_addr,
+		.length = length,
+		.entries_addr = (uintptr_t)buf->entries,
+		.max_entries = PAGE_QUERY_BATCH,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_PAGES, &req) < 0) {
+		fprintf(stderr, "QUERY_PAGES failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
 }
 
 static unsigned char pattern_byte(size_t index, unsigned int seed)
@@ -708,6 +804,30 @@ static int lookup_target_vma(int session_fd, uintptr_t remote_addr,
 	return -1;
 }
 
+static int lookup_target_page(int session_fd, uintptr_t remote_addr,
+			      uint64_t length,
+			      struct page_query_buffer *buf,
+			      struct lkmdbg_page_entry *entry_out)
+{
+	struct lkmdbg_page_query_request reply;
+	unsigned int i;
+
+	if (query_target_pages(session_fd, remote_addr, length, buf, &reply) < 0)
+		return -1;
+
+	for (i = 0; i < reply.entries_filled; i++) {
+		if (buf->entries[i].page_addr !=
+		    (uint64_t)(remote_addr & ~(uintptr_t)(getpagesize() - 1)))
+			continue;
+		*entry_out = buf->entries[i];
+		return 0;
+	}
+
+	fprintf(stderr, "address 0x%" PRIxPTR " not covered by returned page batch\n",
+		remote_addr);
+	return -1;
+}
+
 static int verify_vma_iteration(int session_fd, const struct child_info *info,
 				struct vma_query_buffer *buf)
 {
@@ -856,6 +976,92 @@ out:
 	return ret;
 }
 
+static int verify_page_query(int session_fd, const struct child_info *info)
+{
+	struct page_query_buffer buf = { 0 };
+	struct lkmdbg_page_entry entry;
+	uint32_t nofault_flags = 0;
+	uint32_t force_read_flags = 0;
+	uint32_t force_write_flags = 0;
+	int ret = -1;
+
+	buf.entries = calloc(PAGE_QUERY_BATCH, sizeof(*buf.entries));
+	if (!buf.entries) {
+		fprintf(stderr, "page query allocation failed\n");
+		return -1;
+	}
+
+	memset(&entry, 0, sizeof(entry));
+	if (lookup_target_page(session_fd, info->nofault_addr, info->page_size,
+			       &buf, &entry) < 0)
+		goto out;
+	if (!(entry.flags & LKMDBG_PAGE_FLAG_MAPPED) ||
+	    (entry.flags & LKMDBG_PAGE_FLAG_PRESENT) ||
+	    (entry.flags & (LKMDBG_PAGE_FLAG_NOFAULT_READ |
+			    LKMDBG_PAGE_FLAG_NOFAULT_WRITE |
+			    LKMDBG_PAGE_FLAG_FORCE_READ |
+			    LKMDBG_PAGE_FLAG_FORCE_WRITE))) {
+		fprintf(stderr, "nofault page flags mismatch flags=0x%x\n",
+			entry.flags);
+		goto out;
+	}
+	nofault_flags = entry.flags;
+
+	memset(&entry, 0, sizeof(entry));
+	if (lookup_target_page(session_fd, info->force_read_addr, info->page_size,
+			       &buf, &entry) < 0)
+		goto out;
+	if (!(entry.flags & LKMDBG_PAGE_FLAG_MAPPED) ||
+	    !(entry.flags & LKMDBG_PAGE_FLAG_PRESENT) ||
+	    !(entry.flags & LKMDBG_PAGE_FLAG_FORCE_READ) ||
+	    (entry.flags & (LKMDBG_PAGE_FLAG_NOFAULT_READ |
+			    LKMDBG_PAGE_FLAG_NOFAULT_WRITE |
+			    LKMDBG_PAGE_FLAG_FORCE_WRITE))) {
+		fprintf(stderr, "force-read page flags mismatch flags=0x%x\n",
+			entry.flags);
+		goto out;
+	}
+	force_read_flags = entry.flags;
+
+	memset(&entry, 0, sizeof(entry));
+	if (lookup_target_page(session_fd, info->force_write_addr, info->page_size,
+			       &buf, &entry) < 0)
+		goto out;
+	if (!(entry.flags & LKMDBG_PAGE_FLAG_MAPPED) ||
+	    !(entry.flags & LKMDBG_PAGE_FLAG_PRESENT) ||
+	    !(entry.flags & LKMDBG_PAGE_FLAG_NOFAULT_READ) ||
+	    !(entry.flags & LKMDBG_PAGE_FLAG_FORCE_WRITE) ||
+	    (entry.flags & LKMDBG_PAGE_FLAG_NOFAULT_WRITE)) {
+		fprintf(stderr, "force-write page flags mismatch flags=0x%x\n",
+			entry.flags);
+		goto out;
+	}
+	force_write_flags = entry.flags;
+
+	memset(&entry, 0, sizeof(entry));
+	if (lookup_target_page(session_fd, info->file_addr, info->page_size, &buf,
+			       &entry) < 0)
+		goto out;
+	if (!(entry.flags & LKMDBG_PAGE_FLAG_FILE) ||
+	    entry.inode != info->file_inode ||
+	    entry.dev_major != info->file_dev_major ||
+	    entry.dev_minor != info->file_dev_minor) {
+		fprintf(stderr,
+			"file page metadata mismatch flags=0x%x inode=%" PRIu64 " dev=%u:%u\n",
+			entry.flags, (uint64_t)entry.inode, entry.dev_major,
+			entry.dev_minor);
+		goto out;
+	}
+
+	printf("selftest page query ok nofault=0x%x force_read=0x%x force_write=0x%x\n",
+	       nofault_flags, force_read_flags, force_write_flags);
+	ret = 0;
+
+out:
+	free(buf.entries);
+	return ret;
+}
+
 static void print_vma_prot(uint32_t prot, char out[7])
 {
 	out[0] = (prot & LKMDBG_VMA_PROT_READ) ? 'r' : '-';
@@ -917,6 +1123,78 @@ static int dump_target_vmas(int session_fd)
 
 out:
 	free(buf.names);
+	free(buf.entries);
+	return ret;
+}
+
+static void print_stop_state(const struct lkmdbg_stop_state *stop)
+{
+	printf("stop.cookie=%" PRIu64 "\n", (uint64_t)stop->cookie);
+	printf("stop.reason=%u\n", stop->reason);
+	printf("stop.flags=0x%x\n", stop->flags);
+	printf("stop.tgid=%d\n", stop->tgid);
+	printf("stop.tid=%d\n", stop->tid);
+	printf("stop.event_flags=0x%x\n", stop->event_flags);
+	printf("stop.value0=0x%" PRIx64 "\n", (uint64_t)stop->value0);
+	printf("stop.value1=0x%" PRIx64 "\n", (uint64_t)stop->value1);
+	if (stop->flags & LKMDBG_STOP_FLAG_REGS_VALID) {
+		printf("stop.pc=0x%" PRIx64 "\n", (uint64_t)stop->regs.pc);
+		printf("stop.sp=0x%" PRIx64 "\n", (uint64_t)stop->regs.sp);
+		printf("stop.pstate=0x%" PRIx64 "\n",
+		       (uint64_t)stop->regs.pstate);
+	}
+}
+
+static int dump_target_pages(int session_fd, uint64_t remote_addr,
+			     uint64_t length)
+{
+	struct page_query_buffer buf = { 0 };
+	uint64_t cursor = remote_addr;
+	uint64_t end = remote_addr + length;
+	int ret = -1;
+
+	buf.entries = calloc(PAGE_QUERY_BATCH, sizeof(*buf.entries));
+	if (!buf.entries) {
+		fprintf(stderr, "page dump allocation failed\n");
+		return -1;
+	}
+
+	while (cursor < end) {
+		struct lkmdbg_page_query_request reply;
+		uint64_t last_addr = cursor;
+		unsigned int i;
+
+		if (query_target_pages(session_fd, cursor, end - cursor, &buf, &reply) <
+		    0)
+			goto out;
+
+		for (i = 0; i < reply.entries_filled; i++) {
+			last_addr = buf.entries[i].page_addr;
+			printf("page=0x%" PRIx64 " flags=0x%x vm_flags=0x%" PRIx64 " pgoff=0x%" PRIx64 " inode=%" PRIu64 " dev=%u:%u\n",
+			       (uint64_t)buf.entries[i].page_addr,
+			       buf.entries[i].flags,
+			       (uint64_t)buf.entries[i].vm_flags_raw,
+			       (uint64_t)buf.entries[i].pgoff,
+			       (uint64_t)buf.entries[i].inode,
+			       buf.entries[i].dev_major,
+			       buf.entries[i].dev_minor);
+		}
+
+		if (reply.done) {
+			ret = 0;
+			goto out;
+		}
+		if (!reply.entries_filled || reply.next_addr <= last_addr) {
+			fprintf(stderr, "QUERY_PAGES pagination stalled\n");
+			goto out;
+		}
+
+		cursor = reply.next_addr;
+	}
+
+	ret = 0;
+
+out:
 	free(buf.entries);
 	return ret;
 }
@@ -1784,11 +2062,13 @@ static int verify_runtime_events(int session_fd, int cmd_fd, pid_t child,
 	struct lkmdbg_hwpoint_request bp_req;
 	struct lkmdbg_hwpoint_request wp_req;
 	struct lkmdbg_event_record event;
+	struct lkmdbg_stop_query_request stop_req;
 	const int event_timeout_ms = 5000;
 	int ret;
 
 	memset(&bp_req, 0, sizeof(bp_req));
 	memset(&wp_req, 0, sizeof(wp_req));
+	memset(&stop_req, 0, sizeof(stop_req));
 	if (drain_session_events(session_fd) < 0)
 		return -1;
 
@@ -1855,6 +2135,24 @@ breakpoint_checks:
 		remove_hwpoint(session_fd, bp_req.id);
 		return -1;
 	}
+	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_BREAKPOINT,
+			      &stop_req) < 0) {
+		remove_hwpoint(session_fd, bp_req.id);
+		return -1;
+	}
+	if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
+	    !(stop_req.stop.flags & LKMDBG_STOP_FLAG_REARM_REQUIRED) ||
+	    stop_req.stop.value0 != info->exec_target_addr) {
+		fprintf(stderr,
+			"breakpoint stop state mismatch flags=0x%x value0=0x%" PRIx64 "\n",
+			stop_req.stop.flags, (uint64_t)stop_req.stop.value0);
+		remove_hwpoint(session_fd, bp_req.id);
+		return -1;
+	}
+	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0) {
+		remove_hwpoint(session_fd, bp_req.id);
+		return -1;
+	}
 	if (remove_hwpoint(session_fd, bp_req.id) < 0)
 		return -1;
 
@@ -1888,6 +2186,24 @@ breakpoint_checks:
 		remove_hwpoint(session_fd, wp_req.id);
 		return -1;
 	}
+	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_WATCHPOINT,
+			      &stop_req) < 0) {
+		remove_hwpoint(session_fd, wp_req.id);
+		return -1;
+	}
+	if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
+	    !(stop_req.stop.flags & LKMDBG_STOP_FLAG_REARM_REQUIRED) ||
+	    stop_req.stop.value0 != info->watch_addr) {
+		fprintf(stderr,
+			"watchpoint stop state mismatch flags=0x%x value0=0x%" PRIx64 "\n",
+			stop_req.stop.flags, (uint64_t)stop_req.stop.value0);
+		remove_hwpoint(session_fd, wp_req.id);
+		return -1;
+	}
+	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0) {
+		remove_hwpoint(session_fd, wp_req.id);
+		return -1;
+	}
 	if (remove_hwpoint(session_fd, wp_req.id) < 0)
 		return -1;
 
@@ -1900,6 +2216,7 @@ static int verify_single_step_event(int session_fd, const struct child_info *inf
 	struct lkmdbg_freeze_request req;
 	struct lkmdbg_thread_entry parked_entry;
 	struct lkmdbg_event_record event;
+	struct lkmdbg_stop_query_request stop_req;
 	pid_t tids[SELFTEST_FREEZE_THREADS];
 	unsigned int i;
 	unsigned int parked_index = UINT32_MAX;
@@ -1907,12 +2224,18 @@ static int verify_single_step_event(int session_fd, const struct child_info *inf
 
 	memset(&req, 0, sizeof(req));
 	memset(&parked_entry, 0, sizeof(parked_entry));
+	memset(&stop_req, 0, sizeof(stop_req));
 	memset(tids, 0, sizeof(tids));
 
 	if (wait_for_freeze_thread_tids(session_fd, info, tids) < 0)
 		return -1;
 	if (freeze_target_threads(session_fd, 2000, &req, 0) < 0)
 		return -1;
+	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_FREEZE, &stop_req) <
+	    0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
 
 	for (i = 0; i < info->freeze_thread_count; i++) {
 		if (find_target_thread_entry(session_fd, tids[i], &parked_entry) < 0) {
@@ -1941,7 +2264,7 @@ static int verify_single_step_event(int session_fd, const struct child_info *inf
 		return -1;
 	}
 
-	if (thaw_target_threads(session_fd, 2000, NULL, 0) < 0)
+	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0)
 		return -1;
 
 	printf("selftest runtime: waiting for single-step stop event\n");
@@ -1955,6 +2278,17 @@ static int verify_single_step_event(int session_fd, const struct child_info *inf
 			event.tid, tids[parked_index]);
 		return -1;
 	}
+	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_SINGLE_STEP,
+			      &stop_req) < 0)
+		return -1;
+	if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
+	    !(stop_req.stop.flags & LKMDBG_STOP_FLAG_REGS_VALID)) {
+		fprintf(stderr, "single-step stop flags mismatch flags=0x%x\n",
+			stop_req.stop.flags);
+		return -1;
+	}
+	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0)
+		return -1;
 
 	printf("selftest single-step event ok tid=%d pc=0x%" PRIx64 "\n",
 	       event.tid, (uint64_t)event.value0);
@@ -1974,13 +2308,16 @@ static void usage(const char *prog)
 		"  %s hwdel <pid> <id>\n"
 		"  %s hwrearm <pid> <id>\n"
 		"  %s hwlist <pid>\n"
+		"  %s stop <pid>\n"
+		"  %s cont <pid> [timeout_ms] [rearm|norearm]\n"
 		"  %s step <pid> <tid>\n"
 		"  %s freeze <pid> [timeout_ms]\n"
 		"  %s thaw <pid> [timeout_ms]\n"
 		"  %s vmas <pid>\n"
+		"  %s pages <pid> <remote_addr_hex> <length>\n"
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog, prog, prog);
+		prog, prog, prog, prog, prog, prog);
 }
 
 static int run_selftest(const char *prog)
@@ -2340,6 +2677,16 @@ static int run_selftest(const char *prog)
 
 	printf("selftest force-read and force-write on protected present pages ok\n");
 
+	if (verify_page_query(session_fd, &info) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
 	if (verify_vma_query(session_fd, &info) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
@@ -2604,6 +2951,7 @@ int main(int argc, char **argv)
 	uint32_t hwpoint_type = 0;
 	uint32_t hwpoint_len = 0;
 	uint32_t hwpoint_flags = 0;
+	uint32_t continue_flags = 0;
 
 	if (argc == 2 && strcmp(argv[1], "selftest") == 0)
 		return run_selftest(argv[0]);
@@ -2620,7 +2968,8 @@ int main(int argc, char **argv)
 	}
 
 	needs_remote_addr = strcmp(argv[1], "read") == 0 ||
-			    strcmp(argv[1], "write") == 0;
+			    strcmp(argv[1], "write") == 0 ||
+			    strcmp(argv[1], "pages") == 0;
 	if (needs_remote_addr) {
 		if (argc < 5) {
 			usage(argv[0]);
@@ -2673,6 +3022,37 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		target_tid = tid;
+	}
+
+	if (strcmp(argv[1], "cont") == 0) {
+		continue_flags = LKMDBG_CONTINUE_FLAG_REARM_HWPOINTS;
+		if (argc >= 4) {
+			timeout_ms = (uint32_t)strtoul(argv[3], &endp, 0);
+			if (*endp != '\0') {
+				if (strcmp(argv[3], "rearm") == 0)
+					timeout_ms = 0;
+				else if (strcmp(argv[3], "norearm") == 0) {
+					timeout_ms = 0;
+					continue_flags = 0;
+				} else {
+					fprintf(stderr, "invalid timeout: %s\n",
+						argv[3]);
+					return 1;
+				}
+			}
+		}
+		if (argc >= 5) {
+			if (strcmp(argv[4], "rearm") == 0)
+				continue_flags =
+					LKMDBG_CONTINUE_FLAG_REARM_HWPOINTS;
+			else if (strcmp(argv[4], "norearm") == 0)
+				continue_flags = 0;
+			else {
+				fprintf(stderr, "invalid continue mode: %s\n",
+					argv[4]);
+				return 1;
+			}
+		}
 	}
 
 	if (strcmp(argv[1], "hwadd") == 0) {
@@ -2839,7 +3219,15 @@ int main(int argc, char **argv)
 			cursor = reply.next_id;
 		}
 	} else if (strcmp(argv[1], "step") == 0) {
+		struct lkmdbg_stop_query_request stop_req;
+
+		memset(&stop_req, 0, sizeof(stop_req));
 		if (freeze_target_threads(session_fd, 2000, NULL, 1) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_FREEZE,
+				      &stop_req) < 0) {
 			close(session_fd);
 			return 1;
 		}
@@ -2852,7 +3240,8 @@ int main(int argc, char **argv)
 			close(session_fd);
 			return 1;
 		}
-		if (thaw_target_threads(session_fd, 2000, NULL, 1) < 0) {
+		if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
+				    NULL) < 0) {
 			close(session_fd);
 			return 1;
 		}
@@ -2870,6 +3259,33 @@ int main(int argc, char **argv)
 			printf("single_step.pc=0x%" PRIx64 "\n",
 			       (uint64_t)event.value0);
 		}
+	} else if (strcmp(argv[1], "stop") == 0) {
+		struct lkmdbg_stop_query_request stop_req;
+
+		memset(&stop_req, 0, sizeof(stop_req));
+		if (get_stop_state(session_fd, &stop_req) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		print_stop_state(&stop_req.stop);
+	} else if (strcmp(argv[1], "cont") == 0) {
+		struct lkmdbg_continue_request reply;
+		struct lkmdbg_stop_query_request stop_req;
+
+		memset(&reply, 0, sizeof(reply));
+		memset(&stop_req, 0, sizeof(stop_req));
+		if (get_stop_state(session_fd, &stop_req) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		if (continue_target(session_fd, stop_req.stop.cookie, timeout_ms,
+				    continue_flags, &reply) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		printf("continue.total=%u\n", reply.threads_total);
+		printf("continue.settled=%u\n", reply.threads_settled);
+		printf("continue.parked=%u\n", reply.threads_parked);
 	} else if (strcmp(argv[1], "write") == 0) {
 		const char *data = argv[4];
 		size_t len = strlen(data);
@@ -2909,6 +3325,19 @@ int main(int argc, char **argv)
 		}
 	} else if (strcmp(argv[1], "vmas") == 0) {
 		if (dump_target_vmas(session_fd) < 0) {
+			close(session_fd);
+			return 1;
+		}
+	} else if (strcmp(argv[1], "pages") == 0) {
+		uint64_t length;
+
+		length = strtoull(argv[4], &endp, 0);
+		if (*endp != '\0' || !length) {
+			fprintf(stderr, "invalid length: %s\n", argv[4]);
+			close(session_fd);
+			return 1;
+		}
+		if (dump_target_pages(session_fd, remote_addr, length) < 0) {
 			close(session_fd);
 			return 1;
 		}

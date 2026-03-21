@@ -12,6 +12,7 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/wait.h>
+#include <linux/workqueue.h>
 
 #include "../hook/lkmdbg_hook_internal.h"
 #include "lkmdbg_ioctl.h"
@@ -127,13 +128,21 @@ struct lkmdbg_session {
 	pid_t owner_tgid;
 	pid_t target_tgid;
 	pid_t target_tid;
+	u64 target_gen;
 	struct list_head hwpoints;
 	u64 next_hwpoint_id;
 	pid_t step_tgid;
 	pid_t step_tid;
 	bool step_armed;
+	bool closing;
 	atomic_t async_refs;
 	struct lkmdbg_freezer *freezer;
+	struct work_struct stop_work;
+	bool stop_work_pending;
+	u64 stop_work_target_gen;
+	u64 next_stop_cookie;
+	struct lkmdbg_stop_state stop_state;
+	struct lkmdbg_stop_state pending_stop;
 	struct lkmdbg_event_record events[LKMDBG_SESSION_EVENT_CAPACITY];
 };
 
@@ -194,10 +203,23 @@ int lkmdbg_get_target_thread(struct lkmdbg_session *session, pid_t tid_override,
 long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_read(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_write(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_page_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_query_threads(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_get_regs(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_set_regs(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_get_stop_state(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_continue_target(struct lkmdbg_session *session, void __user *argp);
+void lkmdbg_session_commit_stop(struct lkmdbg_session *session, u32 reason,
+				pid_t tgid, pid_t tid, u32 event_flags,
+				u32 stop_flags, u64 value0, u64 value1,
+				const struct lkmdbg_regs_arm64 *regs);
+void lkmdbg_session_request_async_stop(struct lkmdbg_session *session,
+				       u32 reason, pid_t tgid, pid_t tid,
+				       u32 event_flags, u32 stop_flags,
+				       u64 value0, u64 value1,
+				       const struct lkmdbg_regs_arm64 *regs);
+void lkmdbg_session_clear_stop(struct lkmdbg_session *session);
 int lkmdbg_thread_ctrl_init(void);
 void lkmdbg_thread_ctrl_exit(void);
 void lkmdbg_thread_ctrl_release(struct lkmdbg_session *session);
@@ -205,9 +227,15 @@ long lkmdbg_add_hwpoint(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_remove_hwpoint(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_query_hwpoints(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_rearm_hwpoint(struct lkmdbg_session *session, void __user *argp);
+int lkmdbg_rearm_all_hwpoints(struct lkmdbg_session *session);
 long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_freeze_threads(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_thaw_threads(struct lkmdbg_session *session, void __user *argp);
+int lkmdbg_session_freeze_target(struct lkmdbg_session *session,
+				 u32 timeout_ms,
+				 struct lkmdbg_freeze_request *req_out);
+int lkmdbg_session_thaw_target(struct lkmdbg_session *session, u32 timeout_ms,
+			       struct lkmdbg_freeze_request *req_out);
 void lkmdbg_session_freeze_release(struct lkmdbg_session *session);
 int lkmdbg_session_freeze_on_target_change(struct lkmdbg_session *session);
 u32 lkmdbg_freeze_thread_flags(struct lkmdbg_session *session, pid_t tid);

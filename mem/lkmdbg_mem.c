@@ -1,5 +1,7 @@
+#include <linux/fs.h>
 #include <linux/highmem.h>
 #include <linux/kernel.h>
+#include <linux/kdev_t.h>
 #include <linux/mm.h>
 #include <linux/mm_types.h>
 #include <linux/mmap_lock.h>
@@ -14,6 +16,7 @@
 #define LKMDBG_MEM_MAX_BATCH_BYTES (1024U * 1024U)
 #define LKMDBG_MEM_MAX_PIN_PAGES 16U
 #define LKMDBG_MEM_OP_VALID_FLAGS LKMDBG_MEM_OP_FLAG_FORCE_ACCESS
+#define LKMDBG_PAGE_MAX_ENTRIES 1024U
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
 #define LKMDBG_GUP_NOFAULT_FLAG (1U << 5)
@@ -53,6 +56,33 @@ static int lkmdbg_validate_mem_req(struct lkmdbg_mem_request *req)
 		return -EINVAL;
 
 	if (req->flags)
+		return -EINVAL;
+
+	return 0;
+}
+
+static int lkmdbg_validate_page_query(struct lkmdbg_page_query_request *req)
+{
+	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
+		return -EINVAL;
+
+	if (!req->entries_addr || !req->max_entries ||
+	    req->max_entries > LKMDBG_PAGE_MAX_ENTRIES)
+		return -EINVAL;
+
+	if (!req->length)
+		return -EINVAL;
+
+	if (req->flags)
+		return -EINVAL;
+
+	if (req->start_addr >= (u64)TASK_SIZE_MAX)
+		return -EINVAL;
+
+	if (req->start_addr + req->length < req->start_addr)
+		return -EINVAL;
+
+	if (req->start_addr + req->length > (u64)TASK_SIZE_MAX)
 		return -EINVAL;
 
 	return 0;
@@ -217,6 +247,115 @@ static void lkmdbg_mem_accumulate_progress(const struct lkmdbg_mem_op *ops,
 	*bytes_out = total_bytes;
 }
 
+static bool lkmdbg_page_try_pin_nofault(struct mm_struct *mm,
+					unsigned long page_addr,
+					unsigned int gup_flags)
+{
+	struct page *page = NULL;
+	long pinned;
+
+	pinned = lkmdbg_get_remote_pages_nofault(mm, page_addr, 1, gup_flags,
+						 &page);
+	if (pinned == 1) {
+		put_page(page);
+		return true;
+	}
+	if (pinned > 0)
+		lkmdbg_put_remote_pages(&page, (unsigned int)pinned);
+	return false;
+}
+
+static void lkmdbg_page_fill_vma_flags(struct lkmdbg_page_entry *entry,
+				       struct vm_area_struct *vma)
+{
+	u64 vm_flags = (u64)vma->vm_flags;
+
+	entry->vm_flags_raw = vm_flags;
+	if (vm_flags & VM_READ)
+		entry->flags |= LKMDBG_PAGE_FLAG_PROT_READ;
+	if (vm_flags & VM_WRITE)
+		entry->flags |= LKMDBG_PAGE_FLAG_PROT_WRITE;
+	if (vm_flags & VM_EXEC)
+		entry->flags |= LKMDBG_PAGE_FLAG_PROT_EXEC;
+	if (vm_flags & VM_MAYREAD)
+		entry->flags |= LKMDBG_PAGE_FLAG_MAYREAD;
+	if (vm_flags & VM_MAYWRITE)
+		entry->flags |= LKMDBG_PAGE_FLAG_MAYWRITE;
+	if (vm_flags & VM_MAYEXEC)
+		entry->flags |= LKMDBG_PAGE_FLAG_MAYEXEC;
+	if (vm_flags & VM_SHARED)
+		entry->flags |= LKMDBG_PAGE_FLAG_SHARED;
+	if (vm_flags & VM_PFNMAP)
+		entry->flags |= LKMDBG_PAGE_FLAG_PFNMAP;
+	if (vm_flags & VM_IO)
+		entry->flags |= LKMDBG_PAGE_FLAG_IO;
+}
+
+static void lkmdbg_page_fill_metadata(struct lkmdbg_page_entry *entry,
+				      struct vm_area_struct *vma,
+				      unsigned long page_addr)
+{
+	struct inode *inode;
+
+	entry->pgoff = vma->vm_pgoff +
+		       ((page_addr - vma->vm_start) >> PAGE_SHIFT);
+	if (!vma->vm_file) {
+		entry->flags |= LKMDBG_PAGE_FLAG_ANON;
+		return;
+	}
+
+	entry->flags |= LKMDBG_PAGE_FLAG_FILE;
+	inode = file_inode(vma->vm_file);
+	if (!inode)
+		return;
+
+	entry->inode = inode->i_ino;
+	entry->dev_major = MAJOR(inode->i_sb->s_dev);
+	entry->dev_minor = MINOR(inode->i_sb->s_dev);
+}
+
+static void lkmdbg_page_probe_access(struct mm_struct *mm,
+				     struct lkmdbg_page_entry *entry)
+{
+	bool readable;
+	bool writable;
+	bool force_readable;
+	bool force_writable;
+
+	readable = lkmdbg_page_try_pin_nofault(mm, entry->page_addr, 0);
+	writable = lkmdbg_page_try_pin_nofault(mm, entry->page_addr, FOLL_WRITE);
+	force_readable =
+		lkmdbg_page_try_pin_nofault(mm, entry->page_addr, FOLL_FORCE);
+	force_writable = lkmdbg_page_try_pin_nofault(
+		mm, entry->page_addr, FOLL_FORCE | FOLL_WRITE);
+
+	if (readable)
+		entry->flags |= LKMDBG_PAGE_FLAG_NOFAULT_READ;
+	if (writable)
+		entry->flags |= LKMDBG_PAGE_FLAG_NOFAULT_WRITE;
+	if (force_readable)
+		entry->flags |= LKMDBG_PAGE_FLAG_FORCE_READ;
+	if (force_writable)
+		entry->flags |= LKMDBG_PAGE_FLAG_FORCE_WRITE;
+	if (readable || writable || force_readable || force_writable)
+		entry->flags |= LKMDBG_PAGE_FLAG_PRESENT;
+}
+
+static long lkmdbg_page_query_copy_reply(void __user *argp,
+					 struct lkmdbg_page_query_request *req,
+					 struct lkmdbg_page_entry *entries,
+					 size_t entries_bytes)
+{
+	if (copy_to_user(u64_to_user_ptr(req->entries_addr), entries,
+			 entries_bytes))
+		return -EFAULT;
+
+	if (copy_to_user(argp, req, sizeof(*req)))
+		return -EFAULT;
+
+	return 0;
+}
+
 static long lkmdbg_mem_copy_reply(void __user *argp, struct lkmdbg_mem_request *req,
 				  struct lkmdbg_mem_op *ops, size_t ops_bytes,
 				  long ret)
@@ -348,11 +487,78 @@ long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp)
 	put_task_struct(task);
 
 	mutex_lock(&session->lock);
+	session->target_gen++;
 	session->target_tgid = req.tgid;
 	session->target_tid = target_tid;
 	mutex_unlock(&session->lock);
 
 	return 0;
+}
+
+long lkmdbg_page_query(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_page_query_request req;
+	struct lkmdbg_page_entry *entries = NULL;
+	struct mm_struct *mm = NULL;
+	unsigned long cursor;
+	unsigned long end;
+	u32 filled = 0;
+	long ret;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	ret = lkmdbg_validate_page_query(&req);
+	if (ret)
+		return ret;
+
+	entries = kcalloc(req.max_entries, sizeof(*entries), GFP_KERNEL);
+	if (!entries)
+		return -ENOMEM;
+
+	ret = lkmdbg_get_target_mm(session, &mm);
+	if (ret)
+		goto out;
+
+	cursor = (unsigned long)(req.start_addr & PAGE_MASK);
+	end = (unsigned long)PAGE_ALIGN(req.start_addr + req.length);
+	req.done = 1;
+	req.next_addr = 0;
+
+	mmap_read_lock(mm);
+	while (cursor < end && filled < req.max_entries) {
+		struct lkmdbg_page_entry *entry = &entries[filled];
+		struct vm_area_struct *vma;
+
+		memset(entry, 0, sizeof(*entry));
+		entry->page_addr = cursor;
+
+		vma = find_vma(mm, cursor);
+		if (vma && cursor >= vma->vm_start && cursor < vma->vm_end) {
+			entry->flags |= LKMDBG_PAGE_FLAG_MAPPED;
+			lkmdbg_page_fill_vma_flags(entry, vma);
+			lkmdbg_page_fill_metadata(entry, vma, cursor);
+			lkmdbg_page_probe_access(mm, entry);
+		}
+
+		filled++;
+		cursor += PAGE_SIZE;
+	}
+	mmap_read_unlock(mm);
+
+	if (cursor < end) {
+		req.done = 0;
+		req.next_addr = cursor;
+	}
+	req.entries_filled = filled;
+	ret = lkmdbg_page_query_copy_reply(
+		argp, &req, entries, req.max_entries * sizeof(*entries));
+
+out:
+	if (mm)
+		mmput(mm);
+	kfree(entries);
+	return ret;
 }
 
 long lkmdbg_mem_read(struct lkmdbg_session *session, void __user *argp)

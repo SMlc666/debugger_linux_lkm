@@ -44,6 +44,19 @@ struct lkmdbg_hwpoint {
 typedef void (*lkmdbg_register_user_step_hook_fn)(struct step_hook *hook);
 typedef void (*lkmdbg_unregister_user_step_hook_fn)(struct step_hook *hook);
 typedef void (*lkmdbg_user_single_step_fn)(struct task_struct *task);
+
+static void lkmdbg_regs_arm64_export_stop(struct lkmdbg_regs_arm64 *dst,
+					  const struct pt_regs *src)
+{
+	unsigned int i;
+
+	memset(dst, 0, sizeof(*dst));
+	for (i = 0; i < ARRAY_SIZE(dst->regs); i++)
+		dst->regs[i] = src->regs[i];
+	dst->sp = src->sp;
+	dst->pc = src->pc;
+	dst->pstate = src->pstate;
+}
 #endif
 typedef void (*lkmdbg_for_each_kernel_tracepoint_fn)(
 	void (*fct)(struct tracepoint *tp, void *priv), void *priv);
@@ -233,6 +246,10 @@ static void lkmdbg_hwpoint_event(struct perf_event *bp,
 				 struct pt_regs *regs)
 {
 	struct lkmdbg_hwpoint *entry = bp->overflow_handler_context;
+	struct lkmdbg_regs_arm64 *stop_regs_ptr = NULL;
+#ifdef CONFIG_ARM64
+	struct lkmdbg_regs_arm64 stop_regs;
+#endif
 	u32 reason;
 	u64 addr;
 	u64 ip = 0;
@@ -246,8 +263,13 @@ static void lkmdbg_hwpoint_event(struct perf_event *bp,
 		 LKMDBG_STOP_REASON_BREAKPOINT :
 		 LKMDBG_STOP_REASON_WATCHPOINT;
 	addr = hw_breakpoint_addr(bp);
-	if (regs)
+	if (regs) {
 		ip = instruction_pointer(regs);
+#ifdef CONFIG_ARM64
+		lkmdbg_regs_arm64_export_stop(&stop_regs, regs);
+		stop_regs_ptr = &stop_regs;
+#endif
+	}
 
 	atomic64_inc(&lkmdbg_state.hwpoint_callback_total);
 	if (reason == LKMDBG_STOP_REASON_BREAKPOINT)
@@ -267,9 +289,10 @@ static void lkmdbg_hwpoint_event(struct perf_event *bp,
 		return;
 	lkmdbg_hwpoint_disable_stop_mode(entry);
 
-	lkmdbg_session_queue_event_ex(entry->session, LKMDBG_EVENT_TARGET_STOP,
-				      reason, entry->tgid, current->pid,
-				      entry->type, addr, ip ? ip : entry->id);
+	lkmdbg_session_request_async_stop(
+		entry->session, reason, entry->tgid, current->pid, entry->type,
+		LKMDBG_STOP_FLAG_REARM_REQUIRED, addr, ip ? ip : entry->id,
+		stop_regs_ptr);
 }
 
 static int lkmdbg_register_hwpoint(struct lkmdbg_session *session,
@@ -513,9 +536,14 @@ static int lkmdbg_user_step_handler(struct pt_regs *regs, unsigned long esr)
 	if (disable_fn)
 		disable_fn(current);
 
-	lkmdbg_session_queue_event_ex(matched, LKMDBG_EVENT_TARGET_STOP,
-				      LKMDBG_STOP_REASON_SINGLE_STEP, tgid, tid,
-				      0, instruction_pointer(regs), 0);
+	{
+		struct lkmdbg_regs_arm64 stop_regs;
+
+		lkmdbg_regs_arm64_export_stop(&stop_regs, regs);
+		lkmdbg_session_request_async_stop(
+			matched, LKMDBG_STOP_REASON_SINGLE_STEP, tgid, tid, 0, 0,
+			instruction_pointer(regs), 0, &stop_regs);
+	}
 	lkmdbg_session_async_put(matched);
 	return DBG_HOOK_HANDLED;
 }
@@ -804,6 +832,27 @@ long lkmdbg_rearm_hwpoint(struct lkmdbg_session *session, void __user *argp)
 	mutex_unlock(&session->lock);
 
 	return lkmdbg_hwpoint_copy_reply(argp, &req, ret);
+}
+
+int lkmdbg_rearm_all_hwpoints(struct lkmdbg_session *session)
+{
+	struct lkmdbg_hwpoint *entry;
+	int ret = 0;
+
+	mutex_lock(&session->lock);
+	list_for_each_entry(entry, &session->hwpoints, node) {
+		if (entry->flags & LKMDBG_HWPOINT_FLAG_COUNTER_MODE)
+			continue;
+		if (!atomic_read(&entry->stop_latched) && entry->armed)
+			continue;
+
+		ret = lkmdbg_rearm_hwpoint_locked(entry);
+		if (ret)
+			break;
+	}
+	mutex_unlock(&session->lock);
+
+	return ret;
 }
 
 long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp)
