@@ -808,7 +808,8 @@ static int lkmdbg_unregister_mmu_hwpoint(struct lkmdbg_hwpoint *entry)
 	return -EOPNOTSUPP;
 }
 
-static bool lkmdbg_session_has_mmu_step_locked(struct lkmdbg_session *session)
+static bool __maybe_unused
+lkmdbg_session_has_mmu_step_locked(struct lkmdbg_session *session)
 {
 	(void)session;
 	return false;
@@ -1773,8 +1774,11 @@ long lkmdbg_query_hwpoints(struct lkmdbg_session *session, void __user *argp)
 			break;
 		}
 
-		if (lkmdbg_hwpoint_is_mmu(entry))
+		if (lkmdbg_hwpoint_is_mmu(entry)) {
+#ifdef CONFIG_ARM64
 			lkmdbg_mmu_refresh_entry_state(entry);
+#endif
+		}
 		lkmdbg_hwpoint_fill_entry(&entries[filled], entry);
 		filled++;
 	}
