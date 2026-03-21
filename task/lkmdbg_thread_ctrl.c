@@ -667,9 +667,9 @@ static int lkmdbg_unregister_mmu_hwpoint(struct lkmdbg_hwpoint *entry)
 	return 0;
 }
 
-static int lkmdbg_rearm_mmu_hwpoint_locked(struct lkmdbg_session *session,
-					   struct lkmdbg_hwpoint *entry)
+static int lkmdbg_rearm_mmu_hwpoint_locked(struct lkmdbg_hwpoint *entry)
 {
+	struct task_struct *task;
 	struct mm_struct *mm = NULL;
 	int ret;
 
@@ -680,9 +680,14 @@ static int lkmdbg_rearm_mmu_hwpoint_locked(struct lkmdbg_session *session,
 	if (entry->armed && !atomic_read(&entry->stop_latched))
 		return 0;
 
-	ret = lkmdbg_get_target_mm(session, &mm);
-	if (ret)
-		return ret;
+	task = get_pid_task(find_vpid(entry->tgid), PIDTYPE_TGID);
+	if (!task)
+		return -ESRCH;
+
+	mm = get_task_mm(task);
+	put_task_struct(task);
+	if (!mm)
+		return -ESRCH;
 
 	ret = lkmdbg_mmu_update_exec(mm, entry->page_addr, false);
 	mmput(mm);
@@ -881,7 +886,7 @@ static int lkmdbg_rearm_hwpoint_locked(struct lkmdbg_hwpoint *entry)
 
 #ifdef CONFIG_ARM64
 	if (lkmdbg_hwpoint_is_mmu_exec(entry))
-		return lkmdbg_rearm_mmu_hwpoint_locked(entry->session, entry);
+		return lkmdbg_rearm_mmu_hwpoint_locked(entry);
 #endif
 
 	if (!entry->event)
