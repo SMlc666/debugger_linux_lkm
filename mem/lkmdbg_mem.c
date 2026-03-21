@@ -16,6 +16,7 @@
 #define LKMDBG_MEM_MAX_OPS 64U
 #define LKMDBG_MEM_MAX_BATCH_BYTES (1024U * 1024U)
 #define LKMDBG_MEM_MAX_PIN_PAGES 16U
+#define LKMDBG_MEM_OP_VALID_FLAGS LKMDBG_MEM_OP_FLAG_FORCE_ACCESS
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
 #define LKMDBG_GUP_NOFAULT_FLAG (1U << 5)
@@ -42,7 +43,7 @@ static struct task_struct *lkmdbg_get_target_task(struct lkmdbg_session *session
 	return task;
 }
 
-static int lkmdbg_validate_mem_op(struct lkmdbg_mem_op *op)
+static int lkmdbg_validate_mem_op(const struct lkmdbg_mem_op *op, bool write)
 {
 	if (!op->length || op->length > LKMDBG_MEM_MAX_XFER)
 		return -EINVAL;
@@ -59,6 +60,12 @@ static int lkmdbg_validate_mem_op(struct lkmdbg_mem_op *op)
 	if (op->remote_addr + op->length > (u64)TASK_SIZE_MAX)
 		return -EINVAL;
 
+	if (op->flags & ~LKMDBG_MEM_OP_VALID_FLAGS)
+		return -EINVAL;
+
+	if (write && (op->flags & LKMDBG_MEM_OP_FLAG_FORCE_ACCESS))
+		return -EOPNOTSUPP;
+
 	return 0;
 }
 
@@ -68,6 +75,9 @@ static int lkmdbg_validate_mem_req(struct lkmdbg_mem_request *req)
 		return -EINVAL;
 
 	if (!req->ops_addr || !req->op_count || req->op_count > LKMDBG_MEM_MAX_OPS)
+		return -EINVAL;
+
+	if (req->flags)
 		return -EINVAL;
 
 	return 0;
@@ -124,9 +134,20 @@ static void lkmdbg_put_remote_pages(struct page **pages, unsigned int nr_pages)
 	}
 }
 
+static unsigned int lkmdbg_mem_gup_flags(const struct lkmdbg_mem_op *op,
+					 bool write)
+{
+	unsigned int flags = write ? FOLL_WRITE : 0;
+
+	if (!write && (op->flags & LKMDBG_MEM_OP_FLAG_FORCE_ACCESS))
+		flags |= FOLL_FORCE;
+
+	return flags;
+}
+
 static long lkmdbg_mem_xfer_window(struct mm_struct *mm, u64 remote_addr,
-				   u64 local_addr, size_t length, bool write,
-				   u8 *bounce)
+				   u64 local_addr, size_t length,
+				   unsigned int gup_flags, bool write, u8 *bounce)
 {
 	struct page *pages[LKMDBG_MEM_MAX_PIN_PAGES] = { 0 };
 	size_t total_done = 0;
@@ -148,8 +169,7 @@ static long lkmdbg_mem_xfer_window(struct mm_struct *mm, u64 remote_addr,
 		nr_pages = DIV_ROUND_UP(first_offset + window_len, PAGE_SIZE);
 
 		pinned = lkmdbg_get_remote_pages_nofault(mm, window_remote,
-							 nr_pages,
-							 write ? FOLL_WRITE : 0,
+							 nr_pages, gup_flags,
 							 pages);
 		if (pinned <= 0) {
 			if (lkmdbg_mem_is_nofault_miss(pinned))
@@ -225,9 +245,22 @@ static long lkmdbg_mem_xfer_ops(struct mm_struct *mm, struct lkmdbg_mem_op *ops,
 				u32 op_count, bool write)
 {
 	u8 *bounce = NULL;
-	u64 total_bytes = 0;
+	u64 batch_total = 0;
+	u64 transferred = 0;
 	u32 i;
 	int ret;
+
+	for (i = 0; i < op_count; i++) {
+		ret = lkmdbg_validate_mem_op(&ops[i], write);
+		if (ret)
+			return ret;
+
+		if (batch_total + ops[i].length > LKMDBG_MEM_MAX_BATCH_BYTES)
+			return -E2BIG;
+
+		batch_total += ops[i].length;
+		ops[i].bytes_done = 0;
+	}
 
 	if (write) {
 		bounce = kmalloc(PAGE_SIZE, GFP_KERNEL);
@@ -237,35 +270,25 @@ static long lkmdbg_mem_xfer_ops(struct mm_struct *mm, struct lkmdbg_mem_op *ops,
 
 	for (i = 0; i < op_count; i++) {
 		long copied;
+		unsigned int gup_flags;
 
-		ret = lkmdbg_validate_mem_op(&ops[i]);
-		if (ret) {
-			kfree(bounce);
-			return ret;
-		}
-
-		if (total_bytes + ops[i].length > LKMDBG_MEM_MAX_BATCH_BYTES) {
-			kfree(bounce);
-			return -E2BIG;
-		}
-
-		ops[i].bytes_done = 0;
+		gup_flags = lkmdbg_mem_gup_flags(&ops[i], write);
 		copied = lkmdbg_mem_xfer_window(mm, ops[i].remote_addr,
-						ops[i].local_addr,
-						ops[i].length, write, bounce);
+						ops[i].local_addr, ops[i].length,
+						gup_flags, write, bounce);
 		if (copied < 0) {
 			kfree(bounce);
 			return copied;
 		}
 
 		ops[i].bytes_done = (u32)copied;
-		total_bytes += copied;
+		transferred += copied;
 		if ((u32)copied != ops[i].length)
 			break;
 	}
 
 	kfree(bounce);
-	return (long)total_bytes;
+	return (long)transferred;
 }
 
 static long lkmdbg_mem_xfer(struct lkmdbg_session *session, void __user *argp,

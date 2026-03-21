@@ -26,6 +26,8 @@ struct child_info {
 	uintptr_t basic_addr;
 	uintptr_t slots_addr;
 	uintptr_t nofault_addr;
+	uintptr_t force_read_addr;
+	uintptr_t cow_addr;
 	uintptr_t large_addr;
 	uint32_t page_size;
 	uint32_t slot_size;
@@ -194,14 +196,31 @@ static int xfer_target_memory(int session_fd, struct lkmdbg_mem_op *ops,
 	return 0;
 }
 
+static int read_target_memory_flags(int session_fd, uintptr_t remote_addr,
+				    void *buf, size_t len, uint32_t op_flags,
+				    uint32_t *bytes_done_out, int verbose);
+static int write_target_memory_flags(int session_fd, uintptr_t remote_addr,
+				     const void *buf, size_t len,
+				     uint32_t op_flags,
+				     uint32_t *bytes_done_out, int verbose);
+
 static int read_target_memory(int session_fd, uintptr_t remote_addr, void *buf,
 			      size_t len, uint32_t *bytes_done_out,
 			      int verbose)
+{
+	return read_target_memory_flags(session_fd, remote_addr, buf, len, 0,
+					bytes_done_out, verbose);
+}
+
+static int read_target_memory_flags(int session_fd, uintptr_t remote_addr,
+				    void *buf, size_t len, uint32_t op_flags,
+				    uint32_t *bytes_done_out, int verbose)
 {
 	struct lkmdbg_mem_op op = {
 		.remote_addr = remote_addr,
 		.local_addr = (uintptr_t)buf,
 		.length = len,
+		.flags = op_flags,
 	};
 	struct lkmdbg_mem_request req;
 
@@ -218,10 +237,20 @@ static int write_target_memory(int session_fd, uintptr_t remote_addr,
 			       const void *buf, size_t len,
 			       uint32_t *bytes_done_out, int verbose)
 {
+	return write_target_memory_flags(session_fd, remote_addr, buf, len, 0,
+					 bytes_done_out, verbose);
+}
+
+static int write_target_memory_flags(int session_fd, uintptr_t remote_addr,
+				     const void *buf, size_t len,
+				     uint32_t op_flags,
+				     uint32_t *bytes_done_out, int verbose)
+{
 	struct lkmdbg_mem_op op = {
 		.remote_addr = remote_addr,
 		.local_addr = (uintptr_t)buf,
 		.length = len,
+		.flags = op_flags,
 	};
 	struct lkmdbg_mem_request req;
 
@@ -266,6 +295,37 @@ static int write_target_memoryv(int session_fd, struct lkmdbg_mem_op *ops,
 	return 0;
 }
 
+static int expect_force_write_rejected(int session_fd, uintptr_t remote_addr,
+				       const void *buf, size_t len)
+{
+	struct lkmdbg_mem_op op = {
+		.remote_addr = remote_addr,
+		.local_addr = (uintptr_t)buf,
+		.length = len,
+		.flags = LKMDBG_MEM_OP_FLAG_FORCE_ACCESS,
+	};
+	struct lkmdbg_mem_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.ops_addr = (uintptr_t)&op,
+		.op_count = 1,
+	};
+
+	errno = 0;
+	if (ioctl(session_fd, LKMDBG_IOC_WRITE_MEM, &req) == 0) {
+		fprintf(stderr, "force WRITE_MEM unexpectedly succeeded\n");
+		return -1;
+	}
+
+	if (errno != EOPNOTSUPP) {
+		fprintf(stderr, "force WRITE_MEM errno=%d expected=%d\n", errno,
+			EOPNOTSUPP);
+		return -1;
+	}
+
+	return 0;
+}
+
 static int query_mincore_resident(void *addr, size_t len)
 {
 	unsigned char vec = 0;
@@ -282,9 +342,14 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	char child_buf[64] = "child-buffer-initial";
 	char *slots_map;
 	void *nofault_map;
+	void *force_read_map;
+	void *cow_map;
 	unsigned char *large_map;
 	size_t page_size;
+	volatile unsigned char cow_touch;
 	unsigned int i;
+	int cow_fd;
+	char cow_path[] = "/tmp/lkmdbg-mem-test-XXXXXX";
 
 	page_size = (size_t)sysconf(_SC_PAGESIZE);
 	if (!page_size)
@@ -298,6 +363,22 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	nofault_map = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
 			   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (nofault_map == MAP_FAILED)
+		return 2;
+
+	force_read_map = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
+			      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (force_read_map == MAP_FAILED)
+		return 2;
+
+	cow_fd = mkstemp(cow_path);
+	if (cow_fd < 0)
+		return 2;
+	unlink(cow_path);
+	if (ftruncate(cow_fd, (off_t)page_size) < 0)
+		return 2;
+	cow_map = mmap(NULL, page_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+		       cow_fd, 0);
+	if (cow_map == MAP_FAILED)
 		return 2;
 
 	large_map = mmap(NULL, SELFTEST_LARGE_MAP_LEN, PROT_READ | PROT_WRITE,
@@ -315,10 +396,29 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	if (madvise(nofault_map, page_size, MADV_DONTNEED) < 0)
 		return 2;
 
+	fill_pattern(force_read_map, page_size, 3);
+	if (mprotect(force_read_map, page_size, PROT_NONE) < 0)
+		return 2;
+
+	fill_pattern(cow_map, page_size, 4);
+	if (msync(cow_map, page_size, MS_SYNC) < 0)
+		return 2;
+	if (munmap(cow_map, page_size) < 0)
+		return 2;
+
+	cow_map = mmap(NULL, page_size, PROT_READ, MAP_PRIVATE, cow_fd, 0);
+	if (cow_map == MAP_FAILED)
+		return 2;
+	cow_touch = ((volatile unsigned char *)cow_map)[0];
+	(void)cow_touch;
+	close(cow_fd);
+
 	memset(&info, 0, sizeof(info));
 	info.basic_addr = (uintptr_t)child_buf;
 	info.slots_addr = (uintptr_t)slots_map;
 	info.nofault_addr = (uintptr_t)nofault_map;
+	info.force_read_addr = (uintptr_t)force_read_map;
+	info.cow_addr = (uintptr_t)cow_map;
 	info.large_addr = (uintptr_t)large_map;
 	info.page_size = (uint32_t)page_size;
 	info.slot_size = SELFTEST_SLOT_SIZE;
@@ -431,7 +531,10 @@ static int run_selftest(const char *prog)
 	pid_t child;
 	int session_fd;
 	char read_buf[32] = { 0 };
+	unsigned char force_buf[64];
+	unsigned char cow_buf[64];
 	const char *payload = "patched-by-lkmdbg";
+	const char *force_write_payload = "blocked-force-write";
 	pthread_t threads[SELFTEST_THREAD_COUNT];
 	struct worker_ctx workers[SELFTEST_THREAD_COUNT];
 	unsigned char *large_buf = NULL;
@@ -489,10 +592,12 @@ static int run_selftest(const char *prog)
 		return 1;
 	}
 
-	printf("selftest child pid=%d basic=0x%llx slots=0x%llx nofault=0x%llx\n",
+	printf("selftest child pid=%d basic=0x%llx slots=0x%llx nofault=0x%llx force=0x%llx cow=0x%llx\n",
 	       child, (unsigned long long)info.basic_addr,
 	       (unsigned long long)info.slots_addr,
-	       (unsigned long long)info.nofault_addr);
+	       (unsigned long long)info.nofault_addr,
+	       (unsigned long long)info.force_read_addr,
+	       (unsigned long long)info.cow_addr);
 
 	session_fd = open_session_fd();
 	if (session_fd < 0) {
@@ -669,6 +774,88 @@ static int run_selftest(const char *prog)
 
 	printf("selftest nofault remote access ok resident_before=%d after_read=%d after_write=%d\n",
 	       resident_before, resident_after_read, resident_after_write);
+
+	memset(force_buf, 0xCC, sizeof(force_buf));
+	if (read_target_memory(session_fd, info.force_read_addr, force_buf,
+			       sizeof(force_buf), &bytes_done, 1) < 0 ||
+	    bytes_done != 0) {
+		fprintf(stderr,
+			"protected READ_MEM bytes_done=%u expected=0\n",
+			bytes_done);
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	memset(force_buf, 0, sizeof(force_buf));
+	if (read_target_memory_flags(session_fd, info.force_read_addr, force_buf,
+				     sizeof(force_buf),
+				     LKMDBG_MEM_OP_FLAG_FORCE_ACCESS,
+				     &bytes_done, 1) < 0 ||
+	    bytes_done != sizeof(force_buf) ||
+	    verify_pattern(force_buf, sizeof(force_buf), 3) != 0) {
+		fprintf(stderr,
+			"force READ_MEM verify failed bytes_done=%u\n",
+			bytes_done);
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	memset(cow_buf, 0, sizeof(cow_buf));
+	if (read_target_memory(session_fd, info.cow_addr, cow_buf, sizeof(cow_buf),
+			       &bytes_done, 1) < 0 ||
+	    bytes_done != sizeof(cow_buf) ||
+	    verify_pattern(cow_buf, sizeof(cow_buf), 4) != 0) {
+		fprintf(stderr, "cow READ_MEM verify failed bytes_done=%u\n",
+			bytes_done);
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	if (expect_force_write_rejected(session_fd, info.cow_addr,
+					force_write_payload,
+					strlen(force_write_payload) + 1) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	memset(cow_buf, 0, sizeof(cow_buf));
+	if (read_target_memory(session_fd, info.cow_addr, cow_buf, sizeof(cow_buf),
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(cow_buf) ||
+	    verify_pattern(cow_buf, sizeof(cow_buf), 4) != 0) {
+		fprintf(stderr,
+			"cow mapping changed after rejected force write bytes_done=%u\n",
+			bytes_done);
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	printf("selftest force-read ok and force-write is rejected for COW-sensitive mappings\n");
 
 	large_buf = malloc(info.large_len);
 	batch_a = malloc(batch_lengths[0]);

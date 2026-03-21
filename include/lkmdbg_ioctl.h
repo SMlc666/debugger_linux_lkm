@@ -55,6 +55,8 @@ struct lkmdbg_mem_op {
 	__u32 reserved0;
 };
 
+#define LKMDBG_MEM_OP_FLAG_FORCE_ACCESS 0x00000001U
+
 struct lkmdbg_mem_request {
 	__u32 version;
 	__u32 size;
