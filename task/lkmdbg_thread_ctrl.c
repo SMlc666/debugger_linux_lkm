@@ -87,6 +87,7 @@ static struct tracepoint *lkmdbg_trace_exec_tp;
 static struct tracepoint *lkmdbg_trace_exit_tp;
 static struct tracepoint *lkmdbg_trace_signal_tp;
 static bool lkmdbg_perf_disable_missing_logged;
+#ifdef CONFIG_ARM64
 static LIST_HEAD(lkmdbg_mmu_hwpoint_list);
 static DEFINE_SPINLOCK(lkmdbg_mmu_hwpoint_lock);
 static struct lkmdbg_inline_hook *lkmdbg_do_page_fault_hook;
@@ -95,6 +96,7 @@ static int (*lkmdbg_do_page_fault_orig)(unsigned long far, unsigned long esr,
 					struct pt_regs *regs);
 static atomic_t lkmdbg_do_page_fault_inflight = ATOMIC_INIT(0);
 static DECLARE_WAIT_QUEUE_HEAD(lkmdbg_do_page_fault_waitq);
+#endif
 
 #ifdef CONFIG_ARM64
 static int lkmdbg_user_step_handler(struct pt_regs *regs, unsigned long esr);
@@ -108,7 +110,7 @@ static struct step_hook lkmdbg_user_step_hook = {
 static bool lkmdbg_user_step_hook_registered;
 #endif
 
-static void lkmdbg_hwpoint_get(struct lkmdbg_hwpoint *entry)
+static void __maybe_unused lkmdbg_hwpoint_get(struct lkmdbg_hwpoint *entry)
 {
 	refcount_inc(&entry->refs);
 }
@@ -464,6 +466,30 @@ static void lkmdbg_disable_user_single_step_tid(pid_t tid)
 
 	disable_fn(task);
 	put_task_struct(task);
+}
+#endif
+
+#ifndef CONFIG_ARM64
+static int lkmdbg_unregister_mmu_hwpoint(struct lkmdbg_hwpoint *entry)
+{
+	(void)entry;
+	return -EOPNOTSUPP;
+}
+
+static struct lkmdbg_hwpoint *
+lkmdbg_find_breakpoint_by_addr_locked(struct lkmdbg_session *session, u64 addr,
+				      u32 flags)
+{
+	(void)session;
+	(void)addr;
+	(void)flags;
+	return NULL;
+}
+
+static bool lkmdbg_session_has_mmu_step_locked(struct lkmdbg_session *session)
+{
+	(void)session;
+	return false;
 }
 #endif
 
@@ -1436,10 +1462,10 @@ int lkmdbg_prepare_continue_hwpoints(struct lkmdbg_session *session,
 long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp)
 {
 	struct lkmdbg_single_step_request req;
-	struct task_struct *task = NULL;
-	pid_t tid;
 	long ret;
 #ifdef CONFIG_ARM64
+	struct task_struct *task = NULL;
+	pid_t tid;
 	lkmdbg_user_single_step_fn enable_fn;
 	u32 freeze_flags;
 #endif
