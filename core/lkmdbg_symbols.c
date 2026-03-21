@@ -35,13 +35,6 @@ static int lkmdbg_resolve_runtime_symbols(void)
 	lkmdbg_symbols.filp_close =
 		(int (*)(struct file *file, fl_owner_t id))addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("access_process_vm");
-	if (!addr)
-		return -ENOENT;
-	lkmdbg_symbols.access_process_vm =
-		(int (*)(struct task_struct *tsk, unsigned long addr, void *buf,
-			 int len, unsigned int gup_flags))addr;
-
 	addr = lkmdbg_symbols.kallsyms_lookup_name("aarch64_insn_write");
 	if (!addr)
 		return -ENOENT;
@@ -91,7 +84,6 @@ void lkmdbg_symbols_exit(void)
 	lkmdbg_symbols.kallsyms_lookup_name = NULL;
 	lkmdbg_symbols.filp_open = NULL;
 	lkmdbg_symbols.filp_close = NULL;
-	lkmdbg_symbols.access_process_vm = NULL;
 	lkmdbg_symbols.aarch64_insn_patch_text_nosync = NULL;
 	lkmdbg_symbols.aarch64_insn_write = NULL;
 	lkmdbg_symbols.flush_icache_range = NULL;

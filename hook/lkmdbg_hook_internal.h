@@ -1,5 +1,5 @@
-#ifndef _LKMDBG_HOOK_H
-#define _LKMDBG_HOOK_H
+#ifndef _LKMDBG_HOOK_INTERNAL_H
+#define _LKMDBG_HOOK_INTERNAL_H
 
 struct lkmdbg_inline_hook;
 

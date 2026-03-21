@@ -154,7 +154,7 @@ jobs:
           ccache "$TOOLCHAIN/${TARGET}-clang" -O2 -Wall -Wextra \
             -o "$GITHUB_WORKSPACE/out/android14-6.1/lkmdbg_open_session" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_open_session.c"
-          ccache "$TOOLCHAIN/${TARGET}-clang" -O2 -Wall -Wextra \
+          ccache "$TOOLCHAIN/${TARGET}-clang" -O2 -Wall -Wextra -pthread \
             -o "$GITHUB_WORKSPACE/out/android14-6.1/lkmdbg_mem_test" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_mem_test.c"
 
@@ -279,7 +279,7 @@ jobs:
           ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/lkmdbg_open_session" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_open_session.c"
-          ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+          ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
             -o "$RUNNER_TEMP/lkmdbg_mem_test" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_mem_test.c"
           mkdir -p "$INITRAMFS_DIR/dev" "$INITRAMFS_DIR/proc" \

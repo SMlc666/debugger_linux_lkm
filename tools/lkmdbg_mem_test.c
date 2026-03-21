@@ -1,10 +1,13 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -13,6 +16,36 @@
 #include "../include/lkmdbg_ioctl.h"
 
 #define TARGET_PATH "/proc/version"
+#define SELFTEST_THREAD_COUNT 4
+#define SELFTEST_THREAD_ITERS 64
+#define SELFTEST_SLOT_SIZE 64
+
+struct child_info {
+	uintptr_t basic_addr;
+	uintptr_t slots_addr;
+	uintptr_t nofault_addr;
+	uint32_t page_size;
+	uint32_t slot_size;
+	uint32_t slot_count;
+};
+
+struct child_cmd {
+	uint32_t op;
+	uint32_t reserved;
+};
+
+struct worker_ctx {
+	int session_fd;
+	uintptr_t remote_addr;
+	unsigned int thread_index;
+	int failed;
+	char final_payload[SELFTEST_SLOT_SIZE];
+};
+
+enum {
+	CHILD_OP_QUERY_NOFAULT = 1,
+	CHILD_OP_EXIT = 2,
+};
 
 static int open_session_fd(void)
 {
@@ -57,8 +90,47 @@ static int set_target(int session_fd, pid_t pid)
 	return 0;
 }
 
+static ssize_t read_full(int fd, void *buf, size_t len)
+{
+	size_t done = 0;
+
+	while (done < len) {
+		ssize_t nr = read(fd, (char *)buf + done, len - done);
+
+		if (nr < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (nr == 0)
+			break;
+		done += (size_t)nr;
+	}
+
+	return (ssize_t)done;
+}
+
+static ssize_t write_full(int fd, const void *buf, size_t len)
+{
+	size_t done = 0;
+
+	while (done < len) {
+		ssize_t nw = write(fd, (const char *)buf + done, len - done);
+
+		if (nw < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		done += (size_t)nw;
+	}
+
+	return (ssize_t)done;
+}
+
 static int read_target_memory(int session_fd, uintptr_t remote_addr, void *buf,
-			      size_t len)
+			      size_t len, uint32_t *bytes_done_out,
+			      int verbose)
 {
 	struct lkmdbg_mem_request req = {
 		.version = LKMDBG_PROTO_VERSION,
@@ -73,12 +145,17 @@ static int read_target_memory(int session_fd, uintptr_t remote_addr, void *buf,
 		return -1;
 	}
 
-	printf("READ_MEM bytes_done=%u\n", req.bytes_done);
+	if (bytes_done_out)
+		*bytes_done_out = req.bytes_done;
+	if (verbose)
+		printf("READ_MEM bytes_done=%u\n", req.bytes_done);
+
 	return 0;
 }
 
 static int write_target_memory(int session_fd, uintptr_t remote_addr,
-			       const void *buf, size_t len)
+			       const void *buf, size_t len,
+			       uint32_t *bytes_done_out, int verbose)
 {
 	struct lkmdbg_mem_request req = {
 		.version = LKMDBG_PROTO_VERSION,
@@ -93,8 +170,149 @@ static int write_target_memory(int session_fd, uintptr_t remote_addr,
 		return -1;
 	}
 
-	printf("WRITE_MEM bytes_done=%u\n", req.bytes_done);
+	if (bytes_done_out)
+		*bytes_done_out = req.bytes_done;
+	if (verbose)
+		printf("WRITE_MEM bytes_done=%u\n", req.bytes_done);
+
 	return 0;
+}
+
+static int query_mincore_resident(void *addr, size_t len)
+{
+	unsigned char vec = 0;
+
+	if (mincore(addr, len, &vec) < 0)
+		return -1;
+
+	return !!(vec & 1);
+}
+
+static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
+{
+	struct child_info info;
+	char child_buf[64] = "child-buffer-initial";
+	char *slots_map;
+	void *nofault_map;
+	size_t page_size;
+	unsigned int i;
+
+	page_size = (size_t)sysconf(_SC_PAGESIZE);
+	if (!page_size)
+		return 2;
+
+	slots_map = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
+			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (slots_map == MAP_FAILED)
+		return 2;
+
+	nofault_map = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
+			   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (nofault_map == MAP_FAILED)
+		return 2;
+
+	for (i = 0; i < SELFTEST_THREAD_COUNT; i++) {
+		snprintf(slots_map + (i * SELFTEST_SLOT_SIZE), SELFTEST_SLOT_SIZE,
+			 "slot-%u-initial", i);
+	}
+
+	memset(nofault_map, 0xA5, page_size);
+	if (madvise(nofault_map, page_size, MADV_DONTNEED) < 0)
+		return 2;
+
+	memset(&info, 0, sizeof(info));
+	info.basic_addr = (uintptr_t)child_buf;
+	info.slots_addr = (uintptr_t)slots_map;
+	info.nofault_addr = (uintptr_t)nofault_map;
+	info.page_size = (uint32_t)page_size;
+	info.slot_size = SELFTEST_SLOT_SIZE;
+	info.slot_count = SELFTEST_THREAD_COUNT;
+
+	if (write_full(info_fd, &info, sizeof(info)) != (ssize_t)sizeof(info))
+		return 2;
+
+	for (;;) {
+		struct child_cmd cmd;
+		int resident;
+
+		if (read_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd))
+			return 2;
+
+		switch (cmd.op) {
+		case CHILD_OP_QUERY_NOFAULT:
+			resident = query_mincore_resident(nofault_map, page_size);
+			if (write_full(resp_fd, &resident, sizeof(resident)) !=
+			    (ssize_t)sizeof(resident))
+				return 2;
+			break;
+		case CHILD_OP_EXIT:
+			return 0;
+		default:
+			return 2;
+		}
+	}
+}
+
+static int child_query_nofault_residency(int cmd_fd, int resp_fd)
+{
+	struct child_cmd cmd = {
+		.op = CHILD_OP_QUERY_NOFAULT,
+	};
+	int resident;
+
+	if (write_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
+		fprintf(stderr, "failed to send child mincore query\n");
+		return -1;
+	}
+
+	if (read_full(resp_fd, &resident, sizeof(resident)) !=
+	    (ssize_t)sizeof(resident)) {
+		fprintf(stderr, "failed to read child mincore reply\n");
+		return -1;
+	}
+
+	if (resident < 0) {
+		fprintf(stderr, "child mincore failed\n");
+		return -1;
+	}
+
+	return resident;
+}
+
+static void *worker_thread_main(void *arg)
+{
+	struct worker_ctx *ctx = arg;
+	unsigned int iter;
+
+	for (iter = 0; iter < SELFTEST_THREAD_ITERS; iter++) {
+		char payload[SELFTEST_SLOT_SIZE];
+		char readback[SELFTEST_SLOT_SIZE];
+		size_t len;
+		uint32_t bytes_done = 0;
+
+		snprintf(payload, sizeof(payload), "thread-%u-iter-%u",
+			 ctx->thread_index, iter);
+		len = strlen(payload) + 1;
+
+		if (write_target_memory(ctx->session_fd, ctx->remote_addr, payload,
+					len, &bytes_done, 0) < 0 ||
+		    bytes_done != len) {
+			ctx->failed = 1;
+			return NULL;
+		}
+
+		memset(readback, 0, sizeof(readback));
+		if (read_target_memory(ctx->session_fd, ctx->remote_addr, readback,
+				       len, &bytes_done, 0) < 0 ||
+		    bytes_done != len || strcmp(readback, payload) != 0) {
+			ctx->failed = 1;
+			return NULL;
+		}
+
+		memcpy(ctx->final_payload, payload, len);
+	}
+
+	return NULL;
 }
 
 static void usage(const char *prog)
@@ -109,20 +327,26 @@ static void usage(const char *prog)
 
 static int run_selftest(const char *prog)
 {
-	int to_parent[2];
-	int to_child[2];
+	int info_pipe[2];
+	int cmd_pipe[2];
+	int resp_pipe[2];
+	struct child_info info;
 	pid_t child;
 	int session_fd;
-	uintptr_t remote_addr;
-	char addr_buf[64] = { 0 };
 	char read_buf[32] = { 0 };
 	const char *payload = "patched-by-lkmdbg";
-	ssize_t nread;
+	pthread_t threads[SELFTEST_THREAD_COUNT];
+	struct worker_ctx workers[SELFTEST_THREAD_COUNT];
+	uint32_t bytes_done = 0;
+	unsigned int i;
 	int status;
+	int resident_before;
+	int resident_after_read;
+	int resident_after_write;
 
 	(void)prog;
 
-	if (pipe(to_parent) < 0 || pipe(to_child) < 0) {
+	if (pipe(info_pipe) < 0 || pipe(cmd_pipe) < 0 || pipe(resp_pipe) < 0) {
 		fprintf(stderr, "pipe failed: %s\n", strerror(errno));
 		return 1;
 	}
@@ -134,43 +358,39 @@ static int run_selftest(const char *prog)
 	}
 
 	if (child == 0) {
-		char child_buf[64] = "child-buffer-initial";
-		char signal_buf[8] = { 0 };
-		ssize_t ignored;
+		int ret;
 
-		close(to_parent[0]);
-		close(to_child[1]);
-
-		dprintf(to_parent[1], "%p\n", (void *)child_buf);
-		ignored = read(to_child[0], signal_buf, sizeof(signal_buf));
-		(void)ignored;
-
-		printf("child-buffer-final=%s\n", child_buf);
-		fflush(stdout);
-		_exit(0);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		ret = child_selftest_main(info_pipe[1], cmd_pipe[0], resp_pipe[1]);
+		_exit(ret);
 	}
 
-	close(to_parent[1]);
-	close(to_child[0]);
+	close(info_pipe[1]);
+	close(cmd_pipe[0]);
+	close(resp_pipe[1]);
 
-	nread = read(to_parent[0], addr_buf, sizeof(addr_buf) - 1);
-	if (nread <= 0) {
-		fprintf(stderr, "failed to read child address\n");
-		close(to_parent[0]);
-		close(to_child[1]);
+	if (read_full(info_pipe[0], &info, sizeof(info)) != (ssize_t)sizeof(info)) {
+		fprintf(stderr, "failed to read child info\n");
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
 		kill(child, SIGKILL);
 		waitpid(child, NULL, 0);
 		return 1;
 	}
 
-	remote_addr = (uintptr_t)strtoull(addr_buf, NULL, 16);
-	printf("selftest child pid=%d remote_addr=0x%llx\n", child,
-	       (unsigned long long)remote_addr);
+	printf("selftest child pid=%d basic=0x%llx slots=0x%llx nofault=0x%llx\n",
+	       child, (unsigned long long)info.basic_addr,
+	       (unsigned long long)info.slots_addr,
+	       (unsigned long long)info.nofault_addr);
 
 	session_fd = open_session_fd();
 	if (session_fd < 0) {
-		close(to_parent[0]);
-		close(to_child[1]);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
 		kill(child, SIGKILL);
 		waitpid(child, NULL, 0);
 		return 1;
@@ -178,18 +398,24 @@ static int run_selftest(const char *prog)
 
 	if (set_target(session_fd, child) < 0) {
 		close(session_fd);
-		close(to_parent[0]);
-		close(to_child[1]);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
 		kill(child, SIGKILL);
 		waitpid(child, NULL, 0);
 		return 1;
 	}
 
-	if (read_target_memory(session_fd, remote_addr, read_buf,
-			       sizeof("child-buffer-initial") - 1) < 0) {
+	if (read_target_memory(session_fd, info.basic_addr, read_buf,
+			       sizeof("child-buffer-initial"), &bytes_done,
+			       1) < 0 ||
+	    bytes_done != sizeof("child-buffer-initial")) {
+		fprintf(stderr, "basic READ_MEM returned bytes_done=%u\n",
+			bytes_done);
 		close(session_fd);
-		close(to_parent[0]);
-		close(to_child[1]);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
 		kill(child, SIGKILL);
 		waitpid(child, NULL, 0);
 		return 1;
@@ -197,22 +423,159 @@ static int run_selftest(const char *prog)
 
 	printf("selftest read-back=%s\n", read_buf);
 
-	if (write_target_memory(session_fd, remote_addr, payload,
-				strlen(payload) + 1) < 0) {
+	if (write_target_memory(session_fd, info.basic_addr, payload,
+				strlen(payload) + 1, &bytes_done, 1) < 0 ||
+	    bytes_done != strlen(payload) + 1) {
+		fprintf(stderr, "basic WRITE_MEM returned bytes_done=%u\n",
+			bytes_done);
 		close(session_fd);
-		close(to_parent[0]);
-		close(to_child[1]);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
 		kill(child, SIGKILL);
 		waitpid(child, NULL, 0);
 		return 1;
 	}
 
-	if (write(to_child[1], "ok", 2) < 0)
-		fprintf(stderr, "failed to signal child: %s\n", strerror(errno));
+	for (i = 0; i < SELFTEST_THREAD_COUNT; i++) {
+		memset(&workers[i], 0, sizeof(workers[i]));
+		workers[i].session_fd = session_fd;
+		workers[i].remote_addr =
+			info.slots_addr + (uintptr_t)(i * info.slot_size);
+		workers[i].thread_index = i;
+		if (pthread_create(&threads[i], NULL, worker_thread_main,
+				   &workers[i]) != 0) {
+			fprintf(stderr, "pthread_create failed for worker %u\n", i);
+			close(session_fd);
+			close(info_pipe[0]);
+			close(cmd_pipe[1]);
+			close(resp_pipe[0]);
+			kill(child, SIGKILL);
+			waitpid(child, NULL, 0);
+			return 1;
+		}
+	}
+
+	for (i = 0; i < SELFTEST_THREAD_COUNT; i++) {
+		char verify_buf[SELFTEST_SLOT_SIZE];
+
+		pthread_join(threads[i], NULL);
+		if (workers[i].failed) {
+			fprintf(stderr, "worker %u failed\n", i);
+			close(session_fd);
+			close(info_pipe[0]);
+			close(cmd_pipe[1]);
+			close(resp_pipe[0]);
+			kill(child, SIGKILL);
+			waitpid(child, NULL, 0);
+			return 1;
+		}
+
+		memset(verify_buf, 0, sizeof(verify_buf));
+		if (read_target_memory(session_fd, workers[i].remote_addr,
+				       verify_buf,
+				       strlen(workers[i].final_payload) + 1,
+				       &bytes_done, 0) < 0 ||
+		    bytes_done != strlen(workers[i].final_payload) + 1 ||
+		    strcmp(verify_buf, workers[i].final_payload) != 0) {
+			fprintf(stderr, "worker %u final verify failed\n", i);
+			close(session_fd);
+			close(info_pipe[0]);
+			close(cmd_pipe[1]);
+			close(resp_pipe[0]);
+			kill(child, SIGKILL);
+			waitpid(child, NULL, 0);
+			return 1;
+		}
+	}
+
+	printf("selftest concurrent session access ok threads=%u iters=%u\n",
+	       SELFTEST_THREAD_COUNT, SELFTEST_THREAD_ITERS);
+
+	resident_before = child_query_nofault_residency(cmd_pipe[1], resp_pipe[0]);
+	if (resident_before != 0) {
+		fprintf(stderr, "nofault page unexpectedly resident before test\n");
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	memset(read_buf, 0xCC, sizeof(read_buf));
+	if (read_target_memory(session_fd, info.nofault_addr, read_buf,
+			       sizeof(read_buf), &bytes_done, 1) < 0 ||
+	    bytes_done != 0) {
+		fprintf(stderr, "nofault READ_MEM bytes_done=%u expected=0\n",
+			bytes_done);
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	resident_after_read = child_query_nofault_residency(cmd_pipe[1],
+							    resp_pipe[0]);
+	if (resident_after_read != 0) {
+		fprintf(stderr, "nofault read faulted target page in\n");
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	if (write_target_memory(session_fd, info.nofault_addr, payload,
+				strlen(payload) + 1, &bytes_done, 1) < 0 ||
+	    bytes_done != 0) {
+		fprintf(stderr, "nofault WRITE_MEM bytes_done=%u expected=0\n",
+			bytes_done);
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	resident_after_write = child_query_nofault_residency(cmd_pipe[1],
+							     resp_pipe[0]);
+	if (resident_after_write != 0) {
+		fprintf(stderr, "nofault write faulted target page in\n");
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	printf("selftest nofault remote access ok resident_before=%d after_read=%d after_write=%d\n",
+	       resident_before, resident_after_read, resident_after_write);
 
 	close(session_fd);
-	close(to_parent[0]);
-	close(to_child[1]);
+	close(info_pipe[0]);
+
+	{
+		struct child_cmd exit_cmd = {
+			.op = CHILD_OP_EXIT,
+		};
+
+		if (write_full(cmd_pipe[1], &exit_cmd, sizeof(exit_cmd)) !=
+		    (ssize_t)sizeof(exit_cmd))
+			fprintf(stderr, "failed to send child exit command\n");
+	}
+	close(cmd_pipe[1]);
+	close(resp_pipe[0]);
 
 	if (waitpid(child, &status, 0) < 0) {
 		fprintf(stderr, "waitpid failed: %s\n", strerror(errno));
@@ -220,7 +583,7 @@ static int run_selftest(const char *prog)
 	}
 
 	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-		fprintf(stderr, "child exited abnormally\n");
+		fprintf(stderr, "child exited abnormally status=%d\n", status);
 		return 1;
 	}
 
@@ -282,7 +645,8 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
-		if (read_target_memory(session_fd, remote_addr, buf, len) < 0) {
+		if (read_target_memory(session_fd, remote_addr, buf, len, NULL,
+				       1) < 0) {
 			free(buf);
 			close(session_fd);
 			return 1;
@@ -297,7 +661,8 @@ int main(int argc, char **argv)
 		const char *data = argv[4];
 		size_t len = strlen(data);
 
-		if (write_target_memory(session_fd, remote_addr, data, len) < 0) {
+		if (write_target_memory(session_fd, remote_addr, data, len, NULL,
+					1) < 0) {
 			close(session_fd);
 			return 1;
 		}

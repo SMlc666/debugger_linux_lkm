@@ -6,7 +6,7 @@ This repository intentionally starts with a small smoke-test module and a safe-f
 
 - loads and unloads cleanly
 - exports a `debugfs` status file at `/sys/kernel/debug/lkmdbg/status`
-- can optionally clone-and-swap `/proc/version` inode `file_operations`
+- can optionally inline-hook `/proc/version` open as a narrow session bootstrap
 - provides a stable place to add probe, breakpoint, and event plumbing next
 - on load, best-effort disables the kprobe blacklist and patches common CFI
   slowpath symbols to simplify inline hooks on Android GKI
@@ -28,10 +28,10 @@ Current hook support is intentionally minimal:
 - stop-machine patching for install and rollback
 
 The current low-level arm64 hook core is vendored from `KernelPatch` and
-adapted into this repository as a narrow backend:
+adapted into this repository as a kernel-internal backend:
 
 - source basis: `kernel/include/hook.h` and `kernel/base/hook.c`
-- local adapter keeps the existing `lkmdbg_hook_*` API
+- local adapter keeps a private `lkmdbg_hook_*` kernel API
 - KernelPatch-specific KPM/runtime integration is not included yet
 - chain hooks (`hook_wrap`) and function-pointer hooks are not wired into `lkmdbg` yet
 
@@ -53,7 +53,7 @@ Build the user-space bootstrap test tool:
 
 ```bash
 cc -O2 -Wall -Wextra -o tools/lkmdbg_open_session tools/lkmdbg_open_session.c
-cc -O2 -Wall -Wextra -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c
+cc -O2 -Wall -Wextra -pthread -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c
 ```
 
 Load and inspect:
@@ -96,9 +96,9 @@ sudo insmod lkmdbg.ko bypass_kprobe_blacklist=1 bypass_cfi=1
 This stage is intentionally conservative:
 
 - normal `/proc/version` reads stay untouched
-- the module clones the target inode `file_operations` and swaps the inode pointer
+- the module hooks the original `/proc/version` `open` callback and only swaps `file->f_op` on matching opened instances
 - it does not patch the shared operations table in place
-- unload restores the original inode pointer
+- unload removes the inline hook and restores the original path
 
 The hidden ioctl protocol now uses a bootstrap-plus-session model:
 
@@ -134,7 +134,7 @@ sudo ./tools/lkmdbg_open_session
 Example direct memory access flow:
 
 ```bash
-cc -O2 -Wall -Wextra -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c
+cc -O2 -Wall -Wextra -pthread -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c
 sudo ./tools/lkmdbg_mem_test selftest
 sudo ./tools/lkmdbg_mem_test read <pid> <remote_addr_hex> <length>
 sudo ./tools/lkmdbg_mem_test write <pid> <remote_addr_hex> <ascii_data>

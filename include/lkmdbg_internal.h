@@ -11,7 +11,7 @@
 #include <linux/uaccess.h>
 #include <linux/wait.h>
 
-#include "lkmdbg_hook.h"
+#include "../hook/lkmdbg_hook_internal.h"
 #include "lkmdbg_ioctl.h"
 
 #define LKMDBG_DIR_NAME "lkmdbg"
@@ -72,8 +72,6 @@ struct lkmdbg_symbols {
 	unsigned long (*kallsyms_lookup_name)(const char *name);
 	struct file *(*filp_open)(const char *filename, int flags, umode_t mode);
 	int (*filp_close)(struct file *file, fl_owner_t id);
-	int (*access_process_vm)(struct task_struct *tsk, unsigned long addr,
-				 void *buf, int len, unsigned int gup_flags);
 	int (*aarch64_insn_patch_text_nosync)(void *addr, u32 insn);
 	int (*aarch64_insn_write)(void *addr, u32 insn);
 	void (*flush_icache_range)(unsigned long start, unsigned long end);
