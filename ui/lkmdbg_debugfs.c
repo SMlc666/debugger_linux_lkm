@@ -44,6 +44,8 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	seq_printf(m, "status_reads=%llu\n", (unsigned long long)reads);
 	seq_printf(m, "hook_requested=%u\n", hook_proc_version);
 	seq_printf(m, "hook_active=%u\n", hook_active);
+	seq_printf(m, "proc_version_hook_requested=%u\n", hook_proc_version);
+	seq_printf(m, "proc_version_hook_active=%u\n", hook_active);
 	seq_printf(m, "bootstrap_ioctl_calls=%llu\n",
 		   (unsigned long long)calls);
 	seq_printf(m, "proc_open_successes=%llu\n",
