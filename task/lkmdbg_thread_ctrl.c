@@ -278,8 +278,8 @@ static u32 lkmdbg_mmu_fault_access_type(unsigned long esr)
 	case ESR_ELx_EC_IABT_LOW:
 		return LKMDBG_HWPOINT_TYPE_EXEC;
 	case ESR_ELx_EC_DABT_LOW:
-		return ESR_ELx_WNR(esr) ? LKMDBG_HWPOINT_TYPE_WRITE :
-					  LKMDBG_HWPOINT_TYPE_READ;
+		return (esr & ESR_ELx_WNR) ? LKMDBG_HWPOINT_TYPE_WRITE :
+					     LKMDBG_HWPOINT_TYPE_READ;
 	default:
 		return 0;
 	}
@@ -360,11 +360,11 @@ static u64 lkmdbg_mmu_pte_compare_mask(void)
 	return mask;
 }
 
-static bool lkmdbg_mmu_pte_equivalent(pte_t current, pte_t expected)
+static bool lkmdbg_mmu_pte_equivalent(pte_t current_pte, pte_t expected_pte)
 {
 	u64 mask = lkmdbg_mmu_pte_compare_mask();
 
-	return (pte_val(current) & mask) == (pte_val(expected) & mask);
+	return (pte_val(current_pte) & mask) == (pte_val(expected_pte) & mask);
 }
 
 static void lkmdbg_mmu_flush_exec_page(struct mm_struct *mm,
@@ -384,29 +384,30 @@ static void lkmdbg_mmu_flush_exec_page(struct mm_struct *mm,
 	dsb(ish);
 }
 
-static int lkmdbg_mmu_prepare_trap_pte(pte_t current, unsigned long vm_flags,
+static int lkmdbg_mmu_prepare_trap_pte(pte_t current_pte,
+				       unsigned long vm_flags,
 				       u32 requested_type, pte_t *trap_out,
 				       u32 *effective_type_out)
 {
-	pte_t trap = current;
+	pte_t trap = current_pte;
 	u32 effective = 0;
 
 	if (!trap_out || !effective_type_out)
 		return -EINVAL;
 
 	if (requested_type & LKMDBG_HWPOINT_TYPE_READ) {
-		if (!lkmdbg_mmu_pte_allows_access(current, vm_flags,
+		if (!lkmdbg_mmu_pte_allows_access(current_pte, vm_flags,
 						  LKMDBG_HWPOINT_TYPE_READ))
 			return -EACCES;
 
 		if (!(requested_type & LKMDBG_HWPOINT_TYPE_EXEC) &&
-		    lkmdbg_mmu_pte_allows_access(current, vm_flags,
+		    lkmdbg_mmu_pte_allows_access(current_pte, vm_flags,
 						 LKMDBG_HWPOINT_TYPE_EXEC)) {
-			trap = lkmdbg_mmu_pte_make_exec_only(current);
+			trap = lkmdbg_mmu_pte_make_exec_only(current_pte);
 			effective = LKMDBG_HWPOINT_TYPE_READ |
 				    LKMDBG_HWPOINT_TYPE_WRITE;
 		} else {
-			trap = lkmdbg_mmu_pte_make_protnone(current);
+			trap = lkmdbg_mmu_pte_make_protnone(current_pte);
 			effective = LKMDBG_HWPOINT_TYPE_READ |
 				    LKMDBG_HWPOINT_TYPE_WRITE |
 				    LKMDBG_HWPOINT_TYPE_EXEC;
@@ -418,7 +419,7 @@ static int lkmdbg_mmu_prepare_trap_pte(pte_t current, unsigned long vm_flags,
 	}
 
 	if (requested_type & LKMDBG_HWPOINT_TYPE_WRITE) {
-		if (!lkmdbg_mmu_pte_allows_access(current, vm_flags,
+		if (!lkmdbg_mmu_pte_allows_access(current_pte, vm_flags,
 						  LKMDBG_HWPOINT_TYPE_WRITE))
 			return -EACCES;
 		trap = pte_wrprotect(trap);
@@ -426,7 +427,7 @@ static int lkmdbg_mmu_prepare_trap_pte(pte_t current, unsigned long vm_flags,
 	}
 
 	if (requested_type & LKMDBG_HWPOINT_TYPE_EXEC) {
-		if (!lkmdbg_mmu_pte_allows_access(current, vm_flags,
+		if (!lkmdbg_mmu_pte_allows_access(current_pte, vm_flags,
 						  LKMDBG_HWPOINT_TYPE_EXEC))
 			return -EACCES;
 		trap = lkmdbg_mmu_pte_set_exec(trap, false);
@@ -572,7 +573,7 @@ static int lkmdbg_mmu_capture_pte(struct mm_struct *mm, unsigned long addr,
 static int lkmdbg_mmu_apply_trap(struct mm_struct *mm,
 				 struct lkmdbg_hwpoint *entry)
 {
-	pte_t current;
+	pte_t current_pte;
 	pte_t trap;
 	unsigned long vm_flags = 0;
 	int ret;
@@ -582,17 +583,19 @@ static int lkmdbg_mmu_apply_trap(struct mm_struct *mm,
 		return -ESRCH;
 
 	mmap_write_lock(mm);
-	ret = lkmdbg_mmu_read_pte_locked(mm, entry->page_addr, &current, &vm_flags);
+	ret = lkmdbg_mmu_read_pte_locked(mm, entry->page_addr, &current_pte,
+					 &vm_flags);
 	if (!ret)
-		ret = lkmdbg_mmu_prepare_trap_pte(current, vm_flags, entry->type,
-						  &trap, &effective_type);
+		ret = lkmdbg_mmu_prepare_trap_pte(current_pte, vm_flags,
+						  entry->type, &trap,
+						  &effective_type);
 	if (!ret)
 		ret = lkmdbg_mmu_rewrite_pte_locked(mm, entry->page_addr, trap,
 						    NULL, NULL);
 	mmap_write_unlock(mm);
 
 	if (!ret) {
-		entry->mmu_baseline_pte = pte_val(current);
+		entry->mmu_baseline_pte = pte_val(current_pte);
 		entry->mmu_baseline_vm_flags = vm_flags;
 		entry->mmu_expected_pte = pte_val(trap);
 		entry->mmu_effective_type = effective_type;
@@ -690,7 +693,7 @@ static struct mm_struct *lkmdbg_mmu_get_mm_by_tgid(pid_t tgid)
 static int lkmdbg_mmu_refresh_entry_state(struct lkmdbg_hwpoint *entry)
 {
 	struct mm_struct *mm;
-	pte_t current;
+	pte_t current_pte;
 	unsigned long vm_flags = 0;
 	int ret;
 
@@ -705,7 +708,8 @@ static int lkmdbg_mmu_refresh_entry_state(struct lkmdbg_hwpoint *entry)
 		return -ESRCH;
 	}
 
-	ret = lkmdbg_mmu_capture_pte(mm, entry->page_addr, &current, &vm_flags);
+	ret = lkmdbg_mmu_capture_pte(mm, entry->page_addr, &current_pte,
+				     &vm_flags);
 	mmput(mm);
 	if (ret) {
 		entry->armed = false;
@@ -722,7 +726,7 @@ static int lkmdbg_mmu_refresh_entry_state(struct lkmdbg_hwpoint *entry)
 	}
 
 	if (entry->armed) {
-		if (!lkmdbg_mmu_pte_equivalent(current,
+		if (!lkmdbg_mmu_pte_equivalent(current_pte,
 					       __pte(entry->mmu_expected_pte))) {
 			entry->armed = false;
 			lkmdbg_mmu_mark_state(entry, LKMDBG_HWPOINT_STATE_MUTATED,
@@ -735,7 +739,8 @@ static int lkmdbg_mmu_refresh_entry_state(struct lkmdbg_hwpoint *entry)
 		return 0;
 	}
 
-	if (!lkmdbg_mmu_pte_equivalent(current, __pte(entry->mmu_baseline_pte))) {
+	if (!lkmdbg_mmu_pte_equivalent(current_pte,
+				       __pte(entry->mmu_baseline_pte))) {
 		lkmdbg_mmu_mark_state(entry, LKMDBG_HWPOINT_STATE_MUTATED,
 				      LKMDBG_HWPOINT_STATE_LOST);
 		return -ESTALE;
