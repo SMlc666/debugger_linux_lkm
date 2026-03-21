@@ -28,6 +28,7 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	u64 target_stop_event_read_total;
 	u64 breakpoint_stop_event_read_total;
 	u64 watchpoint_stop_event_read_total;
+	u64 event_drop_total;
 	u64 hwpoint_last_addr;
 	u64 hwpoint_last_ip;
 	bool hook_active;
@@ -86,6 +87,7 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 		atomic64_read(&lkmdbg_state.breakpoint_stop_event_read_total);
 	watchpoint_stop_event_read_total =
 		atomic64_read(&lkmdbg_state.watchpoint_stop_event_read_total);
+	event_drop_total = atomic64_read(&lkmdbg_state.event_drop_total);
 	hwpoint_last_tgid = READ_ONCE(lkmdbg_state.hwpoint_last_tgid);
 	hwpoint_last_tid = READ_ONCE(lkmdbg_state.hwpoint_last_tid);
 	hwpoint_last_reason = READ_ONCE(lkmdbg_state.hwpoint_last_reason);
@@ -155,6 +157,8 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 		   (unsigned long long)breakpoint_stop_event_read_total);
 	seq_printf(m, "watchpoint_stop_event_read_total=%llu\n",
 		   (unsigned long long)watchpoint_stop_event_read_total);
+	seq_printf(m, "event_drop_total=%llu\n",
+		   (unsigned long long)event_drop_total);
 	seq_printf(m, "hwpoint_last_tgid=%d\n", hwpoint_last_tgid);
 	seq_printf(m, "hwpoint_last_tid=%d\n", hwpoint_last_tid);
 	seq_printf(m, "hwpoint_last_reason=%u\n", hwpoint_last_reason);

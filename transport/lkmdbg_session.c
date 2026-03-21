@@ -36,6 +36,9 @@ static void lkmdbg_session_queue_event_locked(struct lkmdbg_session *session,
 	slot = (session->event_head + session->event_count) %
 	       LKMDBG_SESSION_EVENT_CAPACITY;
 	if (session->event_count == LKMDBG_SESSION_EVENT_CAPACITY) {
+		session->event_drop_count++;
+		session->event_drop_pending++;
+		atomic64_inc(&lkmdbg_state.event_drop_total);
 		session->event_head =
 			(session->event_head + 1) % LKMDBG_SESSION_EVENT_CAPACITY;
 		slot = (session->event_head + session->event_count - 1) %
@@ -56,8 +59,10 @@ static void lkmdbg_session_queue_event_locked(struct lkmdbg_session *session,
 	event->tgid = tgid;
 	event->tid = tid;
 	event->flags = flags;
+	event->reserved0 = session->event_drop_pending;
 	event->value0 = value0;
 	event->value1 = value1;
+	session->event_drop_pending = 0;
 }
 
 void lkmdbg_session_queue_event_ex(struct lkmdbg_session *session, u32 type,
@@ -288,8 +293,11 @@ static int lkmdbg_session_copy_status_to_user(struct lkmdbg_session *session,
 					      void __user *argp)
 {
 	struct lkmdbg_status_reply reply;
+	struct lkmdbg_stop_state stop;
+	unsigned long irqflags;
 
 	memset(&reply, 0, sizeof(reply));
+	lkmdbg_session_zero_stop(&stop);
 
 	mutex_lock(&lkmdbg_state.lock);
 	reply.version = LKMDBG_PROTO_VERSION;
@@ -307,9 +315,23 @@ static int lkmdbg_session_copy_status_to_user(struct lkmdbg_session *session,
 	mutex_lock(&session->lock);
 	reply.owner_tgid = session->owner_tgid;
 	reply.target_tgid = session->target_tgid;
+	reply.target_tid = session->target_tid;
 	reply.session_id = session->session_id;
 	reply.session_ioctl_calls = session->ioctl_calls;
+	stop = session->stop_state;
 	mutex_unlock(&session->lock);
+
+	spin_lock_irqsave(&session->event_lock, irqflags);
+	reply.event_queue_depth = session->event_count;
+	reply.session_event_drops = session->event_drop_count;
+	spin_unlock_irqrestore(&session->event_lock, irqflags);
+
+	reply.total_event_drops = atomic64_read(&lkmdbg_state.event_drop_total);
+	reply.stop_cookie = stop.cookie;
+	reply.stop_reason = stop.reason;
+	reply.stop_flags = stop.flags;
+	reply.stop_tgid = stop.tgid;
+	reply.stop_tid = stop.tid;
 
 	if (copy_to_user(argp, &reply, sizeof(reply)))
 		return -EFAULT;

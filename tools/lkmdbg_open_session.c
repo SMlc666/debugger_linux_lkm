@@ -21,6 +21,8 @@ static void print_status(const struct lkmdbg_status_reply *reply)
 	printf("hook_active=%u\n", reply->hook_active);
 	printf("owner_tgid=%d\n", reply->owner_tgid);
 	printf("target_tgid=%d\n", reply->target_tgid);
+	printf("target_tid=%d\n", reply->target_tid);
+	printf("event_queue_depth=%u\n", reply->event_queue_depth);
 	printf("session_id=%" PRIu64 "\n", (uint64_t)reply->session_id);
 	printf("active_sessions=%" PRIu64 "\n",
 	       (uint64_t)reply->active_sessions);
@@ -33,6 +35,15 @@ static void print_status(const struct lkmdbg_status_reply *reply)
 	printf("session_opened_total=%" PRIu64 "\n",
 	       (uint64_t)reply->session_opened_total);
 	printf("open_successes=%" PRIu64 "\n", (uint64_t)reply->open_successes);
+	printf("session_event_drops=%" PRIu64 "\n",
+	       (uint64_t)reply->session_event_drops);
+	printf("total_event_drops=%" PRIu64 "\n",
+	       (uint64_t)reply->total_event_drops);
+	printf("stop_cookie=%" PRIu64 "\n", (uint64_t)reply->stop_cookie);
+	printf("stop_reason=%u\n", reply->stop_reason);
+	printf("stop_flags=0x%x\n", reply->stop_flags);
+	printf("stop_tgid=%d\n", reply->stop_tgid);
+	printf("stop_tid=%d\n", reply->stop_tid);
 }
 
 static void print_event(const struct lkmdbg_event_record *event)
@@ -46,6 +57,7 @@ static void print_event(const struct lkmdbg_event_record *event)
 	printf("event.tgid=%d\n", event->tgid);
 	printf("event.tid=%d\n", event->tid);
 	printf("event.flags=0x%x\n", event->flags);
+	printf("event.reserved0=%u\n", event->reserved0);
 	printf("event.value0=%" PRIu64 "\n", (uint64_t)event->value0);
 	printf("event.value1=%" PRIu64 "\n", (uint64_t)event->value1);
 }

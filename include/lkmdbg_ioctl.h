@@ -4,9 +4,9 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 4
+#define LKMDBG_PROTO_VERSION 5
 #define LKMDBG_IOC_MAGIC 0xBD
-#define LKMDBG_EVENT_VERSION 2
+#define LKMDBG_EVENT_VERSION 3
 
 #define LKMDBG_EVENT_SESSION_OPENED 1
 #define LKMDBG_EVENT_SESSION_RESET 2
@@ -105,6 +105,8 @@ struct lkmdbg_status_reply {
 	__u32 hook_active;
 	__s32 owner_tgid;
 	__s32 target_tgid;
+	__s32 target_tid;
+	__u32 event_queue_depth;
 	__u64 session_id;
 	__u64 active_sessions;
 	__u64 load_jiffies;
@@ -113,6 +115,13 @@ struct lkmdbg_status_reply {
 	__u64 session_ioctl_calls;
 	__u64 session_opened_total;
 	__u64 open_successes;
+	__u64 session_event_drops;
+	__u64 total_event_drops;
+	__u64 stop_cookie;
+	__u32 stop_reason;
+	__u32 stop_flags;
+	__s32 stop_tgid;
+	__s32 stop_tid;
 };
 
 struct lkmdbg_target_request {

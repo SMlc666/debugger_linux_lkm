@@ -78,6 +78,7 @@ struct lkmdbg_state {
 	atomic64_t target_stop_event_read_total;
 	atomic64_t breakpoint_stop_event_read_total;
 	atomic64_t watchpoint_stop_event_read_total;
+	atomic64_t event_drop_total;
 	pid_t hwpoint_last_tgid;
 	pid_t hwpoint_last_tid;
 	u32 hwpoint_last_reason;
@@ -125,10 +126,12 @@ struct lkmdbg_session {
 	u64 event_seq;
 	u32 event_head;
 	u32 event_count;
+	u32 event_drop_pending;
 	pid_t owner_tgid;
 	pid_t target_tgid;
 	pid_t target_tid;
 	u64 target_gen;
+	u64 event_drop_count;
 	struct list_head hwpoints;
 	u64 next_hwpoint_id;
 	pid_t step_tgid;
