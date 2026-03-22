@@ -2056,13 +2056,15 @@ out:
 	return ret;
 }
 
-static int verify_remote_map(int session_fd, const struct child_info *info,
-			     int cmd_fd, int resp_fd)
+static int verify_remote_map(int session_fd, pid_t child,
+			     const struct child_info *info, int cmd_fd,
+			     int resp_fd)
 {
 	struct lkmdbg_remote_map_request reply;
 	struct lkmdbg_remote_map_request ro_reply;
 	struct lkmdbg_remote_map_request inject_reply;
 	struct lkmdbg_remote_map_request stealth_reply;
+	struct lkmdbg_remote_map_request stealth_inject_reply;
 	struct lkmdbg_remote_map_handle_request remove_reply;
 	struct lkmdbg_remote_map_query_request query_reply;
 	unsigned char *view = MAP_FAILED;
@@ -2076,7 +2078,10 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	pthread_t wake_thread;
 	char maps_before[512];
 	char maps_after[512];
+	char target_maps_before[512];
+	char target_maps_after[512];
 	uint32_t bytes_done = 0;
+	uintptr_t stealth_target_addr = 0;
 	size_t test_len;
 	int local_fd = -1;
 	int stealth_fd = -1;
@@ -2094,6 +2099,8 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	inject_reply.map_fd = -1;
 	memset(&stealth_reply, 0, sizeof(stealth_reply));
 	stealth_reply.map_fd = -1;
+	memset(&stealth_inject_reply, 0, sizeof(stealth_inject_reply));
+	stealth_inject_reply.map_fd = -1;
 	memset(&remove_reply, 0, sizeof(remove_reply));
 	memset(&query_reply, 0, sizeof(query_reply));
 
@@ -2430,10 +2437,151 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 		goto out;
 	}
 
-	printf("selftest remote map ok export_len=%" PRIu64 " fd=%d inject_addr=0x%" PRIx64 " stealth_len=%" PRIu64 "\n",
+	fill_pattern(local_map, info->page_size, 53);
+	stealth_target_addr = info->large_addr + (info->page_size * 8U);
+	if (stealth_target_addr + info->page_size >
+	    info->large_addr + info->large_len) {
+		fprintf(stderr, "stealth target test range exceeds child buffer\n");
+		goto out;
+	}
+	if (read_maps_line_for_pid_addr(child, stealth_target_addr,
+					target_maps_before,
+					sizeof(target_maps_before)) < 0)
+		goto out;
+
+	if (create_remote_map(session_fd, stealth_target_addr,
+			      (uintptr_t)local_map, info->page_size,
+			      LKMDBG_REMOTE_MAP_PROT_READ |
+				      LKMDBG_REMOTE_MAP_PROT_WRITE,
+			      LKMDBG_REMOTE_MAP_FLAG_LOCAL_TO_TARGET |
+				      LKMDBG_REMOTE_MAP_FLAG_STEALTH_TARGET,
+			      &stealth_inject_reply) < 0)
+		goto out;
+	if (!stealth_inject_reply.map_id || stealth_inject_reply.map_fd != -1 ||
+	    stealth_inject_reply.remote_addr != stealth_target_addr ||
+	    stealth_inject_reply.local_addr != (uintptr_t)local_map ||
+	    stealth_inject_reply.mapped_length != info->page_size) {
+		fprintf(stderr,
+			"stealth inject reply mismatch id=%" PRIu64 " remote=0x%" PRIx64 " local=0x%" PRIx64 " len=%" PRIu64 " fd=%d\n",
+			(uint64_t)stealth_inject_reply.map_id,
+			(uint64_t)stealth_inject_reply.remote_addr,
+			(uint64_t)stealth_inject_reply.local_addr,
+			(uint64_t)stealth_inject_reply.mapped_length,
+			stealth_inject_reply.map_fd);
+		goto out;
+	}
+
+	if (read_maps_line_for_pid_addr(child, stealth_target_addr,
+					target_maps_after,
+					sizeof(target_maps_after)) < 0)
+		goto out;
+	if (strcmp(target_maps_before, target_maps_after) != 0) {
+		fprintf(stderr,
+			"stealth target map changed target /proc/maps entry\n");
+		goto out;
+	}
+
+	memset(verify_buf, 0, info->page_size);
+	if (child_read_remote_range(cmd_fd, resp_fd, stealth_target_addr,
+				    verify_buf, info->page_size) < 0 ||
+	    memcmp(verify_buf, local_map, info->page_size) != 0) {
+		fprintf(stderr, "stealth target child readback mismatch\n");
+		goto out;
+	}
+
+	if (query_remote_maps(session_fd, 0, &query_buf, &query_reply) < 0)
+		goto out;
+	if (query_reply.entries_filled != 1 || !query_reply.done ||
+	    query_reply.next_id != stealth_inject_reply.map_id ||
+	    query_buf.entries[0].map_id != stealth_inject_reply.map_id ||
+	    query_buf.entries[0].local_addr != (uintptr_t)local_map ||
+	    query_buf.entries[0].remote_addr != stealth_target_addr ||
+	    query_buf.entries[0].mapped_length != info->page_size ||
+	    query_buf.entries[0].prot != (LKMDBG_REMOTE_MAP_PROT_READ |
+					  LKMDBG_REMOTE_MAP_PROT_WRITE) ||
+	    query_buf.entries[0].flags !=
+		    (LKMDBG_REMOTE_MAP_FLAG_LOCAL_TO_TARGET |
+		     LKMDBG_REMOTE_MAP_FLAG_STEALTH_TARGET)) {
+		fprintf(stderr,
+			"stealth target query mismatch filled=%u done=%u next=%" PRIu64 " entry_id=%" PRIu64 "\n",
+			query_reply.entries_filled, query_reply.done,
+			(uint64_t)query_reply.next_id,
+			query_reply.entries_filled ?
+				(uint64_t)query_buf.entries[0].map_id :
+				(uint64_t)0);
+		goto out;
+	}
+
+	if (child_fill_remote_range(cmd_fd, resp_fd, stealth_target_addr + 96, 32,
+				    0xC7) < 0) {
+		fprintf(stderr, "stealth target child write-through failed\n");
+		goto out;
+	}
+	memset(expected_buf, 0xC7, 32);
+	if (memcmp(local_map + 96, expected_buf, 32) != 0) {
+		fprintf(stderr,
+			"stealth target local page did not reflect target write\n");
+		goto out;
+	}
+
+	if (remove_remote_map(session_fd, stealth_inject_reply.map_id,
+			      &remove_reply) < 0)
+		goto out;
+	if (remove_reply.map_id != stealth_inject_reply.map_id ||
+	    remove_reply.local_addr != (uintptr_t)local_map ||
+	    remove_reply.remote_addr != stealth_target_addr ||
+	    remove_reply.mapped_length != info->page_size ||
+	    remove_reply.prot != (LKMDBG_REMOTE_MAP_PROT_READ |
+				  LKMDBG_REMOTE_MAP_PROT_WRITE) ||
+	    remove_reply.flags !=
+		    (LKMDBG_REMOTE_MAP_FLAG_LOCAL_TO_TARGET |
+		     LKMDBG_REMOTE_MAP_FLAG_STEALTH_TARGET)) {
+		fprintf(stderr,
+			"stealth target remove reply mismatch id=%" PRIu64 " local=0x%" PRIx64 " remote=0x%" PRIx64 " len=%" PRIu64 " prot=0x%x flags=0x%x\n",
+			(uint64_t)remove_reply.map_id,
+			(uint64_t)remove_reply.local_addr,
+			(uint64_t)remove_reply.remote_addr,
+			(uint64_t)remove_reply.mapped_length,
+			remove_reply.prot, remove_reply.flags);
+		goto out;
+	}
+
+	if (read_maps_line_for_pid_addr(child, stealth_target_addr,
+					target_maps_after,
+					sizeof(target_maps_after)) < 0)
+		goto out;
+	if (strcmp(target_maps_before, target_maps_after) != 0) {
+		fprintf(stderr,
+			"stealth target remove changed target /proc/maps entry\n");
+		goto out;
+	}
+
+	memset(verify_buf, 0, info->page_size);
+	if (child_read_remote_range(cmd_fd, resp_fd, stealth_target_addr,
+				    verify_buf, info->page_size) < 0 ||
+	    verify_pattern_range(verify_buf, info->page_size, 1,
+				 info->page_size * 8U) != 0) {
+		fprintf(stderr, "stealth target restore mismatch\n");
+		goto out;
+	}
+
+	memset(query_buf.entries, 0,
+	       REMOTE_MAP_QUERY_BATCH * sizeof(*query_buf.entries));
+	if (query_remote_maps(session_fd, 0, &query_buf, &query_reply) < 0)
+		goto out;
+	if (query_reply.entries_filled != 0 || !query_reply.done ||
+	    query_reply.next_id != 0) {
+		fprintf(stderr,
+			"stealth target query not empty after remove filled=%u done=%u next=%" PRIu64 "\n",
+			query_reply.entries_filled, query_reply.done,
+			(uint64_t)query_reply.next_id);
+		goto out;
+	}
+
+	printf("selftest remote map ok export_len=%" PRIu64 " fd=%d inject_addr=0x%" PRIx64 " stealth_len=%" PRIu64 " stealth_target=0x%" PRIxPTR "\n",
 	       (uint64_t)reply.mapped_length, reply.map_fd,
 	       (uint64_t)inject_reply.remote_addr,
-	       (uint64_t)stealth_reply.mapped_length);
+	       (uint64_t)stealth_reply.mapped_length, stealth_target_addr);
 	ret = 0;
 
 out:
@@ -5338,7 +5486,8 @@ static int run_selftest(const char *prog)
 
 	printf("selftest force-read and force-write on protected present pages ok\n");
 
-	if (verify_remote_map(session_fd, &info, cmd_pipe[1], resp_pipe[0]) < 0) {
+	if (verify_remote_map(session_fd, child, &info, cmd_pipe[1],
+			      resp_pipe[0]) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
 		close(cmd_pipe[1]);

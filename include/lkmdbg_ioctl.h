@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 15
+#define LKMDBG_PROTO_VERSION 16
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -158,6 +158,12 @@
  * can restore the original PTEs during session teardown.
  */
 #define LKMDBG_REMOTE_MAP_FLAG_STEALTH_LOCAL 0x00000004U
+/*
+ * Reuse an existing target-side VMA as the remote view so no new target VMA is
+ * created. The caller must keep the local source pages alive until the mapping
+ * is removed or the session closes.
+ */
+#define LKMDBG_REMOTE_MAP_FLAG_STEALTH_TARGET 0x00000008U
 
 #define LKMDBG_REMOTE_ALLOC_PROT_READ 0x00000001U
 #define LKMDBG_REMOTE_ALLOC_PROT_WRITE 0x00000002U
