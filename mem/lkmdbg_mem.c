@@ -18,7 +18,7 @@
 #define LKMDBG_MEM_OP_VALID_FLAGS LKMDBG_MEM_OP_FLAG_FORCE_ACCESS
 #define LKMDBG_PAGE_MAX_ENTRIES 1024U
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
 #define LKMDBG_GUP_NOFAULT_FLAG (1U << 5)
 #else
 #define LKMDBG_GUP_NOFAULT_FLAG FOLL_NOFAULT
@@ -98,7 +98,7 @@ static long lkmdbg_get_remote_pages_nofault(struct mm_struct *mm,
 	int locked = 1;
 
 	mmap_read_lock(mm);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
 	ret = get_user_pages_remote(mm, start, nr_pages,
 				    flags | LKMDBG_GUP_NOFAULT_FLAG, pages,
 				    &locked);

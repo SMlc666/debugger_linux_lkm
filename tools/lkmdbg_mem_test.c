@@ -1396,7 +1396,9 @@ out:
 static int verify_remote_map(int session_fd, const struct child_info *info)
 {
 	struct lkmdbg_remote_map_request reply;
+	struct lkmdbg_remote_map_request ro_reply;
 	unsigned char *view = MAP_FAILED;
+	unsigned char *ro_view = MAP_FAILED;
 	unsigned char *verify_buf = NULL;
 	unsigned char *expected_buf = NULL;
 	uint32_t bytes_done = 0;
@@ -1406,6 +1408,8 @@ static int verify_remote_map(int session_fd, const struct child_info *info)
 
 	memset(&reply, 0, sizeof(reply));
 	reply.map_fd = -1;
+	memset(&ro_reply, 0, sizeof(ro_reply));
+	ro_reply.map_fd = -1;
 
 	test_len = info->page_size * 2U;
 	if (test_len > info->large_len)
@@ -1456,6 +1460,27 @@ static int verify_remote_map(int session_fd, const struct child_info *info)
 		goto out;
 	}
 
+	if (create_remote_map(session_fd, info->large_addr, test_len,
+			      LKMDBG_REMOTE_MAP_PROT_READ, &ro_reply) < 0)
+		goto out;
+
+	ro_view = mmap(NULL, ro_reply.mapped_length, PROT_READ, MAP_SHARED,
+		       ro_reply.map_fd, 0);
+	if (ro_view == MAP_FAILED) {
+		fprintf(stderr, "remote ro map mmap failed: %s\n",
+			strerror(errno));
+		goto out;
+	}
+
+	errno = 0;
+	if (mprotect(ro_view, ro_reply.mapped_length,
+		     PROT_READ | PROT_WRITE) == 0 || errno != EACCES) {
+		fprintf(stderr,
+			"remote ro map unexpectedly upgraded via mprotect errno=%d\n",
+			errno);
+		goto out;
+	}
+
 	printf("selftest remote map ok length=%" PRIu64 " fd=%d\n",
 	       (uint64_t)reply.mapped_length, reply.map_fd);
 	ret = 0;
@@ -1467,6 +1492,10 @@ out:
 		for (i = 0; i < 64; i++)
 			view[128 + i] = pattern_byte(128 + i, 1);
 	}
+	if (ro_view != MAP_FAILED)
+		munmap(ro_view, ro_reply.mapped_length);
+	if (ro_reply.map_fd >= 0)
+		close(ro_reply.map_fd);
 	if (view != MAP_FAILED)
 		munmap(view, reply.mapped_length);
 	if (reply.map_fd >= 0)

@@ -20,8 +20,10 @@
 	(LKMDBG_REMOTE_MAP_PROT_READ | LKMDBG_REMOTE_MAP_PROT_WRITE |        \
 	 LKMDBG_REMOTE_MAP_PROT_EXEC)
 
-#ifndef vm_flags_set
-#define vm_flags_set(vma, flags) ((vma)->vm_flags |= (flags))
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+#define LKMDBG_REMOTE_GUP_HAS_LOCKED_ONLY 1
+#else
+#define LKMDBG_REMOTE_GUP_HAS_LOCKED_ONLY 0
 #endif
 
 struct lkmdbg_remote_map {
@@ -37,6 +39,28 @@ struct lkmdbg_remote_map {
 };
 
 static void lkmdbg_remote_map_put(struct lkmdbg_remote_map *map);
+
+/*
+ * Only bookkeeping/policy bits are touched here, so vm_page_prot does not
+ * need to be recomputed. Use a casted accessor because Android/common trees
+ * backported const-qualified vm_flags without a stable feature macro.
+ */
+static inline vm_flags_t *lkmdbg_remote_map_vm_flags_ptr(struct vm_area_struct *vma)
+{
+	return (vm_flags_t *)&vma->vm_flags;
+}
+
+static inline void lkmdbg_remote_map_vm_flags_set(struct vm_area_struct *vma,
+						  vm_flags_t flags)
+{
+	*lkmdbg_remote_map_vm_flags_ptr(vma) |= flags;
+}
+
+static inline void lkmdbg_remote_map_vm_flags_clear(struct vm_area_struct *vma,
+						    vm_flags_t flags)
+{
+	*lkmdbg_remote_map_vm_flags_ptr(vma) &= ~flags;
+}
 
 static bool lkmdbg_remote_map_req_wants_write(const struct lkmdbg_remote_map_request *req)
 {
@@ -125,11 +149,21 @@ static long lkmdbg_remote_map_pin_pages(struct mm_struct *mm,
 	int locked = 1;
 
 	mmap_read_lock(mm);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+#ifdef FOLL_PIN
+#if LKMDBG_REMOTE_GUP_HAS_LOCKED_ONLY
+	ret = pin_user_pages_remote(mm, start, nr_pages, flags, pages,
+				    &locked);
+#else
+	ret = pin_user_pages_remote(mm, start, nr_pages, flags, pages, NULL,
+				    &locked);
+#endif
+#else
+#if LKMDBG_REMOTE_GUP_HAS_LOCKED_ONLY
 	ret = get_user_pages_remote(mm, start, nr_pages, flags, pages, &locked);
 #else
 	ret = get_user_pages_remote(mm, start, nr_pages, flags, pages, NULL,
 				    &locked);
+#endif
 #endif
 	if (locked)
 		mmap_read_unlock(mm);
@@ -144,16 +178,24 @@ static void lkmdbg_remote_map_release_pages(struct lkmdbg_remote_map *map)
 	if (!map->pages)
 		return;
 
+#ifdef FOLL_PIN
+	if (map->prot & LKMDBG_REMOTE_MAP_PROT_WRITE)
+		unpin_user_pages_dirty_lock(map->pages, map->page_count, true);
+	else
+		unpin_user_pages(map->pages, map->page_count);
+
+	for (i = 0; i < map->page_count; i++)
+		map->pages[i] = NULL;
+#else
 	for (i = 0; i < map->page_count; i++) {
 		if (!map->pages[i])
 			continue;
-#ifdef FOLL_PIN
-		unpin_user_page(map->pages[i]);
-#else
+		if (map->prot & LKMDBG_REMOTE_MAP_PROT_WRITE)
+			set_page_dirty_lock(map->pages[i]);
 		put_page(map->pages[i]);
-#endif
 		map->pages[i] = NULL;
 	}
+#endif
 }
 
 static void lkmdbg_remote_map_destroy(struct lkmdbg_remote_map *map)
@@ -199,6 +241,7 @@ static const struct vm_operations_struct lkmdbg_remote_map_vm_ops = {
 static int lkmdbg_remote_map_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct lkmdbg_remote_map *map = file->private_data;
+	vm_flags_t deny_may_flags = 0;
 	unsigned long addr;
 	unsigned long offset_pages;
 	unsigned long map_pages;
@@ -227,7 +270,16 @@ static int lkmdbg_remote_map_mmap(struct file *file, struct vm_area_struct *vma)
 	    map_pages > map->page_count - offset_pages)
 		return -EINVAL;
 
-	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP | VM_MIXEDMAP);
+	lkmdbg_remote_map_vm_flags_set(vma,
+				      VM_DONTEXPAND | VM_DONTDUMP | VM_MIXEDMAP);
+	if (!(map->prot & LKMDBG_REMOTE_MAP_PROT_READ))
+		deny_may_flags |= VM_MAYREAD;
+	if (!(map->prot & LKMDBG_REMOTE_MAP_PROT_WRITE))
+		deny_may_flags |= VM_MAYWRITE;
+	if (!(map->prot & LKMDBG_REMOTE_MAP_PROT_EXEC))
+		deny_may_flags |= VM_MAYEXEC;
+	if (deny_may_flags)
+		lkmdbg_remote_map_vm_flags_clear(vma, deny_may_flags);
 
 	addr = vma->vm_start;
 	for (i = 0; i < map_pages; i++) {
@@ -262,10 +314,17 @@ static int lkmdbg_remote_map_prepare_fd(struct lkmdbg_remote_map *map,
 					struct file **file_out)
 {
 	struct file *file;
+	int open_flags;
 	int fd;
 
+	open_flags = O_CLOEXEC;
+	if (map->prot & LKMDBG_REMOTE_MAP_PROT_WRITE)
+		open_flags |= O_RDWR;
+	else
+		open_flags |= O_RDONLY;
+
 	file = anon_inode_getfile("lkmdbg-rmap", &lkmdbg_remote_map_fops, map,
-				  O_RDWR | O_CLOEXEC);
+				  open_flags);
 	if (IS_ERR(file))
 		return PTR_ERR(file);
 
@@ -335,9 +394,6 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 	map->page_count = page_count;
 	refcount_set(&map->refs, 1);
 
-#ifdef FOLL_PIN
-	gup_flags |= FOLL_PIN;
-#endif
 	if (lkmdbg_remote_map_req_wants_write(&req))
 		gup_flags |= FOLL_WRITE;
 
