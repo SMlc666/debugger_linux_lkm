@@ -48,6 +48,7 @@ struct child_info {
 	uintptr_t file_addr;
 	uintptr_t exec_target_addr;
 	uintptr_t watch_addr;
+	uintptr_t watch_mmu_addr;
 	uintptr_t freeze_counters_addr;
 	uintptr_t freeze_tids_addr;
 	uint64_t file_inode;
@@ -101,6 +102,7 @@ enum {
 	CHILD_OP_TRIGGER_WATCH = 4,
 	CHILD_OP_TRIGGER_SIGNAL = 5,
 	CHILD_OP_SPAWN_THREAD = 6,
+	CHILD_OP_TRIGGER_WATCH_MMU = 7,
 };
 
 static int get_stop_state(int session_fd,
@@ -1662,6 +1664,7 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	pthread_t freeze_threads[SELFTEST_FREEZE_THREADS];
 	struct freeze_child_ctx freeze_ctxs[SELFTEST_FREEZE_THREADS];
 	void *file_map;
+	volatile uint64_t *mmu_watch_map;
 	volatile uint64_t exec_counter = 0;
 	int file_fd;
 	struct stat st;
@@ -1726,6 +1729,11 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	if (file_map == MAP_FAILED)
 		return 2;
 
+	mmu_watch_map = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
+			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (mmu_watch_map == MAP_FAILED)
+		return 2;
+
 	if (fstat(file_fd, &st) < 0)
 		return 2;
 
@@ -1768,6 +1776,7 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	info.file_addr = (uintptr_t)file_map;
 	info.exec_target_addr = (uintptr_t)child_exec_target;
 	info.watch_addr = (uintptr_t)&child_watch_value;
+	info.watch_mmu_addr = (uintptr_t)mmu_watch_map;
 	info.freeze_counters_addr = (uintptr_t)freeze_counters;
 	info.freeze_tids_addr = (uintptr_t)freeze_tids;
 	info.file_inode = (uint64_t)st.st_ino;
@@ -1801,6 +1810,9 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 			break;
 		case CHILD_OP_TRIGGER_WATCH:
 			child_watch_value++;
+			break;
+		case CHILD_OP_TRIGGER_WATCH_MMU:
+			(*mmu_watch_map)++;
 			break;
 		case CHILD_OP_TRIGGER_SIGNAL:
 			if (kill(getpid(), SIGUSR1) < 0)
@@ -2924,51 +2936,6 @@ breakpoint_checks:
 	if (remove_hwpoint(session_fd, mmu_req.id) < 0)
 		return -1;
 
-	if (add_hwpoint(session_fd, child, info->watch_addr,
-			LKMDBG_HWPOINT_TYPE_WRITE, 8, 0, &wp_req) < 0)
-		return -1;
-	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_WATCH) < 0) {
-		remove_hwpoint(session_fd, wp_req.id);
-		return -1;
-	}
-	printf("selftest runtime: waiting for watchpoint stop event\n");
-	ret = wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-				     LKMDBG_STOP_REASON_WATCHPOINT,
-				     event_timeout_ms, &event);
-	if (ret == -ETIMEDOUT) {
-		printf("selftest runtime: watchpoint event unavailable, continuing\n");
-		if (remove_hwpoint(session_fd, wp_req.id) < 0)
-			return -1;
-	} else if (ret < 0) {
-		remove_hwpoint(session_fd, wp_req.id);
-		return -1;
-	} else if (event.value0 != info->watch_addr ||
-		   event.flags != LKMDBG_HWPOINT_TYPE_WRITE) {
-		fprintf(stderr,
-			"watchpoint event mismatch addr=0x%" PRIx64 " flags=0x%x\n",
-			(uint64_t)event.value0, event.flags);
-		remove_hwpoint(session_fd, wp_req.id);
-		return -1;
-	} else if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_WATCHPOINT,
-				     &stop_req) < 0) {
-		remove_hwpoint(session_fd, wp_req.id);
-		return -1;
-	} else if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
-		   !(stop_req.stop.flags & LKMDBG_STOP_FLAG_REARM_REQUIRED) ||
-		   stop_req.stop.value0 != info->watch_addr) {
-		fprintf(stderr,
-			"watchpoint stop state mismatch flags=0x%x value0=0x%" PRIx64 "\n",
-			stop_req.stop.flags, (uint64_t)stop_req.stop.value0);
-		remove_hwpoint(session_fd, wp_req.id);
-		return -1;
-	} else if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
-				   NULL) < 0) {
-		remove_hwpoint(session_fd, wp_req.id);
-		return -1;
-	}
-	if (remove_hwpoint(session_fd, wp_req.id) < 0)
-		return -1;
-
 	{
 		struct lkmdbg_hwpoint_request threshold_req;
 		struct lkmdbg_hwpoint_request auto_req;
@@ -3047,14 +3014,14 @@ breakpoint_checks:
 		if (remove_hwpoint(session_fd, threshold_req.id) < 0)
 			return -1;
 
-		if (add_hwpoint_ex(session_fd, child, info->exec_target_addr,
+		if (add_hwpoint_ex(session_fd, child, info->watch_mmu_addr,
 				   LKMDBG_HWPOINT_TYPE_WRITE, 8,
 				   LKMDBG_HWPOINT_FLAG_MMU_EXEC, 1,
 				   LKMDBG_HWPOINT_ACTION_ONESHOT |
 					   LKMDBG_HWPOINT_ACTION_AUTO_CONTINUE,
 				   &auto_req) < 0)
 			return -1;
-		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_WATCH) < 0) {
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_WATCH_MMU) < 0) {
 			remove_hwpoint(session_fd, auto_req.id);
 			return -1;
 		}
@@ -3084,12 +3051,12 @@ breakpoint_checks:
 		if (remove_hwpoint(session_fd, auto_req.id) < 0)
 			return -1;
 
-		if (add_hwpoint_ex(session_fd, child, info->watch_addr,
+		if (add_hwpoint_ex(session_fd, child, info->watch_mmu_addr,
 				   LKMDBG_HWPOINT_TYPE_WRITE, 8,
 				   LKMDBG_HWPOINT_FLAG_MMU_EXEC, 2, 0,
 				   &mmu_skip_req) < 0)
 			return -1;
-		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_WATCH) < 0) {
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_WATCH_MMU) < 0) {
 			remove_hwpoint(session_fd, mmu_skip_req.id);
 			return -1;
 		}
@@ -3115,7 +3082,7 @@ breakpoint_checks:
 			remove_hwpoint(session_fd, mmu_skip_req.id);
 			return -1;
 		}
-		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_WATCH) < 0) {
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_WATCH_MMU) < 0) {
 			remove_hwpoint(session_fd, mmu_skip_req.id);
 			return -1;
 		}
@@ -3147,6 +3114,51 @@ breakpoint_checks:
 		if (remove_hwpoint(session_fd, mmu_skip_req.id) < 0)
 			return -1;
 	}
+
+	if (add_hwpoint(session_fd, child, info->watch_addr,
+			LKMDBG_HWPOINT_TYPE_WRITE, 8, 0, &wp_req) < 0)
+		return -1;
+	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_WATCH) < 0) {
+		remove_hwpoint(session_fd, wp_req.id);
+		return -1;
+	}
+	printf("selftest runtime: waiting for watchpoint stop event\n");
+	ret = wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+				     LKMDBG_STOP_REASON_WATCHPOINT,
+				     event_timeout_ms, &event);
+	if (ret == -ETIMEDOUT) {
+		printf("selftest runtime: watchpoint event unavailable, continuing\n");
+		if (remove_hwpoint(session_fd, wp_req.id) < 0)
+			return -1;
+	} else if (ret < 0) {
+		remove_hwpoint(session_fd, wp_req.id);
+		return -1;
+	} else if (event.value0 != info->watch_addr ||
+		   event.flags != LKMDBG_HWPOINT_TYPE_WRITE) {
+		fprintf(stderr,
+			"watchpoint event mismatch addr=0x%" PRIx64 " flags=0x%x\n",
+			(uint64_t)event.value0, event.flags);
+		remove_hwpoint(session_fd, wp_req.id);
+		return -1;
+	} else if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_WATCHPOINT,
+				     &stop_req) < 0) {
+		remove_hwpoint(session_fd, wp_req.id);
+		return -1;
+	} else if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
+		   !(stop_req.stop.flags & LKMDBG_STOP_FLAG_REARM_REQUIRED) ||
+		   stop_req.stop.value0 != info->watch_addr) {
+		fprintf(stderr,
+			"watchpoint stop state mismatch flags=0x%x value0=0x%" PRIx64 "\n",
+			stop_req.stop.flags, (uint64_t)stop_req.stop.value0);
+		remove_hwpoint(session_fd, wp_req.id);
+		return -1;
+	} else if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
+				   NULL) < 0) {
+		remove_hwpoint(session_fd, wp_req.id);
+		return -1;
+	}
+	if (remove_hwpoint(session_fd, wp_req.id) < 0)
+		return -1;
 
 	printf("selftest runtime events ok clone signal breakpoint mmu-breakpoint oneshot rearm watchpoint threshold actions\n");
 	return 0;
