@@ -129,7 +129,17 @@ static int lkmdbg_write_text_insn(void *addr, u32 insn)
 	if (ret)
 		return ret;
 
-	WRITE_ONCE(*(u32 *)alias_addr, insn);
+	if (lkmdbg_symbols.aarch64_insn_patch_text_nosync) {
+		ret = lkmdbg_symbols.aarch64_insn_patch_text_nosync(alias_addr,
+								    insn);
+		if (ret) {
+			lkmdbg_alias_unmap_page();
+			return ret;
+		}
+	} else {
+		WRITE_ONCE(*(u32 *)alias_addr, insn);
+	}
+
 	lkmdbg_symbols.flush_icache_range((unsigned long)addr,
 					  (unsigned long)addr + sizeof(insn));
 	lkmdbg_alias_unmap_page();
@@ -183,6 +193,20 @@ static int lkmdbg_patch_stop_machine(void *data)
 	return lkmdbg_write_text_words(ctx->addr, ctx->insns, ctx->words);
 }
 
+static bool lkmdbg_text_words_match(void *addr, const u32 *insns, u32 words)
+{
+	u32 i;
+
+	for (i = 0; i < words; i++) {
+		u32 current = READ_ONCE(*(u32 *)((u8 *)addr + i * sizeof(u32)));
+
+		if (current != insns[i])
+			return false;
+	}
+
+	return true;
+}
+
 static int lkmdbg_patch_target_words(void *addr, const u32 *insns, u32 words)
 {
 	struct lkmdbg_patch_ctx ctx = {
@@ -190,8 +214,21 @@ static int lkmdbg_patch_target_words(void *addr, const u32 *insns, u32 words)
 		.insns = insns,
 		.words = words,
 	};
+	int ret;
+	int attempt;
 
-	return stop_machine(lkmdbg_patch_stop_machine, &ctx, cpu_online_mask);
+	for (attempt = 0; attempt < 2; attempt++) {
+		ret = stop_machine(lkmdbg_patch_stop_machine, &ctx, cpu_online_mask);
+		if (ret)
+			return ret;
+
+		if (lkmdbg_text_words_match(addr, insns, words))
+			return 0;
+	}
+
+	pr_warn("lkmdbg: text patch verify failed addr=%px words=%u\n", addr,
+		words);
+	return -EIO;
 }
 
 int lkmdbg_hooks_init(void)
