@@ -48,14 +48,35 @@ jobs:
       - name: Show ccache stats
         run: ccache --show-stats
 
-  module-build-android14-6-1:
+  module-build-android-gki:
+    name: module-build-${{ matrix.label }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: android14-6.1
+            kernel_branch: android14-6.1
+            artifact_name: lkmdbg-android14-6.1
+            out_dir: out/android14-6.1
+            ccache_suffix: android14-6.1
+          - label: android15-6.6
+            kernel_branch: android15-6.6
+            artifact_name: lkmdbg-android15-6.6
+            out_dir: out/android15-6.6
+            ccache_suffix: android15-6.6
+          - label: android16-6.12
+            kernel_branch: android16-6.12
+            artifact_name: lkmdbg-android16-6.12
+            out_dir: out/android16-6.12
+            ccache_suffix: android16-6.12
     env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache-android14-6.1
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-${{ matrix.ccache_suffix }}
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 512M
       KERNEL_REPO: https://android.googlesource.com/kernel/common
-      KERNEL_BRANCH: android14-6.1
+      KERNEL_BRANCH: ${{ matrix.kernel_branch }}
       NDK_VERSION: android-ndk-r27d
       NDK_ZIP: android-ndk-r27d-linux.zip
       NDK_URL: "https://dl.google.com/android/repository/android-ndk-r27d-linux.zip"
@@ -89,15 +110,16 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
           mkdir -p "$(dirname "$NDK_DIR")"
+          ccache --max-size="$CCACHE_MAXSIZE"
 
       - name: Configure ccache
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ${{ runner.os }}-android14-6.1-ccache-${{ github.ref_name }}-${{ github.sha }}
+          key: ${{ runner.os }}-${{ matrix.ccache_suffix }}-ccache-${{ github.ref_name }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-android14-6.1-ccache-${{ github.ref_name }}-
-            ${{ runner.os }}-android14-6.1-ccache-
+            ${{ runner.os }}-${{ matrix.ccache_suffix }}-ccache-${{ github.ref_name }}-
+            ${{ runner.os }}-${{ matrix.ccache_suffix }}-ccache-
 
       - name: Cache Android NDK
         id: cache-ndk
@@ -150,26 +172,26 @@ jobs:
         run: |
           TOOLCHAIN="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
           TARGET="aarch64-linux-android${ANDROID_API}"
-          mkdir -p "$GITHUB_WORKSPACE/out/android14-6.1"
+          mkdir -p "$GITHUB_WORKSPACE/${{ matrix.out_dir }}"
           ccache "$TOOLCHAIN/${TARGET}-clang" -O2 -Wall -Wextra \
-            -o "$GITHUB_WORKSPACE/out/android14-6.1/lkmdbg_open_session" \
+            -o "$GITHUB_WORKSPACE/${{ matrix.out_dir }}/lkmdbg_open_session" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_open_session.c"
           ccache "$TOOLCHAIN/${TARGET}-clang" -O2 -Wall -Wextra -pthread \
-            -o "$GITHUB_WORKSPACE/out/android14-6.1/lkmdbg_mem_test" \
+            -o "$GITHUB_WORKSPACE/${{ matrix.out_dir }}/lkmdbg_mem_test" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_mem_test.c"
           ccache "$TOOLCHAIN/${TARGET}-clang" -O2 -Wall -Wextra -pthread \
-            -o "$GITHUB_WORKSPACE/out/android14-6.1/lkmdbg_mmu_test" \
+            -o "$GITHUB_WORKSPACE/${{ matrix.out_dir }}/lkmdbg_mmu_test" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_mmu_test.c"
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lkmdbg-android14-6.1
+          name: ${{ matrix.artifact_name }}
           path: |
             lkmdbg.ko
-            out/android14-6.1/lkmdbg_open_session
-            out/android14-6.1/lkmdbg_mem_test
-            out/android14-6.1/lkmdbg_mmu_test
+            ${{ matrix.out_dir }}/lkmdbg_open_session
+            ${{ matrix.out_dir }}/lkmdbg_mem_test
+            ${{ matrix.out_dir }}/lkmdbg_mmu_test
           if-no-files-found: error
 
       - name: Show ccache stats
