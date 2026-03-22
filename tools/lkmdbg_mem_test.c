@@ -693,6 +693,29 @@ static int query_target_pages(int session_fd, uint64_t start_addr,
 	return 0;
 }
 
+static int create_remote_map(int session_fd, uintptr_t remote_addr, size_t len,
+			     uint32_t prot,
+			     struct lkmdbg_remote_map_request *reply_out)
+{
+	struct lkmdbg_remote_map_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.remote_addr = remote_addr,
+		.length = len,
+		.prot = prot,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_MAP, &req) < 0) {
+		fprintf(stderr, "CREATE_REMOTE_MAP failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
 static unsigned char pattern_byte(size_t index, unsigned int seed)
 {
 	return (unsigned char)((index * 131U + seed * 17U + 29U) & 0xffU);
@@ -1367,6 +1390,89 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 
 out:
 	free(buf.entries);
+	return ret;
+}
+
+static int verify_remote_map(int session_fd, const struct child_info *info)
+{
+	struct lkmdbg_remote_map_request reply;
+	unsigned char *view = MAP_FAILED;
+	unsigned char *verify_buf = NULL;
+	unsigned char *expected_buf = NULL;
+	uint32_t bytes_done = 0;
+	size_t test_len;
+	int ret = -1;
+	int restore_needed = 0;
+
+	memset(&reply, 0, sizeof(reply));
+	reply.map_fd = -1;
+
+	test_len = info->page_size * 2U;
+	if (test_len > info->large_len)
+		test_len = info->large_len;
+
+	if (create_remote_map(session_fd, info->large_addr, test_len,
+			      LKMDBG_REMOTE_MAP_PROT_READ |
+				      LKMDBG_REMOTE_MAP_PROT_WRITE,
+			      &reply) < 0)
+		return -1;
+
+	view = mmap(NULL, reply.mapped_length, PROT_READ | PROT_WRITE, MAP_SHARED,
+		    reply.map_fd, 0);
+	if (view == MAP_FAILED) {
+		fprintf(stderr, "remote map mmap failed: %s\n",
+			strerror(errno));
+		goto out;
+	}
+
+	verify_buf = malloc(test_len);
+	expected_buf = malloc(64);
+	if (!verify_buf || !expected_buf) {
+		fprintf(stderr, "remote map allocation failed\n");
+		goto out;
+	}
+
+	if (verify_pattern(view, test_len, 1) != 0) {
+		fprintf(stderr, "remote map initial view mismatch\n");
+		goto out;
+	}
+
+	fill_pattern(expected_buf, 64, 23);
+	memcpy(view + 128, expected_buf, 64);
+	restore_needed = 1;
+
+	memset(verify_buf, 0, test_len);
+	if (read_target_memory(session_fd, info->large_addr, verify_buf, test_len,
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != test_len) {
+		fprintf(stderr,
+			"remote map target readback failed bytes_done=%u expected=%zu\n",
+			bytes_done, test_len);
+		goto out;
+	}
+
+	if (memcmp(verify_buf + 128, expected_buf, 64) != 0) {
+		fprintf(stderr, "remote map write-through verification failed\n");
+		goto out;
+	}
+
+	printf("selftest remote map ok length=%" PRIu64 " fd=%d\n",
+	       (uint64_t)reply.mapped_length, reply.map_fd);
+	ret = 0;
+
+out:
+	if (restore_needed && view != MAP_FAILED) {
+		size_t i;
+
+		for (i = 0; i < 64; i++)
+			view[128 + i] = pattern_byte(128 + i, 1);
+	}
+	if (view != MAP_FAILED)
+		munmap(view, reply.mapped_length);
+	if (reply.map_fd >= 0)
+		close(reply.map_fd);
+	free(expected_buf);
+	free(verify_buf);
 	return ret;
 }
 
@@ -3642,6 +3748,16 @@ static int run_selftest(const char *prog)
 	}
 
 	printf("selftest force-read and force-write on protected present pages ok\n");
+
+	if (verify_remote_map(session_fd, &info) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
 
 	if (verify_page_query(session_fd, &info) < 0) {
 		close(session_fd);

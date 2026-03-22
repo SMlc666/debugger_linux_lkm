@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 6
+#define LKMDBG_PROTO_VERSION 7
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -122,6 +122,10 @@
 #define LKMDBG_PAGE_FLAG_SHARED 0x00004000U
 #define LKMDBG_PAGE_FLAG_PFNMAP 0x00008000U
 #define LKMDBG_PAGE_FLAG_IO 0x00010000U
+
+#define LKMDBG_REMOTE_MAP_PROT_READ 0x00000001U
+#define LKMDBG_REMOTE_MAP_PROT_WRITE 0x00000002U
+#define LKMDBG_REMOTE_MAP_PROT_EXEC 0x00000004U
 
 struct lkmdbg_open_session_request {
 	__u32 version;
@@ -401,6 +405,18 @@ struct lkmdbg_page_query_request {
 	__u64 next_addr;
 };
 
+struct lkmdbg_remote_map_request {
+	__u32 version;
+	__u32 size;
+	__u64 remote_addr;
+	__u64 length;
+	__u32 prot;
+	__u32 flags;
+	__u64 mapped_length;
+	__s32 map_fd;
+	__u32 reserved0;
+};
+
 struct lkmdbg_event_record {
 	__u32 version;
 	__u32 type;
@@ -457,5 +473,7 @@ struct lkmdbg_event_record {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x20, struct lkmdbg_page_query_request)
 #define LKMDBG_IOC_QUERY_IMAGES \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x21, struct lkmdbg_image_query_request)
+#define LKMDBG_IOC_CREATE_REMOTE_MAP \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x22, struct lkmdbg_remote_map_request)
 
 #endif

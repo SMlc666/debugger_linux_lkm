@@ -214,6 +214,7 @@ long lkmdbg_mem_write(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_page_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_image_query(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_query_threads(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_get_regs(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_set_regs(struct lkmdbg_session *session, void __user *argp);
