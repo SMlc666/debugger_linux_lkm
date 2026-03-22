@@ -14,6 +14,10 @@
 #include <linux/wait.h>
 #include <linux/workqueue.h>
 
+#ifdef CONFIG_ARM64
+#include <asm/pgtable.h>
+#endif
+
 #include "../hook/lkmdbg_hook_internal.h"
 #include "lkmdbg_ioctl.h"
 
@@ -163,6 +167,8 @@ struct lkmdbg_session {
 	u64 event_drop_count;
 	struct list_head hwpoints;
 	u64 next_hwpoint_id;
+	struct list_head pte_patches;
+	u64 next_pte_patch_id;
 	pid_t step_tgid;
 	pid_t step_tid;
 	bool step_armed;
@@ -243,6 +249,24 @@ int lkmdbg_target_vma_lookup_locked(struct mm_struct *mm, u64 addr, u64 length,
 				    struct vm_area_struct **vma_out);
 int lkmdbg_target_pt_lookup_locked(struct mm_struct *mm, unsigned long addr,
 				   struct lkmdbg_target_pt_info *info);
+#ifdef CONFIG_ARM64
+bool lkmdbg_pte_allows_access(pte_t pte, unsigned long vm_flags, u32 type);
+pte_t lkmdbg_pte_set_exec(pte_t pte, bool executable);
+pte_t lkmdbg_pte_set_user_read(pte_t pte, bool readable);
+pte_t lkmdbg_pte_make_exec_only(pte_t pte);
+pte_t lkmdbg_pte_make_protnone(pte_t pte);
+pte_t lkmdbg_pte_make_writable(pte_t pte);
+bool lkmdbg_pte_equivalent(pte_t current_pte, pte_t expected_pte);
+int lkmdbg_pte_lookup_locked(struct mm_struct *mm, unsigned long addr,
+			     pte_t **ptep_out, spinlock_t **ptl_out);
+int lkmdbg_pte_rewrite_locked(struct mm_struct *mm, unsigned long addr,
+			      pte_t new_pte, pte_t *old_pte_out,
+			      unsigned long *vm_flags_out);
+int lkmdbg_pte_read_locked(struct mm_struct *mm, unsigned long addr,
+			   pte_t *pte_out, unsigned long *vm_flags_out);
+int lkmdbg_pte_capture(struct mm_struct *mm, unsigned long addr,
+		       pte_t *pte_out, unsigned long *vm_flags_out);
+#endif
 long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_read(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_write(struct lkmdbg_session *session, void __user *argp);
@@ -250,6 +274,11 @@ long lkmdbg_page_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_image_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_apply_pte_patch(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_remove_pte_patch(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_query_pte_patches(struct lkmdbg_session *session, void __user *argp);
+void lkmdbg_pte_patch_release(struct lkmdbg_session *session);
+int lkmdbg_pte_patch_on_target_change(struct lkmdbg_session *session);
 long lkmdbg_query_threads(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_get_regs(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_set_regs(struct lkmdbg_session *session, void __user *argp);

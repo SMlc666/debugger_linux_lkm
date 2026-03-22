@@ -463,6 +463,7 @@ long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp)
 {
 	struct lkmdbg_target_request req;
 	struct task_struct *task = NULL;
+	pid_t old_tgid;
 	pid_t target_tid;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
@@ -488,6 +489,13 @@ long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp)
 		return -ESRCH;
 	}
 	put_task_struct(task);
+
+	mutex_lock(&session->lock);
+	old_tgid = session->target_tgid;
+	mutex_unlock(&session->lock);
+
+	if (old_tgid > 0 && old_tgid != req.tgid)
+		lkmdbg_pte_patch_on_target_change(session);
 
 	mutex_lock(&session->lock);
 	session->target_gen++;

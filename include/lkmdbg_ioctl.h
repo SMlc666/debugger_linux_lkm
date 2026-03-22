@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 8
+#define LKMDBG_PROTO_VERSION 9
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -129,6 +129,20 @@
 #define LKMDBG_PAGE_LEVEL_PTE 1U
 #define LKMDBG_PAGE_LEVEL_PMD 2U
 #define LKMDBG_PAGE_LEVEL_PUD 3U
+
+#define LKMDBG_PTE_PATCH_FLAG_RAW 0x00000001U
+
+#define LKMDBG_PTE_PATCH_STATE_ACTIVE 0x00000001U
+#define LKMDBG_PTE_PATCH_STATE_LOST 0x00000002U
+#define LKMDBG_PTE_PATCH_STATE_MUTATED 0x00000004U
+
+#define LKMDBG_PTE_MODE_RAW 0U
+#define LKMDBG_PTE_MODE_RO 1U
+#define LKMDBG_PTE_MODE_RW 2U
+#define LKMDBG_PTE_MODE_RX 3U
+#define LKMDBG_PTE_MODE_RWX 4U
+#define LKMDBG_PTE_MODE_PROTNONE 5U
+#define LKMDBG_PTE_MODE_EXECONLY 6U
 
 #define LKMDBG_REMOTE_MAP_PROT_READ 0x00000001U
 #define LKMDBG_REMOTE_MAP_PROT_WRITE 0x00000002U
@@ -419,6 +433,50 @@ struct lkmdbg_page_query_request {
 	__u64 next_addr;
 };
 
+struct lkmdbg_pte_patch_request {
+	__u32 version;
+	__u32 size;
+	__u64 id;
+	__u64 addr;
+	__u64 raw_pte;
+	__u64 baseline_pte;
+	__u64 expected_pte;
+	__u64 current_pte;
+	__u64 baseline_vm_flags;
+	__u64 current_vm_flags;
+	__u32 mode;
+	__u32 flags;
+	__u32 state;
+	__u32 page_shift;
+};
+
+struct lkmdbg_pte_patch_entry {
+	__u64 id;
+	__u64 page_addr;
+	__u64 raw_pte;
+	__u64 baseline_pte;
+	__u64 expected_pte;
+	__u64 current_pte;
+	__u64 baseline_vm_flags;
+	__u64 current_vm_flags;
+	__u32 mode;
+	__u32 flags;
+	__u32 state;
+	__u32 page_shift;
+};
+
+struct lkmdbg_pte_patch_query_request {
+	__u32 version;
+	__u32 size;
+	__u64 entries_addr;
+	__u32 max_entries;
+	__u32 flags;
+	__u64 start_id;
+	__u32 entries_filled;
+	__u32 done;
+	__u64 next_id;
+};
+
 struct lkmdbg_remote_map_request {
 	__u32 version;
 	__u32 size;
@@ -492,5 +550,11 @@ struct lkmdbg_event_record {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x21, struct lkmdbg_image_query_request)
 #define LKMDBG_IOC_CREATE_REMOTE_MAP \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x22, struct lkmdbg_remote_map_request)
+#define LKMDBG_IOC_APPLY_PTE_PATCH \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x23, struct lkmdbg_pte_patch_request)
+#define LKMDBG_IOC_REMOVE_PTE_PATCH \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x24, struct lkmdbg_pte_patch_request)
+#define LKMDBG_IOC_QUERY_PTE_PATCHES \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x25, struct lkmdbg_pte_patch_query_request)
 
 #endif

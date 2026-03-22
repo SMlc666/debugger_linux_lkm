@@ -457,6 +457,7 @@ static int lkmdbg_session_release(struct inode *inode, struct file *file)
 	mutex_unlock(&session->lock);
 	flush_work(&session->stop_work);
 
+	lkmdbg_pte_patch_release(session);
 	lkmdbg_thread_ctrl_release(session);
 	lkmdbg_session_freeze_release(session);
 	wait_event(session->async_waitq, atomic_read(&session->async_refs) == 0);
@@ -591,6 +592,12 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_image_query(session, argp);
 	case LKMDBG_IOC_CREATE_REMOTE_MAP:
 		return lkmdbg_create_remote_map(session, argp);
+	case LKMDBG_IOC_APPLY_PTE_PATCH:
+		return lkmdbg_apply_pte_patch(session, argp);
+	case LKMDBG_IOC_REMOVE_PTE_PATCH:
+		return lkmdbg_remove_pte_patch(session, argp);
+	case LKMDBG_IOC_QUERY_PTE_PATCHES:
+		return lkmdbg_query_pte_patches(session, argp);
 	case LKMDBG_IOC_QUERY_THREADS:
 		return lkmdbg_query_threads(session, argp);
 	case LKMDBG_IOC_GET_REGS:
@@ -662,6 +669,7 @@ int lkmdbg_open_session(void __user *argp)
 	init_waitqueue_head(&session->async_waitq);
 	INIT_LIST_HEAD(&session->node);
 	INIT_LIST_HEAD(&session->hwpoints);
+	INIT_LIST_HEAD(&session->pte_patches);
 	INIT_WORK(&session->stop_work, lkmdbg_session_stop_workfn);
 	atomic_set(&session->async_refs, 0);
 	session->owner_tgid = current->tgid;

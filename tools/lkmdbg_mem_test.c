@@ -36,6 +36,7 @@
 #define IMAGE_QUERY_NAMES_SIZE 65536
 #define THREAD_QUERY_BATCH 64
 #define PAGE_QUERY_BATCH 64
+#define PTE_PATCH_QUERY_BATCH 64
 #define EVENT_READ_BATCH 16
 
 struct child_info {
@@ -104,6 +105,10 @@ struct page_query_buffer {
 	struct lkmdbg_page_entry *entries;
 };
 
+struct pte_patch_query_buffer {
+	struct lkmdbg_pte_patch_entry *entries;
+};
+
 enum {
 	CHILD_OP_QUERY_NOFAULT = 1,
 	CHILD_OP_EXIT = 2,
@@ -123,6 +128,10 @@ static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   void *buf, size_t len);
 static int child_fill_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   size_t len, uint8_t value);
+static const char *describe_pte_mode(uint32_t mode, uint32_t flags, char *buf,
+				     size_t buf_size);
+static const char *describe_pte_patch_state(uint32_t state, char *buf,
+					    size_t buf_size);
 
 static int open_session_fd(void)
 {
@@ -701,6 +710,74 @@ static int query_target_pages(int session_fd, uint64_t start_addr,
 
 	if (ioctl(session_fd, LKMDBG_IOC_QUERY_PAGES, &req) < 0) {
 		fprintf(stderr, "QUERY_PAGES failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int apply_pte_patch(int session_fd, uint64_t addr, uint32_t mode,
+			   uint32_t flags, uint64_t raw_pte,
+			   struct lkmdbg_pte_patch_request *reply_out)
+{
+	struct lkmdbg_pte_patch_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.addr = addr,
+		.raw_pte = raw_pte,
+		.mode = mode,
+		.flags = flags,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_APPLY_PTE_PATCH, &req) < 0) {
+		fprintf(stderr, "APPLY_PTE_PATCH failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int remove_pte_patch(int session_fd, uint64_t id,
+			    struct lkmdbg_pte_patch_request *reply_out)
+{
+	struct lkmdbg_pte_patch_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.id = id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_PTE_PATCH, &req) < 0) {
+		fprintf(stderr, "REMOVE_PTE_PATCH failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int query_pte_patches(int session_fd, uint64_t start_id,
+			     struct lkmdbg_pte_patch_entry *entries,
+			     uint32_t max_entries,
+			     struct lkmdbg_pte_patch_query_request *reply_out)
+{
+	struct lkmdbg_pte_patch_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = max_entries,
+		.start_id = start_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_PTE_PATCHES, &req) < 0) {
+		fprintf(stderr, "QUERY_PTE_PATCHES failed: %s\n",
+			strerror(errno));
 		return -1;
 	}
 
@@ -1471,6 +1548,103 @@ out:
 	return ret;
 }
 
+static int verify_pte_patch_api(int session_fd, const struct child_info *info)
+{
+	struct lkmdbg_pte_patch_request apply_reply;
+	struct lkmdbg_pte_patch_request remove_reply;
+	struct lkmdbg_pte_patch_entry entries[8];
+	struct lkmdbg_pte_patch_query_request query_reply;
+	uint32_t bytes_done = 0;
+	unsigned char value = 0;
+	size_t i;
+	int found = 0;
+
+	memset(&apply_reply, 0, sizeof(apply_reply));
+	memset(&remove_reply, 0, sizeof(remove_reply));
+	memset(entries, 0, sizeof(entries));
+	memset(&query_reply, 0, sizeof(query_reply));
+
+	if (read_target_memory(session_fd, info->basic_addr, &value, sizeof(value),
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(value)) {
+		fprintf(stderr, "baseline PTE patch read failed bytes_done=%u\n",
+			bytes_done);
+		return -1;
+	}
+
+	if (apply_pte_patch(session_fd, info->basic_addr,
+			    LKMDBG_PTE_MODE_PROTNONE, 0, 0,
+			    &apply_reply) < 0)
+		return -1;
+
+	if (!apply_reply.id ||
+	    !(apply_reply.state & LKMDBG_PTE_PATCH_STATE_ACTIVE) ||
+	    apply_reply.expected_pte == apply_reply.baseline_pte) {
+		fprintf(stderr,
+			"bad PTE patch apply reply id=%" PRIu64 " state=0x%x baseline=0x%" PRIx64 " expected=0x%" PRIx64 "\n",
+			(uint64_t)apply_reply.id, apply_reply.state,
+			(uint64_t)apply_reply.baseline_pte,
+			(uint64_t)apply_reply.expected_pte);
+		goto fail_remove;
+	}
+
+	if (query_pte_patches(session_fd, 0, entries,
+			      (uint32_t)(sizeof(entries) / sizeof(entries[0])),
+			      &query_reply) < 0)
+		goto fail_remove;
+
+	for (i = 0; i < query_reply.entries_filled; i++) {
+		if (entries[i].id != apply_reply.id)
+			continue;
+		if (!(entries[i].state & LKMDBG_PTE_PATCH_STATE_ACTIVE) ||
+		    entries[i].page_addr != (info->basic_addr & ~(uintptr_t)(info->page_size - 1))) {
+			fprintf(stderr,
+				"bad PTE patch query state=0x%x page=0x%" PRIx64 "\n",
+				entries[i].state, (uint64_t)entries[i].page_addr);
+			goto fail_remove;
+		}
+		found = 1;
+		break;
+	}
+	if (!found) {
+		fprintf(stderr, "PTE patch not visible in query after apply\n");
+		goto fail_remove;
+	}
+
+	bytes_done = 0;
+	if (read_target_memory(session_fd, info->basic_addr, &value, sizeof(value),
+			       &bytes_done, 0) < 0) {
+		fprintf(stderr, "patched PTE read transport failed\n");
+		goto fail_remove;
+	}
+	if (bytes_done != 0) {
+		fprintf(stderr, "patched PTE unexpectedly remained readable bytes_done=%u\n",
+			bytes_done);
+		goto fail_remove;
+	}
+
+	if (remove_pte_patch(session_fd, apply_reply.id, &remove_reply) < 0)
+		return -1;
+
+	bytes_done = 0;
+	if (read_target_memory(session_fd, info->basic_addr, &value, sizeof(value),
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(value)) {
+		fprintf(stderr, "restored PTE read failed bytes_done=%u\n",
+			bytes_done);
+		return -1;
+	}
+
+	printf("selftest pte patch ok id=%" PRIu64 " baseline=0x%" PRIx64 " expected=0x%" PRIx64 "\n",
+	       (uint64_t)apply_reply.id, (uint64_t)apply_reply.baseline_pte,
+	       (uint64_t)apply_reply.expected_pte);
+	return 0;
+
+fail_remove:
+	remove_pte_patch(session_fd, apply_reply.id, &remove_reply);
+	return -1;
+}
+
 static int verify_remote_map(int session_fd, const struct child_info *info,
 			     int cmd_fd, int resp_fd)
 {
@@ -1841,6 +2015,80 @@ static int dump_target_pages(int session_fd, uint64_t remote_addr,
 out:
 	free(buf.entries);
 	return ret;
+}
+
+static void print_pte_patch_reply(const char *prefix,
+				  const struct lkmdbg_pte_patch_request *reply)
+{
+	char mode_buf[16];
+	char state_buf[32];
+
+	printf("%s.id=%" PRIu64 "\n", prefix, (uint64_t)reply->id);
+	printf("%s.addr=0x%" PRIx64 "\n", prefix, (uint64_t)reply->addr);
+	printf("%s.mode=%u(%s)\n", prefix, reply->mode,
+	       describe_pte_mode(reply->mode, reply->flags, mode_buf,
+				 sizeof(mode_buf)));
+	printf("%s.flags=0x%x\n", prefix, reply->flags);
+	printf("%s.state=0x%x(%s)\n", prefix, reply->state,
+	       describe_pte_patch_state(reply->state, state_buf,
+					sizeof(state_buf)));
+	printf("%s.raw_pte=0x%" PRIx64 "\n", prefix, (uint64_t)reply->raw_pte);
+	printf("%s.baseline_pte=0x%" PRIx64 "\n", prefix,
+	       (uint64_t)reply->baseline_pte);
+	printf("%s.expected_pte=0x%" PRIx64 "\n", prefix,
+	       (uint64_t)reply->expected_pte);
+	printf("%s.current_pte=0x%" PRIx64 "\n", prefix,
+	       (uint64_t)reply->current_pte);
+	printf("%s.baseline_vm_flags=0x%" PRIx64 "\n", prefix,
+	       (uint64_t)reply->baseline_vm_flags);
+	printf("%s.current_vm_flags=0x%" PRIx64 "\n", prefix,
+	       (uint64_t)reply->current_vm_flags);
+}
+
+static int dump_target_pte_patches(int session_fd)
+{
+	struct lkmdbg_pte_patch_entry entries[PTE_PATCH_QUERY_BATCH];
+	uint64_t cursor = 0;
+
+	for (;;) {
+		struct lkmdbg_pte_patch_query_request reply;
+		uint32_t i;
+
+		if (query_pte_patches(session_fd, cursor, entries,
+				      (uint32_t)(sizeof(entries) /
+						 sizeof(entries[0])),
+				      &reply) < 0)
+			return -1;
+
+		for (i = 0; i < reply.entries_filled; i++) {
+			char mode_buf[16];
+			char state_buf[32];
+
+			printf("id=%" PRIu64 " page=0x%" PRIx64 " mode=%u(%s) flags=0x%x state=0x%x(%s) raw=0x%" PRIx64 " baseline=0x%" PRIx64 " expected=0x%" PRIx64 " current=0x%" PRIx64 " vm=0x%" PRIx64 "->0x%" PRIx64 "\n",
+			       (uint64_t)entries[i].id,
+			       (uint64_t)entries[i].page_addr, entries[i].mode,
+			       describe_pte_mode(entries[i].mode, entries[i].flags,
+						 mode_buf, sizeof(mode_buf)),
+			       entries[i].flags, entries[i].state,
+			       describe_pte_patch_state(entries[i].state,
+							state_buf,
+							sizeof(state_buf)),
+			       (uint64_t)entries[i].raw_pte,
+			       (uint64_t)entries[i].baseline_pte,
+			       (uint64_t)entries[i].expected_pte,
+			       (uint64_t)entries[i].current_pte,
+			       (uint64_t)entries[i].baseline_vm_flags,
+			       (uint64_t)entries[i].current_vm_flags);
+		}
+
+		if (reply.done)
+			return 0;
+		if (reply.next_id <= cursor) {
+			fprintf(stderr, "QUERY_PTE_PATCHES pagination stalled\n");
+			return -1;
+		}
+		cursor = reply.next_id;
+	}
 }
 
 static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
@@ -2738,6 +2986,86 @@ static const char *describe_hwpoint_state(uint32_t state, char *buf, size_t buf_
 	if (state & LKMDBG_HWPOINT_STATE_LOST)
 		append_flag_name(buf, buf_size, "lost");
 	if (state & LKMDBG_HWPOINT_STATE_MUTATED)
+		append_flag_name(buf, buf_size, "mutated");
+	if (!buf[0])
+		snprintf(buf, buf_size, "idle");
+
+	return buf;
+}
+
+static int parse_pte_mode(const char *arg, uint32_t *mode_out,
+			  uint32_t *flags_out, uint64_t *raw_pte_out)
+{
+	char *endp;
+
+	if (strncmp(arg, "raw:", 4) == 0) {
+		uint64_t raw_pte;
+
+		raw_pte = strtoull(arg + 4, &endp, 16);
+		if (*endp != '\0')
+			return -1;
+
+		*mode_out = LKMDBG_PTE_MODE_RAW;
+		*flags_out = LKMDBG_PTE_PATCH_FLAG_RAW;
+		*raw_pte_out = raw_pte;
+		return 0;
+	}
+
+	if (strcmp(arg, "ro") == 0)
+		*mode_out = LKMDBG_PTE_MODE_RO;
+	else if (strcmp(arg, "rw") == 0)
+		*mode_out = LKMDBG_PTE_MODE_RW;
+	else if (strcmp(arg, "rx") == 0)
+		*mode_out = LKMDBG_PTE_MODE_RX;
+	else if (strcmp(arg, "rwx") == 0)
+		*mode_out = LKMDBG_PTE_MODE_RWX;
+	else if (strcmp(arg, "protnone") == 0)
+		*mode_out = LKMDBG_PTE_MODE_PROTNONE;
+	else if (strcmp(arg, "execonly") == 0)
+		*mode_out = LKMDBG_PTE_MODE_EXECONLY;
+	else
+		return -1;
+
+	*flags_out = 0;
+	*raw_pte_out = 0;
+	return 0;
+}
+
+static const char *describe_pte_mode(uint32_t mode, uint32_t flags, char *buf,
+				     size_t buf_size)
+{
+	buf[0] = '\0';
+
+	if (flags & LKMDBG_PTE_PATCH_FLAG_RAW)
+		snprintf(buf, buf_size, "raw");
+	else if (mode == LKMDBG_PTE_MODE_RO)
+		snprintf(buf, buf_size, "ro");
+	else if (mode == LKMDBG_PTE_MODE_RW)
+		snprintf(buf, buf_size, "rw");
+	else if (mode == LKMDBG_PTE_MODE_RX)
+		snprintf(buf, buf_size, "rx");
+	else if (mode == LKMDBG_PTE_MODE_RWX)
+		snprintf(buf, buf_size, "rwx");
+	else if (mode == LKMDBG_PTE_MODE_PROTNONE)
+		snprintf(buf, buf_size, "protnone");
+	else if (mode == LKMDBG_PTE_MODE_EXECONLY)
+		snprintf(buf, buf_size, "execonly");
+	else
+		snprintf(buf, buf_size, "unknown");
+
+	return buf;
+}
+
+static const char *describe_pte_patch_state(uint32_t state, char *buf,
+					    size_t buf_size)
+{
+	buf[0] = '\0';
+
+	if (state & LKMDBG_PTE_PATCH_STATE_ACTIVE)
+		append_flag_name(buf, buf_size, "active");
+	if (state & LKMDBG_PTE_PATCH_STATE_LOST)
+		append_flag_name(buf, buf_size, "lost");
+	if (state & LKMDBG_PTE_PATCH_STATE_MUTATED)
 		append_flag_name(buf, buf_size, "mutated");
 	if (!buf[0])
 		snprintf(buf, buf_size, "idle");
@@ -3682,9 +4010,13 @@ static void usage(const char *prog)
 		"  %s events <pid> [max_events] [timeout_ms]\n"
 		"  %s vmas <pid>\n"
 		"  %s pages <pid> <remote_addr_hex> <length>\n"
+		"  %s ptset <pid> <remote_addr_hex> <ro|rw|rx|rwx|protnone|execonly|raw:<pte_hex>>\n"
+		"  %s ptdel <pid> <id>\n"
+		"  %s ptlist <pid>\n"
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog, prog, prog, prog, prog, prog, prog, prog);
+		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
+		prog);
 }
 
 static int run_selftest(const char *prog)
@@ -4074,6 +4406,16 @@ static int run_selftest(const char *prog)
 		return 1;
 	}
 
+	if (verify_pte_patch_api(session_fd, &info) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
 	if (verify_vma_query(session_fd, &info) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
@@ -4350,6 +4692,10 @@ int main(int argc, char **argv)
 	uint32_t hwpoint_len = 0;
 	uint32_t hwpoint_flags = 0;
 	uint32_t hwpoint_action_flags = 0;
+	uint64_t pte_patch_id = 0;
+	uint64_t pte_patch_raw = 0;
+	uint32_t pte_patch_mode = 0;
+	uint32_t pte_patch_flags = 0;
 	uint32_t continue_flags = 0;
 	unsigned int max_events = EVENT_READ_BATCH;
 
@@ -4369,7 +4715,8 @@ int main(int argc, char **argv)
 
 	needs_remote_addr = strcmp(argv[1], "read") == 0 ||
 			    strcmp(argv[1], "write") == 0 ||
-			    strcmp(argv[1], "pages") == 0;
+			    strcmp(argv[1], "pages") == 0 ||
+			    strcmp(argv[1], "ptset") == 0;
 	if (needs_remote_addr) {
 		if (argc < 5) {
 			usage(argv[0]);
@@ -4534,6 +4881,32 @@ int main(int argc, char **argv)
 		hwpoint_id = strtoull(argv[3], &endp, 0);
 		if (*endp != '\0' || !hwpoint_id) {
 			fprintf(stderr, "invalid hwpoint id: %s\n", argv[3]);
+			return 1;
+		}
+	}
+
+	if (strcmp(argv[1], "ptset") == 0) {
+		if (argc < 5) {
+			usage(argv[0]);
+			return 1;
+		}
+
+		if (parse_pte_mode(argv[4], &pte_patch_mode, &pte_patch_flags,
+				   &pte_patch_raw) < 0) {
+			fprintf(stderr, "invalid PTE patch mode: %s\n", argv[4]);
+			return 1;
+		}
+	}
+
+	if (strcmp(argv[1], "ptdel") == 0) {
+		if (argc < 4) {
+			usage(argv[0]);
+			return 1;
+		}
+
+		pte_patch_id = strtoull(argv[3], &endp, 0);
+		if (*endp != '\0' || !pte_patch_id) {
+			fprintf(stderr, "invalid PTE patch id: %s\n", argv[3]);
 			return 1;
 		}
 	}
@@ -4825,6 +5198,31 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		if (dump_target_pages(session_fd, remote_addr, length) < 0) {
+			close(session_fd);
+			return 1;
+		}
+	} else if (strcmp(argv[1], "ptset") == 0) {
+		struct lkmdbg_pte_patch_request reply;
+
+		memset(&reply, 0, sizeof(reply));
+		if (apply_pte_patch(session_fd, remote_addr, pte_patch_mode,
+				    pte_patch_flags, pte_patch_raw,
+				    &reply) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		print_pte_patch_reply("pte_patch", &reply);
+	} else if (strcmp(argv[1], "ptdel") == 0) {
+		struct lkmdbg_pte_patch_request reply;
+
+		memset(&reply, 0, sizeof(reply));
+		if (remove_pte_patch(session_fd, pte_patch_id, &reply) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		print_pte_patch_reply("pte_patch", &reply);
+	} else if (strcmp(argv[1], "ptlist") == 0) {
+		if (dump_target_pte_patches(session_fd) < 0) {
 			close(session_fd);
 			return 1;
 		}
