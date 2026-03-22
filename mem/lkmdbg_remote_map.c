@@ -271,7 +271,8 @@ static int lkmdbg_remote_map_mmap(struct file *file, struct vm_area_struct *vma)
 		return -EINVAL;
 
 	lkmdbg_remote_map_vm_flags_set(vma,
-				      VM_DONTEXPAND | VM_DONTDUMP | VM_MIXEDMAP);
+				      VM_DONTEXPAND | VM_DONTDUMP | VM_IO |
+					      VM_PFNMAP);
 	if (!(map->prot & LKMDBG_REMOTE_MAP_PROT_READ))
 		deny_may_flags |= VM_MAYREAD;
 	if (!(map->prot & LKMDBG_REMOTE_MAP_PROT_WRITE))
@@ -283,8 +284,9 @@ static int lkmdbg_remote_map_mmap(struct file *file, struct vm_area_struct *vma)
 
 	addr = vma->vm_start;
 	for (i = 0; i < map_pages; i++) {
-		ret = vm_insert_page(vma, addr + (i * PAGE_SIZE),
-				     map->pages[offset_pages + i]);
+		ret = remap_pfn_range(vma, addr + (i * PAGE_SIZE),
+				      page_to_pfn(map->pages[offset_pages + i]),
+				      PAGE_SIZE, vma->vm_page_prot);
 		if (ret)
 			return ret;
 	}
