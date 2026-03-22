@@ -999,6 +999,81 @@ fail:
 	return -1;
 }
 
+static int test_combo_rw(int session_fd, int cmd_fd, int reply_fd,
+			 const struct child_info *info)
+{
+	struct lkmdbg_hwpoint_request req;
+
+	if (add_hwpoint(session_fd, info->data_addr,
+			LKMDBG_HWPOINT_TYPE_READ | LKMDBG_HWPOINT_TYPE_WRITE, 8,
+			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
+		return -1;
+	if (expect_command_stop(session_fd, cmd_fd, reply_fd, CHILD_OP_READ_DATA,
+				LKMDBG_STOP_REASON_WATCHPOINT,
+				LKMDBG_HWPOINT_TYPE_READ |
+					LKMDBG_HWPOINT_FLAG_MMU,
+				info->data_addr, "combo_rw_read") < 0)
+		goto fail;
+	if (rearm_hwpoint(session_fd, req.id) < 0)
+		goto fail;
+	if (expect_command_stop(session_fd, cmd_fd, reply_fd,
+				CHILD_OP_WRITE_DATA,
+				LKMDBG_STOP_REASON_WATCHPOINT,
+				LKMDBG_HWPOINT_TYPE_WRITE |
+					LKMDBG_HWPOINT_FLAG_MMU,
+				info->data_addr, "combo_rw_write") < 0)
+		goto fail;
+	if (remove_hwpoint(session_fd, req.id) < 0)
+		return -1;
+
+	printf("mmu test: rw combo ok\n");
+	return 0;
+
+fail:
+	remove_hwpoint(session_fd, req.id);
+	return -1;
+}
+
+static int test_combo_wx(int session_fd, int cmd_fd, int reply_fd,
+			 const struct child_info *info)
+{
+	struct lkmdbg_hwpoint_request req;
+
+	if (add_hwpoint(session_fd, info->combo_page_addr,
+			LKMDBG_HWPOINT_TYPE_WRITE | LKMDBG_HWPOINT_TYPE_EXEC, 4,
+			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
+		return -1;
+	if (expect_command_no_stop(session_fd, cmd_fd, reply_fd,
+				   CHILD_OP_READ_COMBO,
+				   "combo_wx_read_passthrough") < 0)
+		goto fail;
+	if (expect_command_stop(session_fd, cmd_fd, reply_fd,
+				CHILD_OP_WRITE_COMBO,
+				LKMDBG_STOP_REASON_WATCHPOINT,
+				LKMDBG_HWPOINT_TYPE_WRITE |
+					LKMDBG_HWPOINT_FLAG_MMU,
+				info->combo_page_addr, "combo_wx_write") < 0)
+		goto fail;
+	if (rearm_hwpoint(session_fd, req.id) < 0)
+		goto fail;
+	if (expect_command_stop(session_fd, cmd_fd, reply_fd,
+				CHILD_OP_EXEC_COMBO,
+				LKMDBG_STOP_REASON_BREAKPOINT,
+				LKMDBG_HWPOINT_TYPE_EXEC |
+					LKMDBG_HWPOINT_FLAG_MMU,
+				info->combo_page_addr, "combo_wx_exec") < 0)
+		goto fail;
+	if (remove_hwpoint(session_fd, req.id) < 0)
+		return -1;
+
+	printf("mmu test: wx combo ok\n");
+	return 0;
+
+fail:
+	remove_hwpoint(session_fd, req.id);
+	return -1;
+}
+
 static int test_combo_rwx(int session_fd, int cmd_fd, int reply_fd,
 			  const struct child_info *info)
 {
@@ -1226,6 +1301,10 @@ static int run_selftest(void)
 	if (test_write_filter(session_fd, cmd_pipe[1], reply_pipe[0], &info) < 0)
 		goto out;
 	if (test_combo_rx(session_fd, cmd_pipe[1], reply_pipe[0], &info) < 0)
+		goto out;
+	if (test_combo_rw(session_fd, cmd_pipe[1], reply_pipe[0], &info) < 0)
+		goto out;
+	if (test_combo_wx(session_fd, cmd_pipe[1], reply_pipe[0], &info) < 0)
 		goto out;
 	if (test_combo_rwx(session_fd, cmd_pipe[1], reply_pipe[0], &info) < 0)
 		goto out;
