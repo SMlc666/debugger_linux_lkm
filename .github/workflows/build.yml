@@ -10,10 +10,6 @@ on:
 jobs:
   module-build-generic:
     runs-on: ubuntu-24.04
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_COMPILERCHECK: content
 
     steps:
       - name: Checkout
@@ -22,31 +18,13 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential ccache linux-headers-generic
-
-      - name: Prepare ccache directory
-        run: mkdir -p "$CCACHE_DIR"
-
-      - name: Configure ccache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ runner.os }}-ccache-${{ github.ref_name }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-ccache-${{ github.ref_name }}-
-            ${{ runner.os }}-ccache-
-
-      - name: Reset ccache stats
-        run: ccache --zero-stats
+          sudo apt-get install -y build-essential linux-headers-generic
 
       - name: Build module
         run: |
           KDIR="$(ls -d /usr/src/linux-headers-*-generic | sort -V | tail -n1)"
           echo "Using KDIR=$KDIR"
-          make KDIR="$KDIR" CC="ccache gcc"
-
-      - name: Show ccache stats
-        run: ccache --show-stats
+          make KDIR="$KDIR" CC="gcc"
 
   module-build-android-gki:
     name: module-build-${{ matrix.label }}
@@ -74,7 +52,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-${{ matrix.ccache_suffix }}
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
-      CCACHE_MAXSIZE: 256M
+      CCACHE_MAXSIZE: 128M
       KERNEL_REPO: https://android.googlesource.com/kernel/common
       KERNEL_BRANCH: ${{ matrix.kernel_branch }}
       NDK_VERSION: android-ndk-r27d
@@ -113,15 +91,12 @@ jobs:
           mkdir -p "$(dirname "$NDK_DIR")"
           ccache --max-size="$CCACHE_MAXSIZE"
 
-      - name: Restore Android ccache
-        id: android-ccache-restore
+      - name: Restore Android ccache snapshot
+        id: android-ccache
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ${{ runner.os }}-${{ matrix.ccache_suffix }}-ccache-${{ github.ref_name }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.ccache_suffix }}-ccache-${{ github.ref_name }}-
-            ${{ runner.os }}-${{ matrix.ccache_suffix }}-ccache-
+          key: ${{ runner.os }}-${{ matrix.ccache_suffix }}-ccache-v1
 
       - name: Cache Android NDK
         id: cache-ndk
@@ -194,20 +169,17 @@ jobs:
         if: always()
         run: ccache --show-stats
 
-      - name: Save Android ccache on failure
-        if: failure()
+      - name: Save Android ccache snapshot on failure
+        if: failure() && steps.android-ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ${{ runner.os }}-${{ matrix.ccache_suffix }}-ccache-${{ github.ref_name }}-${{ github.sha }}
+          key: ${{ runner.os }}-${{ matrix.ccache_suffix }}-ccache-v1
 
   qemu-arm64-build-artifacts:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache-qemu-arm64
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_COMPILERCHECK: content
       KERNEL_REPO: https://github.com/torvalds/linux.git
       KERNEL_REF: v6.6
       KERNEL_OUT_DIR: ${{ github.workspace }}/.cache/qemu-linux-arm64-out
@@ -223,7 +195,6 @@ jobs:
             bc \
             bison \
             build-essential \
-            ccache \
             cpio \
             flex \
             gcc-aarch64-linux-gnu \
@@ -233,19 +204,7 @@ jobs:
             libssl-dev
 
       - name: Prepare cache directories
-        run: |
-          mkdir -p "$CCACHE_DIR"
-          mkdir -p "$KERNEL_OUT_DIR"
-
-      - name: Restore QEMU ccache
-        id: qemu-ccache-restore
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ runner.os }}-qemu-arm64-ccache-${{ env.KERNEL_REF }}-${{ github.ref_name }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-qemu-arm64-ccache-${{ env.KERNEL_REF }}-${{ github.ref_name }}-
-            ${{ runner.os }}-qemu-arm64-ccache-${{ env.KERNEL_REF }}-
+        run: mkdir -p "$KERNEL_OUT_DIR"
 
       - name: Restore QEMU kernel output cache
         id: qemu-kernel-cache
@@ -253,9 +212,6 @@ jobs:
         with:
           path: ${{ env.KERNEL_OUT_DIR }}
           key: ${{ runner.os }}-qemu-arm64-kernel-out-${{ env.KERNEL_REF }}-v2
-
-      - name: Reset QEMU ccache stats
-        run: ccache --zero-stats
 
       - name: Fetch upstream Linux
         run: |
@@ -271,8 +227,8 @@ jobs:
             O="$OUT_DIR"
             ARCH=arm64
             CROSS_COMPILE=aarch64-linux-gnu-
-            CC="ccache aarch64-linux-gnu-gcc"
-            HOSTCC="ccache gcc"
+            CC="aarch64-linux-gnu-gcc"
+            HOSTCC="gcc"
           )
           if [ ! -f "$OUT_DIR/arch/arm64/boot/Image" ] || \
              [ ! -f "$OUT_DIR/Module.symvers" ] || \
@@ -295,29 +251,29 @@ jobs:
           fi
           make -C "$KERNEL_DIR" O="$OUT_DIR" M="$GITHUB_WORKSPACE" \
             ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CC="ccache aarch64-linux-gnu-gcc" \
-            HOSTCC="ccache gcc" \
+            CC="aarch64-linux-gnu-gcc" \
+            HOSTCC="gcc" \
             -j"$(nproc)" modules
 
       - name: Build QEMU initramfs
         run: |
           INITRAMFS_DIR="$RUNNER_TEMP/initramfs"
-          ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/qemu-smoke-init" \
             "$GITHUB_WORKSPACE/.github/scripts/qemu-smoke-init.c"
-          ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/qemu-watchpoint-control" \
             "$GITHUB_WORKSPACE/.github/scripts/qemu-watchpoint-control.c"
-          ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/lkmdbg_open_session" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_open_session.c"
-          ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/lkmdbg_stealth_ctl" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_stealth_ctl.c"
-          ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
             -o "$RUNNER_TEMP/lkmdbg_mem_test" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_mem_test.c"
-          ccache aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
             -o "$RUNNER_TEMP/lkmdbg_mmu_test" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_mmu_test.c"
           mkdir -p "$INITRAMFS_DIR/dev" "$INITRAMFS_DIR/proc" \
@@ -358,17 +314,6 @@ jobs:
           name: qemu-arm64-boot
           path: ${{ runner.temp }}/qemu-artifacts
           if-no-files-found: error
-
-      - name: Show QEMU ccache stats
-        if: always()
-        run: ccache --show-stats
-
-      - name: Save QEMU ccache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ runner.os }}-qemu-arm64-ccache-${{ env.KERNEL_REF }}-${{ github.ref_name }}-${{ github.sha }}
 
       - name: Save QEMU kernel output cache
         if: always()
