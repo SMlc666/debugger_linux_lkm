@@ -275,6 +275,9 @@ static int lkmdbg_validate_hwpoint_request(struct lkmdbg_hwpoint_request *req,
 	} else {
 		if (!lkmdbg_hwpoint_hw_type_valid(req->type))
 			return -EINVAL;
+		if ((req->action_flags & LKMDBG_HWPOINT_ACTION_AUTO_CONTINUE) ||
+		    req->trigger_hit_count != 1)
+			return -EOPNOTSUPP;
 	}
 
 	if ((req->flags & LKMDBG_HWPOINT_FLAG_COUNTER_MODE) &&

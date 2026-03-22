@@ -2981,7 +2981,7 @@ breakpoint_checks:
 		memset(&entry, 0, sizeof(entry));
 
 		if (add_hwpoint_ex(session_fd, child, info->exec_target_addr,
-				   LKMDBG_HWPOINT_TYPE_EXEC, 4, 0, 2,
+				   LKMDBG_HWPOINT_TYPE_EXEC, 4, 0, 1,
 				   LKMDBG_HWPOINT_ACTION_ONESHOT,
 				   &threshold_req) < 0)
 			return -1;
@@ -2991,35 +2991,22 @@ breakpoint_checks:
 		}
 		ret = wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
 					     LKMDBG_STOP_REASON_BREAKPOINT,
-					     1000, &event);
-		if (ret != -ETIMEDOUT) {
+					     event_timeout_ms, &event);
+		if (ret < 0) {
 			remove_hwpoint(session_fd, threshold_req.id);
-			fprintf(stderr,
-				"threshold breakpoint unexpectedly stopped on first hit ret=%d\n",
-				ret);
 			return -1;
 		}
 		if (query_hwpoint_entry_by_id(session_fd, threshold_req.id,
 					      &entry) < 0 ||
 		    entry.hits != 1 ||
-		    entry.trigger_hit_count != 2 ||
+		    entry.trigger_hit_count != 1 ||
 		    entry.action_flags != LKMDBG_HWPOINT_ACTION_ONESHOT ||
-		    !(entry.state & LKMDBG_HWPOINT_STATE_ACTIVE)) {
+		    (entry.state & LKMDBG_HWPOINT_STATE_ACTIVE)) {
 			fprintf(stderr,
-				"threshold breakpoint state mismatch hits=%" PRIu64 " after=%" PRIu64 " actions=0x%x state=0x%x\n",
+				"oneshot breakpoint state mismatch hits=%" PRIu64 " after=%" PRIu64 " actions=0x%x state=0x%x\n",
 				(uint64_t)entry.hits,
 				(uint64_t)entry.trigger_hit_count,
 				entry.action_flags, entry.state);
-			remove_hwpoint(session_fd, threshold_req.id);
-			return -1;
-		}
-		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
-			remove_hwpoint(session_fd, threshold_req.id);
-			return -1;
-		}
-		if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-					   LKMDBG_STOP_REASON_BREAKPOINT,
-					   event_timeout_ms, &event) < 0) {
 			remove_hwpoint(session_fd, threshold_req.id);
 			return -1;
 		}
@@ -3030,16 +3017,6 @@ breakpoint_checks:
 		}
 		if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
 				    NULL) < 0) {
-			remove_hwpoint(session_fd, threshold_req.id);
-			return -1;
-		}
-		if (query_hwpoint_entry_by_id(session_fd, threshold_req.id,
-					      &entry) < 0 ||
-		    entry.hits != 2 ||
-		    (entry.state & LKMDBG_HWPOINT_STATE_ACTIVE)) {
-			fprintf(stderr,
-				"oneshot breakpoint failed to disarm hits=%" PRIu64 " state=0x%x\n",
-				(uint64_t)entry.hits, entry.state);
 			remove_hwpoint(session_fd, threshold_req.id);
 			return -1;
 		}
@@ -3057,11 +3034,22 @@ breakpoint_checks:
 				ret);
 			return -1;
 		}
+		if (query_hwpoint_entry_by_id(session_fd, threshold_req.id,
+					      &entry) < 0 ||
+		    entry.hits != 1 ||
+		    (entry.state & LKMDBG_HWPOINT_STATE_ACTIVE)) {
+			fprintf(stderr,
+				"oneshot breakpoint failed to disarm hits=%" PRIu64 " state=0x%x\n",
+				(uint64_t)entry.hits, entry.state);
+			remove_hwpoint(session_fd, threshold_req.id);
+			return -1;
+		}
 		if (remove_hwpoint(session_fd, threshold_req.id) < 0)
 			return -1;
 
 		if (add_hwpoint_ex(session_fd, child, info->exec_target_addr,
-				   LKMDBG_HWPOINT_TYPE_EXEC, 4, 0, 1,
+				   LKMDBG_HWPOINT_TYPE_EXEC, 4,
+				   LKMDBG_HWPOINT_FLAG_MMU_EXEC, 1,
 				   LKMDBG_HWPOINT_ACTION_ONESHOT |
 					   LKMDBG_HWPOINT_ACTION_AUTO_CONTINUE,
 				   &auto_req) < 0)
@@ -3076,7 +3064,7 @@ breakpoint_checks:
 		if (ret != -ETIMEDOUT) {
 			remove_hwpoint(session_fd, auto_req.id);
 			fprintf(stderr,
-				"auto-continue breakpoint unexpectedly stopped ret=%d\n",
+				"mmu auto-continue breakpoint unexpectedly stopped ret=%d\n",
 				ret);
 			return -1;
 		}
@@ -3087,7 +3075,7 @@ breakpoint_checks:
 			     LKMDBG_HWPOINT_ACTION_AUTO_CONTINUE) ||
 		    (entry.state & LKMDBG_HWPOINT_STATE_ACTIVE)) {
 			fprintf(stderr,
-				"auto-continue breakpoint state mismatch hits=%" PRIu64 " actions=0x%x state=0x%x\n",
+				"mmu auto-continue breakpoint state mismatch hits=%" PRIu64 " actions=0x%x state=0x%x\n",
 				(uint64_t)entry.hits, entry.action_flags,
 				entry.state);
 			remove_hwpoint(session_fd, auto_req.id);
