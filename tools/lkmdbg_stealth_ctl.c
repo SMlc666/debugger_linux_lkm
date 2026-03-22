@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +12,16 @@
 #include "../include/lkmdbg_ioctl.h"
 
 #define TARGET_PATH "/proc/version"
+#define MODULE_NAME "lkmdbg"
+#define DEBUGFS_DIR "/sys/kernel/debug/lkmdbg"
+#define SYSFS_MODULE_DIR "/sys/module/lkmdbg"
+#define SYSFS_MODULE_PARAMS_DIR "/sys/module/lkmdbg/parameters"
+
+enum probe_state {
+	PROBE_STATE_HIDDEN = 0,
+	PROBE_STATE_VISIBLE = 1,
+	PROBE_STATE_UNREADABLE = 2,
+};
 
 static int open_session_fd(void)
 {
@@ -186,10 +197,11 @@ static void print_usage(const char *prog)
 	fprintf(stderr,
 		"usage:\n"
 		"  %s show\n"
+		"  %s report\n"
 		"  %s set <none|hide|debugfs|modulehide|debugfs,modulehide>\n"
 		"  %s hide\n"
 		"  %s restore\n",
-		prog, prog, prog, prog);
+		prog, prog, prog, prog, prog);
 }
 
 static void print_reply(const struct lkmdbg_status_reply *status,
@@ -209,6 +221,118 @@ static void print_reply(const struct lkmdbg_status_reply *status,
 			      sizeof(supported_buf)));
 }
 
+static const char *describe_probe_state(enum probe_state state)
+{
+	switch (state) {
+	case PROBE_STATE_VISIBLE:
+		return "visible";
+	case PROBE_STATE_HIDDEN:
+		return "hidden";
+	case PROBE_STATE_UNREADABLE:
+		return "unreadable";
+	default:
+		return "unknown";
+	}
+}
+
+static enum probe_state probe_path_exists(const char *path)
+{
+	if (access(path, F_OK) == 0)
+		return PROBE_STATE_VISIBLE;
+	if (errno == ENOENT)
+		return PROBE_STATE_HIDDEN;
+	return PROBE_STATE_UNREADABLE;
+}
+
+static enum probe_state probe_file_contains(const char *path, const char *needle)
+{
+	FILE *fp;
+	char *line = NULL;
+	size_t cap = 0;
+	enum probe_state state = PROBE_STATE_HIDDEN;
+
+	fp = fopen(path, "r");
+	if (!fp)
+		return errno == ENOENT ? PROBE_STATE_HIDDEN : PROBE_STATE_UNREADABLE;
+
+	while (getline(&line, &cap, fp) >= 0) {
+		if (strstr(line, needle)) {
+			state = PROBE_STATE_VISIBLE;
+			break;
+		}
+	}
+
+	free(line);
+	fclose(fp);
+	return state;
+}
+
+static int read_u64_file(const char *path, uint64_t *value_out)
+{
+	FILE *fp;
+	unsigned long long value;
+
+	fp = fopen(path, "r");
+	if (!fp)
+		return -1;
+
+	if (fscanf(fp, "%llu", &value) != 1) {
+		fclose(fp);
+		return -1;
+	}
+
+	fclose(fp);
+	*value_out = (uint64_t)value;
+	return 0;
+}
+
+static void print_report(const struct lkmdbg_status_reply *status,
+			 const struct lkmdbg_stealth_request *stealth)
+{
+	char flags_buf[48];
+	char supported_buf[48];
+	uint64_t taint = 0;
+	bool taint_ok;
+	enum probe_state proc_modules_state;
+	enum probe_state sysfs_module_state;
+	enum probe_state sysfs_params_state;
+	enum probe_state debugfs_state;
+	enum probe_state kallsyms_state;
+
+	proc_modules_state = probe_file_contains("/proc/modules", MODULE_NAME " ");
+	sysfs_module_state = probe_path_exists(SYSFS_MODULE_DIR);
+	sysfs_params_state = probe_path_exists(SYSFS_MODULE_PARAMS_DIR);
+	debugfs_state = probe_path_exists(DEBUGFS_DIR);
+	kallsyms_state = probe_file_contains("/proc/kallsyms", " [" MODULE_NAME "]");
+	taint_ok = read_u64_file("/proc/sys/kernel/tainted", &taint) == 0;
+
+	printf("session_id=%" PRIu64 "\n", (uint64_t)status->session_id);
+	printf("hook_active=%u\n", status->hook_active);
+	printf("active_sessions=%" PRIu64 "\n",
+	       (uint64_t)status->active_sessions);
+	printf("report.stealth.flags=0x%x(%s)\n", stealth->flags,
+	       describe_flags(stealth->flags, flags_buf, sizeof(flags_buf)));
+	printf("report.stealth.supported=0x%x(%s)\n", stealth->supported_flags,
+	       describe_flags(stealth->supported_flags, supported_buf,
+			      sizeof(supported_buf)));
+	printf("report.bootstrap.proc_version_hook=%s\n",
+	       status->hook_active ? "active" : "inactive");
+	printf("report.exposure.proc_modules=%s\n",
+	       describe_probe_state(proc_modules_state));
+	printf("report.exposure.sysfs_module=%s\n",
+	       describe_probe_state(sysfs_module_state));
+	printf("report.exposure.sysfs_parameters=%s\n",
+	       describe_probe_state(sysfs_params_state));
+	printf("report.exposure.debugfs_dir=%s\n",
+	       describe_probe_state(debugfs_state));
+	printf("report.exposure.kallsyms_module=%s\n",
+	       describe_probe_state(kallsyms_state));
+	if (taint_ok)
+		printf("report.exposure.kernel_tainted=%" PRIu64 "\n", taint);
+	else
+		printf("report.exposure.kernel_tainted=unreadable\n");
+}
+
 int main(int argc, char **argv)
 {
 	struct lkmdbg_status_reply status;
@@ -224,8 +348,9 @@ int main(int argc, char **argv)
 	}
 
 	cmd = argv[1];
-	if (strcmp(cmd, "show") != 0 && strcmp(cmd, "set") != 0 &&
-	    strcmp(cmd, "hide") != 0 && strcmp(cmd, "restore") != 0) {
+	if (strcmp(cmd, "show") != 0 && strcmp(cmd, "report") != 0 &&
+	    strcmp(cmd, "set") != 0 && strcmp(cmd, "hide") != 0 &&
+	    strcmp(cmd, "restore") != 0) {
 		print_usage(argv[0]);
 		return 1;
 	}
@@ -252,7 +377,7 @@ int main(int argc, char **argv)
 	memset(&status, 0, sizeof(status));
 	memset(&stealth, 0, sizeof(stealth));
 
-	if (strcmp(cmd, "show") == 0) {
+	if (strcmp(cmd, "show") == 0 || strcmp(cmd, "report") == 0) {
 		if (get_stealth(session_fd, &stealth) < 0)
 			goto out;
 		if (get_status(session_fd, &status) < 0)
@@ -264,7 +389,10 @@ int main(int argc, char **argv)
 			goto out;
 	}
 
-	print_reply(&status, &stealth);
+	if (strcmp(cmd, "report") == 0)
+		print_report(&status, &stealth);
+	else
+		print_reply(&status, &stealth);
 	ret = 0;
 
 out:

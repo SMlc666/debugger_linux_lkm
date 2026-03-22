@@ -121,6 +121,7 @@ Example stealth flow:
 ```bash
 sudo insmod lkmdbg.ko hook_proc_version=1
 cc -O2 -Wall -Wextra -o tools/lkmdbg_stealth_ctl tools/lkmdbg_stealth_ctl.c
+sudo ./tools/lkmdbg_stealth_ctl report
 sudo ./tools/lkmdbg_stealth_ctl show
 sudo ./tools/lkmdbg_stealth_ctl hide
 sudo ./tools/lkmdbg_stealth_ctl restore
