@@ -316,17 +316,10 @@ static int lkmdbg_remote_map_prepare_fd(struct lkmdbg_remote_map *map,
 					struct file **file_out)
 {
 	struct file *file;
-	int open_flags;
 	int fd;
 
-	open_flags = O_CLOEXEC;
-	if (map->prot & LKMDBG_REMOTE_MAP_PROT_WRITE)
-		open_flags |= O_RDWR;
-	else
-		open_flags |= O_RDONLY;
-
 	file = anon_inode_getfile("lkmdbg-rmap", &lkmdbg_remote_map_fops, map,
-				  open_flags);
+				  O_RDWR | O_CLOEXEC);
 	if (IS_ERR(file))
 		return PTR_ERR(file);
 
