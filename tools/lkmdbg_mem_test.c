@@ -1742,6 +1742,7 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 			 "slot-%u-initial", i);
 	}
 	fill_pattern(large_map, SELFTEST_LARGE_MAP_LEN, 1);
+	*mmu_watch_map = 0x123456789abcdef0ULL;
 
 	memset(nofault_map, 0xA5, page_size);
 	if (madvise(nofault_map, page_size, MADV_DONTNEED) < 0)
