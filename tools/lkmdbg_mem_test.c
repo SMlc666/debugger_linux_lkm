@@ -812,6 +812,26 @@ static int create_remote_map(int session_fd, uintptr_t remote_addr,
 	return 0;
 }
 
+static int remove_remote_map(int session_fd, uint64_t map_id,
+			     struct lkmdbg_remote_map_handle_request *reply_out)
+{
+	struct lkmdbg_remote_map_handle_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.map_id = map_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_REMOTE_MAP, &req) < 0) {
+		fprintf(stderr, "REMOVE_REMOTE_MAP failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
 static void *remote_map_wake_thread_main(void *arg)
 {
 	struct remote_map_wake_ctx *ctx = arg;
@@ -1887,6 +1907,7 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	struct lkmdbg_remote_map_request ro_reply;
 	struct lkmdbg_remote_map_request inject_reply;
 	struct lkmdbg_remote_map_request stealth_reply;
+	struct lkmdbg_remote_map_handle_request remove_reply;
 	unsigned char *view = MAP_FAILED;
 	unsigned char *ro_view = MAP_FAILED;
 	unsigned char *local_map = MAP_FAILED;
@@ -1904,7 +1925,7 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	int ret = -1;
 	int restore_needed = 0;
 	int stealth_restore_needed = 0;
-	int keep_stealth_mapping = 0;
+	int stealth_map_active = 0;
 	int wake_thread_started = 0;
 
 	memset(&reply, 0, sizeof(reply));
@@ -1915,6 +1936,7 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	inject_reply.map_fd = -1;
 	memset(&stealth_reply, 0, sizeof(stealth_reply));
 	stealth_reply.map_fd = -1;
+	memset(&remove_reply, 0, sizeof(remove_reply));
 
 	test_len = info->page_size * 2U;
 	if (test_len > info->large_len)
@@ -1998,12 +2020,13 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 			      LKMDBG_REMOTE_MAP_FLAG_STEALTH_LOCAL,
 			      &stealth_reply) < 0)
 		goto out;
-	keep_stealth_mapping = 1;
+	stealth_map_active = 1;
 
-	if (stealth_reply.map_fd != -1 ||
+	if (!stealth_reply.map_id || stealth_reply.map_fd != -1 ||
 	    stealth_reply.mapped_length != reply.mapped_length) {
 		fprintf(stderr,
-			"stealth remote map reply mismatch len=%" PRIu64 " fd=%d\n",
+			"stealth remote map reply mismatch id=%" PRIu64 " len=%" PRIu64 " fd=%d\n",
+			(uint64_t)stealth_reply.map_id,
 			(uint64_t)stealth_reply.mapped_length, stealth_reply.map_fd);
 		goto out;
 	}
@@ -2053,6 +2076,53 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 		for (i = 0; i < 64; i++)
 			stealth_view[256 + i] = pattern_byte(256 + i, 1);
 		stealth_restore_needed = 0;
+	}
+
+	if (remove_remote_map(session_fd, stealth_reply.map_id, &remove_reply) < 0)
+		goto out;
+	stealth_map_active = 0;
+	if (remove_reply.map_id != stealth_reply.map_id ||
+	    remove_reply.local_addr != (uintptr_t)stealth_view ||
+	    remove_reply.remote_addr != info->large_addr ||
+	    remove_reply.mapped_length != stealth_reply.mapped_length ||
+	    remove_reply.prot != (LKMDBG_REMOTE_MAP_PROT_READ |
+				  LKMDBG_REMOTE_MAP_PROT_WRITE) ||
+	    remove_reply.flags != LKMDBG_REMOTE_MAP_FLAG_STEALTH_LOCAL) {
+		fprintf(stderr,
+			"stealth remote map remove reply mismatch id=%" PRIu64 " local=0x%" PRIx64 " remote=0x%" PRIx64 " len=%" PRIu64 " prot=0x%x flags=0x%x\n",
+			(uint64_t)remove_reply.map_id,
+			(uint64_t)remove_reply.local_addr,
+			(uint64_t)remove_reply.remote_addr,
+			(uint64_t)remove_reply.mapped_length,
+			remove_reply.prot, remove_reply.flags);
+		goto out;
+	}
+	if (read_maps_line_for_addr((uintptr_t)stealth_view, maps_after,
+				    sizeof(maps_after)) < 0)
+		goto out;
+	if (strcmp(maps_before, maps_after) != 0) {
+		fprintf(stderr,
+			"stealth remote map remove changed /proc/self/maps entry\n");
+		goto out;
+	}
+	memset(verify_buf, 0, test_len);
+	if (read_target_memory(session_fd, info->large_addr, verify_buf, test_len,
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != test_len) {
+		fprintf(stderr,
+			"stealth remote map remove target snapshot failed bytes_done=%u expected=%zu\n",
+			bytes_done, test_len);
+		goto out;
+	}
+	if (memcmp(stealth_view, verify_buf, test_len) == 0) {
+		fprintf(stderr,
+			"stealth remote map local view still aliases target after remove\n");
+		goto out;
+	}
+	if (stealth_view[0] != 0x3C || stealth_view[test_len - 1] != 0x3C) {
+		fprintf(stderr,
+			"stealth remote map local view did not restore baseline bytes\n");
+		goto out;
 	}
 
 	if (create_remote_map(session_fd, info->large_addr, 0, test_len,
@@ -2190,9 +2260,9 @@ out:
 		munmap(local_map, info->page_size);
 	if (local_fd >= 0)
 		close(local_fd);
-	if (!keep_stealth_mapping && stealth_view != MAP_FAILED)
+	if (!stealth_map_active && stealth_view != MAP_FAILED)
 		munmap(stealth_view, test_len);
-	if (!keep_stealth_mapping && stealth_fd >= 0)
+	if (!stealth_map_active && stealth_fd >= 0)
 		close(stealth_fd);
 	if (view != MAP_FAILED)
 		munmap(view, reply.mapped_length);

@@ -59,6 +59,7 @@ struct lkmdbg_remote_map {
 
 struct lkmdbg_remote_stealth_map {
 	struct list_head node;
+	u64 map_id;
 	pid_t owner_tgid;
 	pid_t source_tgid;
 	u64 remote_addr;
@@ -530,6 +531,42 @@ static int lkmdbg_remote_map_check_stealth_overlap(struct lkmdbg_session *sessio
 	return 0;
 }
 
+static void lkmdbg_remote_map_fill_handle(
+	const struct lkmdbg_remote_stealth_map *map,
+	struct lkmdbg_remote_map_handle_request *req)
+{
+	memset(req, 0, sizeof(*req));
+	req->version = LKMDBG_PROTO_VERSION;
+	req->size = sizeof(*req);
+	req->map_id = map->map_id;
+	req->remote_addr = map->remote_addr;
+	req->local_addr = map->local_addr;
+	req->mapped_length = map->mapped_length;
+	req->prot = map->prot;
+	req->flags = LKMDBG_REMOTE_MAP_FLAG_STEALTH_LOCAL;
+}
+
+static int lkmdbg_remote_map_remove_locked(
+	struct lkmdbg_session *session, u64 map_id,
+	struct lkmdbg_remote_stealth_map **map_out)
+{
+	struct lkmdbg_remote_stealth_map *map;
+
+	if (!map_out || !map_id)
+		return -EINVAL;
+
+	list_for_each_entry(map, &session->remote_maps, node) {
+		if (map->map_id != map_id)
+			continue;
+
+		list_del_init(&map->node);
+		*map_out = map;
+		return 0;
+	}
+
+	return -ENOENT;
+}
+
 static int lkmdbg_remote_map_get_mm_by_tgid(pid_t tgid, struct mm_struct **mm_out)
 {
 	struct task_struct *task;
@@ -808,6 +845,7 @@ static int lkmdbg_remote_map_create_stealth_local(
 
 	mapped_length = PAGE_ALIGN(req->length);
 	page_count = mapped_length >> PAGE_SHIFT;
+	req->map_id = 0;
 	req->mapped_length = mapped_length;
 	req->map_fd = -1;
 
@@ -911,8 +949,11 @@ static int lkmdbg_remote_map_create_stealth_local(
 	mutex_lock(&session->lock);
 	ret = lkmdbg_remote_map_check_stealth_overlap(session, req->local_addr,
 						      mapped_length);
-	if (!ret)
+	if (!ret) {
+		map->map_id = ++session->next_remote_map_id;
+		req->map_id = map->map_id;
 		list_add_tail(&map->node, &session->remote_maps);
+	}
 	mutex_unlock(&session->lock);
 	if (ret)
 		goto out_map_restore;
@@ -1012,6 +1053,7 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 
 	mapped_length = PAGE_ALIGN(req.length);
 	page_count = mapped_length >> PAGE_SHIFT;
+	req.map_id = 0;
 	req.mapped_length = mapped_length;
 	req.local_addr = source_addr;
 
@@ -1110,6 +1152,33 @@ out_map:
 out_mm:
 	mmput(mm);
 	return ret;
+}
+
+long lkmdbg_remove_remote_map(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_remote_map_handle_request req;
+	struct lkmdbg_remote_stealth_map *map = NULL;
+	int ret;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	if (req.version != LKMDBG_PROTO_VERSION || req.size != sizeof(req))
+		return -EINVAL;
+
+	mutex_lock(&session->lock);
+	ret = lkmdbg_remote_map_remove_locked(session, req.map_id, &map);
+	mutex_unlock(&session->lock);
+	if (ret)
+		return ret;
+
+	lkmdbg_remote_map_fill_handle(map, &req);
+	lkmdbg_remote_map_restore_stealth(map);
+
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
 }
 
 void lkmdbg_remote_map_release_session(struct lkmdbg_session *session)
