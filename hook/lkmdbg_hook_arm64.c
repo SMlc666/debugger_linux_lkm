@@ -198,9 +198,9 @@ static bool lkmdbg_text_words_match(void *addr, const u32 *insns, u32 words)
 	u32 i;
 
 	for (i = 0; i < words; i++) {
-		u32 current = READ_ONCE(*(u32 *)((u8 *)addr + i * sizeof(u32)));
+		u32 word = READ_ONCE(*(u32 *)((u8 *)addr + i * sizeof(u32)));
 
-		if (current != insns[i])
+		if (word != insns[i])
 			return false;
 	}
 
