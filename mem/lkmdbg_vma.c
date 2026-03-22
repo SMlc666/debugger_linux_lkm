@@ -37,42 +37,6 @@ static int lkmdbg_validate_vma_query(struct lkmdbg_vma_query_request *req)
 	return 0;
 }
 
-static const char *lkmdbg_vma_special_name(struct mm_struct *mm,
-					   struct vm_area_struct *vma,
-					   u32 *flags)
-{
-	if (mm->start_stack >= vma->vm_start && mm->start_stack < vma->vm_end) {
-		*flags |= LKMDBG_VMA_FLAG_STACK;
-		return "[stack]";
-	}
-
-	if (mm->start_brk >= vma->vm_start && mm->start_brk < vma->vm_end) {
-		*flags |= LKMDBG_VMA_FLAG_HEAP;
-		return "[heap]";
-	}
-
-	return NULL;
-}
-
-static void lkmdbg_vma_fill_prot(struct lkmdbg_vma_entry *entry,
-				 struct vm_area_struct *vma)
-{
-	u64 vm_flags = (u64)vma->vm_flags;
-
-	if (vm_flags & VM_READ)
-		entry->prot |= LKMDBG_VMA_PROT_READ;
-	if (vm_flags & VM_WRITE)
-		entry->prot |= LKMDBG_VMA_PROT_WRITE;
-	if (vm_flags & VM_EXEC)
-		entry->prot |= LKMDBG_VMA_PROT_EXEC;
-	if (vm_flags & VM_MAYREAD)
-		entry->prot |= LKMDBG_VMA_PROT_MAYREAD;
-	if (vm_flags & VM_MAYWRITE)
-		entry->prot |= LKMDBG_VMA_PROT_MAYWRITE;
-	if (vm_flags & VM_MAYEXEC)
-		entry->prot |= LKMDBG_VMA_PROT_MAYEXEC;
-}
-
 static int lkmdbg_vma_fill_name(struct mm_struct *mm, struct vm_area_struct *vma,
 				struct lkmdbg_vma_query_request *req,
 				struct lkmdbg_vma_entry *entry, char *names,
@@ -88,7 +52,7 @@ static int lkmdbg_vma_fill_name(struct mm_struct *mm, struct vm_area_struct *vma
 		name = vma->vm_file->f_path.dentry->d_name.name;
 		name_len = vma->vm_file->f_path.dentry->d_name.len + 1;
 	} else {
-		name = lkmdbg_vma_special_name(mm, vma, &entry->flags);
+		name = lkmdbg_target_vma_special_name(mm, vma, &entry->flags);
 	}
 
 	if (!name)
@@ -110,38 +74,19 @@ static void lkmdbg_vma_fill_entry(struct mm_struct *mm,
 				  struct vm_area_struct *vma,
 				  struct lkmdbg_vma_entry *entry)
 {
-	struct inode *inode = NULL;
-	u64 vm_flags = (u64)vma->vm_flags;
+	struct lkmdbg_target_vma_info info;
 
+	lkmdbg_target_vma_fill_info(mm, vma, &info);
 	memset(entry, 0, sizeof(*entry));
-	entry->start_addr = vma->vm_start;
-	entry->end_addr = vma->vm_end;
-	entry->pgoff = vma->vm_pgoff;
-	entry->vm_flags_raw = vm_flags;
-
-	lkmdbg_vma_fill_prot(entry, vma);
-
-	if (vm_flags & VM_SHARED)
-		entry->flags |= LKMDBG_VMA_FLAG_SHARED;
-	if (vm_flags & VM_PFNMAP)
-		entry->flags |= LKMDBG_VMA_FLAG_PFNMAP;
-	if (vm_flags & VM_IO)
-		entry->flags |= LKMDBG_VMA_FLAG_IO;
-
-	if (!vma->vm_file) {
-		entry->flags |= LKMDBG_VMA_FLAG_ANON;
-		lkmdbg_vma_special_name(mm, vma, &entry->flags);
-		return;
-	}
-
-	entry->flags |= LKMDBG_VMA_FLAG_FILE;
-	inode = file_inode(vma->vm_file);
-	if (!inode)
-		return;
-
-	entry->inode = inode->i_ino;
-	entry->dev_major = MAJOR(inode->i_sb->s_dev);
-	entry->dev_minor = MINOR(inode->i_sb->s_dev);
+	entry->start_addr = info.start_addr;
+	entry->end_addr = info.end_addr;
+	entry->pgoff = info.pgoff;
+	entry->inode = info.inode;
+	entry->vm_flags_raw = info.vm_flags_raw;
+	entry->prot = info.prot;
+	entry->flags = info.flags;
+	entry->dev_major = info.dev_major;
+	entry->dev_minor = info.dev_minor;
 }
 
 static long lkmdbg_vma_copy_reply(void __user *argp,

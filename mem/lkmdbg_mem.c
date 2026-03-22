@@ -265,53 +265,56 @@ static bool lkmdbg_page_try_pin_nofault(struct mm_struct *mm,
 	return false;
 }
 
-static void lkmdbg_page_fill_vma_flags(struct lkmdbg_page_entry *entry,
-				       struct vm_area_struct *vma)
-{
-	u64 vm_flags = (u64)vma->vm_flags;
-
-	entry->vm_flags_raw = vm_flags;
-	if (vm_flags & VM_READ)
-		entry->flags |= LKMDBG_PAGE_FLAG_PROT_READ;
-	if (vm_flags & VM_WRITE)
-		entry->flags |= LKMDBG_PAGE_FLAG_PROT_WRITE;
-	if (vm_flags & VM_EXEC)
-		entry->flags |= LKMDBG_PAGE_FLAG_PROT_EXEC;
-	if (vm_flags & VM_MAYREAD)
-		entry->flags |= LKMDBG_PAGE_FLAG_MAYREAD;
-	if (vm_flags & VM_MAYWRITE)
-		entry->flags |= LKMDBG_PAGE_FLAG_MAYWRITE;
-	if (vm_flags & VM_MAYEXEC)
-		entry->flags |= LKMDBG_PAGE_FLAG_MAYEXEC;
-	if (vm_flags & VM_SHARED)
-		entry->flags |= LKMDBG_PAGE_FLAG_SHARED;
-	if (vm_flags & VM_PFNMAP)
-		entry->flags |= LKMDBG_PAGE_FLAG_PFNMAP;
-	if (vm_flags & VM_IO)
-		entry->flags |= LKMDBG_PAGE_FLAG_IO;
-}
-
-static void lkmdbg_page_fill_metadata(struct lkmdbg_page_entry *entry,
+static void lkmdbg_page_fill_vma_info(struct mm_struct *mm,
+				      struct lkmdbg_page_entry *entry,
 				      struct vm_area_struct *vma,
 				      unsigned long page_addr)
 {
-	struct inode *inode;
+	struct lkmdbg_target_vma_info info;
 
-	entry->pgoff = vma->vm_pgoff +
-		       ((page_addr - vma->vm_start) >> PAGE_SHIFT);
-	if (!vma->vm_file) {
+	lkmdbg_target_vma_fill_info(mm, vma, &info);
+	entry->vm_flags_raw = info.vm_flags_raw;
+	entry->pgoff = info.pgoff +
+		       ((page_addr - info.start_addr) >> PAGE_SHIFT);
+	entry->inode = info.inode;
+	entry->dev_major = info.dev_major;
+	entry->dev_minor = info.dev_minor;
+
+	if (info.prot & LKMDBG_VMA_PROT_READ)
+		entry->flags |= LKMDBG_PAGE_FLAG_PROT_READ;
+	if (info.prot & LKMDBG_VMA_PROT_WRITE)
+		entry->flags |= LKMDBG_PAGE_FLAG_PROT_WRITE;
+	if (info.prot & LKMDBG_VMA_PROT_EXEC)
+		entry->flags |= LKMDBG_PAGE_FLAG_PROT_EXEC;
+	if (info.prot & LKMDBG_VMA_PROT_MAYREAD)
+		entry->flags |= LKMDBG_PAGE_FLAG_MAYREAD;
+	if (info.prot & LKMDBG_VMA_PROT_MAYWRITE)
+		entry->flags |= LKMDBG_PAGE_FLAG_MAYWRITE;
+	if (info.prot & LKMDBG_VMA_PROT_MAYEXEC)
+		entry->flags |= LKMDBG_PAGE_FLAG_MAYEXEC;
+	if (info.flags & LKMDBG_VMA_FLAG_SHARED)
+		entry->flags |= LKMDBG_PAGE_FLAG_SHARED;
+	if (info.flags & LKMDBG_VMA_FLAG_PFNMAP)
+		entry->flags |= LKMDBG_PAGE_FLAG_PFNMAP;
+	if (info.flags & LKMDBG_VMA_FLAG_IO)
+		entry->flags |= LKMDBG_PAGE_FLAG_IO;
+	if (info.flags & LKMDBG_VMA_FLAG_FILE)
+		entry->flags |= LKMDBG_PAGE_FLAG_FILE;
+	if (info.flags & LKMDBG_VMA_FLAG_ANON)
 		entry->flags |= LKMDBG_PAGE_FLAG_ANON;
-		return;
-	}
+}
 
-	entry->flags |= LKMDBG_PAGE_FLAG_FILE;
-	inode = file_inode(vma->vm_file);
-	if (!inode)
-		return;
-
-	entry->inode = inode->i_ino;
-	entry->dev_major = MAJOR(inode->i_sb->s_dev);
-	entry->dev_minor = MINOR(inode->i_sb->s_dev);
+static void lkmdbg_page_fill_pt_info(struct lkmdbg_page_entry *entry,
+				     const struct lkmdbg_target_pt_info *info)
+{
+	entry->pt_entry_raw = info->entry_raw;
+	entry->phys_addr = info->phys_addr;
+	entry->page_shift = info->page_shift;
+	entry->pt_level = info->level;
+	if (info->flags & LKMDBG_TARGET_PT_FLAG_PRESENT)
+		entry->flags |= LKMDBG_PAGE_FLAG_PT_PRESENT;
+	if (info->flags & LKMDBG_TARGET_PT_FLAG_HUGE)
+		entry->flags |= LKMDBG_PAGE_FLAG_PT_HUGE;
 }
 
 static void lkmdbg_page_probe_access(struct mm_struct *mm,
@@ -529,15 +532,22 @@ long lkmdbg_page_query(struct lkmdbg_session *session, void __user *argp)
 	while (cursor < end && filled < req.max_entries) {
 		struct lkmdbg_page_entry *entry = &entries[filled];
 		struct vm_area_struct *vma;
+		struct lkmdbg_target_pt_info pt_info;
 
 		memset(entry, 0, sizeof(*entry));
 		entry->page_addr = cursor;
 
+		ret = lkmdbg_target_pt_lookup_locked(mm, cursor, &pt_info);
+		if (ret) {
+			mmap_read_unlock(mm);
+			goto out;
+		}
+		lkmdbg_page_fill_pt_info(entry, &pt_info);
+
 		vma = find_vma(mm, cursor);
 		if (vma && cursor >= vma->vm_start && cursor < vma->vm_end) {
 			entry->flags |= LKMDBG_PAGE_FLAG_MAPPED;
-			lkmdbg_page_fill_vma_flags(entry, vma);
-			lkmdbg_page_fill_metadata(entry, vma, cursor);
+			lkmdbg_page_fill_vma_info(mm, entry, vma, cursor);
 			lkmdbg_page_probe_access(mm, entry);
 		}
 

@@ -122,6 +122,13 @@
 #define LKMDBG_PAGE_FLAG_SHARED 0x00004000U
 #define LKMDBG_PAGE_FLAG_PFNMAP 0x00008000U
 #define LKMDBG_PAGE_FLAG_IO 0x00010000U
+#define LKMDBG_PAGE_FLAG_PT_PRESENT 0x00020000U
+#define LKMDBG_PAGE_FLAG_PT_HUGE 0x00040000U
+
+#define LKMDBG_PAGE_LEVEL_NONE 0U
+#define LKMDBG_PAGE_LEVEL_PTE 1U
+#define LKMDBG_PAGE_LEVEL_PMD 2U
+#define LKMDBG_PAGE_LEVEL_PUD 3U
 
 #define LKMDBG_REMOTE_MAP_PROT_READ 0x00000001U
 #define LKMDBG_REMOTE_MAP_PROT_WRITE 0x00000002U
@@ -389,9 +396,13 @@ struct lkmdbg_page_entry {
 	__u64 pgoff;
 	__u64 inode;
 	__u64 vm_flags_raw;
+	__u64 pt_entry_raw;
+	__u64 phys_addr;
 	__u32 flags;
 	__u32 dev_major;
 	__u32 dev_minor;
+	__u32 page_shift;
+	__u32 pt_level;
 	__u32 reserved0;
 };
 

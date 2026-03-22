@@ -289,14 +289,13 @@ static int lkmdbg_remote_map_validate_range(struct mm_struct *mm, u64 remote_add
 					    u64 *vm_flags_out)
 {
 	struct vm_area_struct *vma;
-	u64 end_addr = remote_addr + length;
 	int ret;
 
 	mmap_read_lock(mm);
-	vma = find_vma(mm, remote_addr);
-	if (!vma || remote_addr < vma->vm_start || end_addr > vma->vm_end) {
+	ret = lkmdbg_target_vma_lookup_locked(mm, remote_addr, length, &vma);
+	if (ret) {
 		mmap_read_unlock(mm);
-		return -EINVAL;
+		return ret;
 	}
 
 	ret = lkmdbg_remote_map_vma_perms_ok(vma, prot);
@@ -314,7 +313,6 @@ static int lkmdbg_remote_map_prepare_local_file(struct mm_struct *mm,
 						u64 *offset_out)
 {
 	struct vm_area_struct *vma;
-	u64 end_addr = local_addr + length;
 	u64 offset;
 	int ret;
 
@@ -322,11 +320,9 @@ static int lkmdbg_remote_map_prepare_local_file(struct mm_struct *mm,
 		return -EINVAL;
 
 	mmap_read_lock(mm);
-	vma = find_vma(mm, local_addr);
-	if (!vma || local_addr < vma->vm_start || end_addr > vma->vm_end) {
-		mmap_read_unlock(mm);
-		return -EINVAL;
-	}
+	ret = lkmdbg_target_vma_lookup_locked(mm, local_addr, length, &vma);
+	if (ret)
+		goto out_unlock;
 
 	ret = lkmdbg_remote_map_vma_perms_ok(vma, prot);
 	if (ret)

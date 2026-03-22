@@ -41,20 +41,7 @@ static int lkmdbg_validate_image_query(struct lkmdbg_image_query_request *req)
 static void lkmdbg_image_fill_prot(struct lkmdbg_image_entry *entry,
 				   struct vm_area_struct *vma)
 {
-	u64 vm_flags = (u64)vma->vm_flags;
-
-	if (vm_flags & VM_READ)
-		entry->prot |= LKMDBG_VMA_PROT_READ;
-	if (vm_flags & VM_WRITE)
-		entry->prot |= LKMDBG_VMA_PROT_WRITE;
-	if (vm_flags & VM_EXEC)
-		entry->prot |= LKMDBG_VMA_PROT_EXEC;
-	if (vm_flags & VM_MAYREAD)
-		entry->prot |= LKMDBG_VMA_PROT_MAYREAD;
-	if (vm_flags & VM_MAYWRITE)
-		entry->prot |= LKMDBG_VMA_PROT_MAYWRITE;
-	if (vm_flags & VM_MAYEXEC)
-		entry->prot |= LKMDBG_VMA_PROT_MAYEXEC;
+	entry->prot |= lkmdbg_target_vm_prot_bits((u64)vma->vm_flags);
 }
 
 static bool lkmdbg_image_vma_supported(struct vm_area_struct *vma)

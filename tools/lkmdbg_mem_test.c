@@ -1340,6 +1340,7 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 {
 	struct page_query_buffer buf = { 0 };
 	struct lkmdbg_page_entry entry;
+	uint32_t expected_page_shift;
 	uint32_t nofault_flags = 0;
 	uint32_t force_read_flags = 0;
 	uint32_t force_write_flags = 0;
@@ -1350,6 +1351,7 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 		fprintf(stderr, "page query allocation failed\n");
 		return -1;
 	}
+	expected_page_shift = (uint32_t)__builtin_ctz(info->page_size);
 
 	memset(&entry, 0, sizeof(entry));
 	if (lookup_target_page(session_fd, info->nofault_addr, info->page_size,
@@ -1363,6 +1365,15 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 			    LKMDBG_PAGE_FLAG_FORCE_WRITE))) {
 		fprintf(stderr, "nofault page flags mismatch flags=0x%x\n",
 			entry.flags);
+		goto out;
+	}
+	if ((entry.flags & LKMDBG_PAGE_FLAG_PT_PRESENT) ||
+	    entry.pt_level != LKMDBG_PAGE_LEVEL_NONE ||
+	    entry.phys_addr != 0 || entry.page_shift != 0) {
+		fprintf(stderr,
+			"nofault page table state mismatch level=%u shift=%u phys=0x%" PRIx64 " flags=0x%x\n",
+			entry.pt_level, entry.page_shift,
+			(uint64_t)entry.phys_addr, entry.flags);
 		goto out;
 	}
 	nofault_flags = entry.flags;
@@ -1380,6 +1391,17 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 			entry.flags);
 		goto out;
 	}
+	if (!(entry.flags & LKMDBG_PAGE_FLAG_PT_PRESENT) ||
+	    entry.pt_level != LKMDBG_PAGE_LEVEL_PTE ||
+	    entry.page_shift != expected_page_shift ||
+	    entry.phys_addr == 0 || entry.pt_entry_raw == 0) {
+		fprintf(stderr,
+			"force-read page table mismatch level=%u shift=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x\n",
+			entry.pt_level, entry.page_shift,
+			(uint64_t)entry.phys_addr,
+			(uint64_t)entry.pt_entry_raw, entry.flags);
+		goto out;
+	}
 	force_read_flags = entry.flags;
 
 	memset(&entry, 0, sizeof(entry));
@@ -1393,6 +1415,17 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 	    (entry.flags & LKMDBG_PAGE_FLAG_NOFAULT_WRITE)) {
 		fprintf(stderr, "force-write page flags mismatch flags=0x%x\n",
 			entry.flags);
+		goto out;
+	}
+	if (!(entry.flags & LKMDBG_PAGE_FLAG_PT_PRESENT) ||
+	    entry.pt_level != LKMDBG_PAGE_LEVEL_PTE ||
+	    entry.page_shift != expected_page_shift ||
+	    entry.phys_addr == 0 || entry.pt_entry_raw == 0) {
+		fprintf(stderr,
+			"force-write page table mismatch level=%u shift=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x\n",
+			entry.pt_level, entry.page_shift,
+			(uint64_t)entry.phys_addr,
+			(uint64_t)entry.pt_entry_raw, entry.flags);
 		goto out;
 	}
 	force_write_flags = entry.flags;
@@ -1409,6 +1442,15 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 			"file page metadata mismatch flags=0x%x inode=%" PRIu64 " dev=%u:%u\n",
 			entry.flags, (uint64_t)entry.inode, entry.dev_major,
 			entry.dev_minor);
+		goto out;
+	}
+	if (!(entry.flags & LKMDBG_PAGE_FLAG_PT_PRESENT) ||
+	    entry.pt_level == LKMDBG_PAGE_LEVEL_NONE ||
+	    entry.phys_addr == 0 || entry.pt_entry_raw == 0) {
+		fprintf(stderr,
+			"file page table mismatch level=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x\n",
+			entry.pt_level, (uint64_t)entry.phys_addr,
+			(uint64_t)entry.pt_entry_raw, entry.flags);
 		goto out;
 	}
 
@@ -1646,6 +1688,20 @@ static void print_vma_prot(uint32_t prot, char out[7])
 	out[6] = '\0';
 }
 
+static const char *page_level_name(uint32_t level)
+{
+	switch (level) {
+	case LKMDBG_PAGE_LEVEL_PTE:
+		return "pte";
+	case LKMDBG_PAGE_LEVEL_PMD:
+		return "pmd";
+	case LKMDBG_PAGE_LEVEL_PUD:
+		return "pud";
+	default:
+		return "none";
+	}
+}
+
 static int dump_target_vmas(int session_fd)
 {
 	struct vma_query_buffer buf = { 0 };
@@ -1743,10 +1799,17 @@ static int dump_target_pages(int session_fd, uint64_t remote_addr,
 
 		for (i = 0; i < reply.entries_filled; i++) {
 			last_addr = buf.entries[i].page_addr;
-			printf("page=0x%" PRIx64 " flags=0x%x vm_flags=0x%" PRIx64 " pgoff=0x%" PRIx64 " inode=%" PRIu64 " dev=%u:%u\n",
+			printf("page=0x%" PRIx64 " flags=0x%x vm_flags=0x%" PRIx64
+			       " level=%s shift=%u pt=0x%" PRIx64
+			       " phys=0x%" PRIx64
+			       " pgoff=0x%" PRIx64 " inode=%" PRIu64 " dev=%u:%u\n",
 			       (uint64_t)buf.entries[i].page_addr,
 			       buf.entries[i].flags,
 			       (uint64_t)buf.entries[i].vm_flags_raw,
+			       page_level_name(buf.entries[i].pt_level),
+			       buf.entries[i].page_shift,
+			       (uint64_t)buf.entries[i].pt_entry_raw,
+			       (uint64_t)buf.entries[i].phys_addr,
 			       (uint64_t)buf.entries[i].pgoff,
 			       (uint64_t)buf.entries[i].inode,
 			       buf.entries[i].dev_major,

@@ -25,6 +25,7 @@
 struct mm_struct;
 struct seq_file;
 struct task_struct;
+struct vm_area_struct;
 struct lkmdbg_freezer;
 struct perf_event;
 
@@ -115,6 +116,29 @@ struct lkmdbg_symbols {
 	unsigned long do_sys_process_vm_writev_sym;
 	unsigned long access_remote_vm_sym;
 	unsigned long access_remote_vm_inner_sym;
+};
+
+struct lkmdbg_target_vma_info {
+	u64 start_addr;
+	u64 end_addr;
+	u64 pgoff;
+	u64 inode;
+	u64 vm_flags_raw;
+	u32 prot;
+	u32 flags;
+	u32 dev_major;
+	u32 dev_minor;
+};
+
+#define LKMDBG_TARGET_PT_FLAG_PRESENT 0x00000001U
+#define LKMDBG_TARGET_PT_FLAG_HUGE 0x00000002U
+
+struct lkmdbg_target_pt_info {
+	u64 entry_raw;
+	u64 phys_addr;
+	u32 level;
+	u32 page_shift;
+	u32 flags;
 };
 
 int lkmdbg_disable_kprobe_blacklist(void);
@@ -208,6 +232,17 @@ int lkmdbg_get_target_identity(struct lkmdbg_session *session, pid_t *tgid_out,
 			       pid_t *tid_out);
 int lkmdbg_get_target_thread(struct lkmdbg_session *session, pid_t tid_override,
 			     struct task_struct **task_out);
+u32 lkmdbg_target_vm_prot_bits(u64 vm_flags);
+const char *lkmdbg_target_vma_special_name(struct mm_struct *mm,
+					   struct vm_area_struct *vma,
+					   u32 *flags);
+void lkmdbg_target_vma_fill_info(struct mm_struct *mm,
+				 struct vm_area_struct *vma,
+				 struct lkmdbg_target_vma_info *info);
+int lkmdbg_target_vma_lookup_locked(struct mm_struct *mm, u64 addr, u64 length,
+				    struct vm_area_struct **vma_out);
+int lkmdbg_target_pt_lookup_locked(struct mm_struct *mm, unsigned long addr,
+				   struct lkmdbg_target_pt_info *info);
 long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_read(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_write(struct lkmdbg_session *session, void __user *argp);
