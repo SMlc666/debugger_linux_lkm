@@ -405,6 +405,7 @@ static const struct vm_operations_struct lkmdbg_remote_map_vm_ops = {
 static int lkmdbg_remote_map_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct lkmdbg_remote_map *map = file->private_data;
+	bool insert_pages;
 	vm_flags_t deny_may_flags = 0;
 	unsigned long addr;
 	unsigned long offset_pages;
@@ -434,9 +435,15 @@ static int lkmdbg_remote_map_mmap(struct file *file, struct vm_area_struct *vma)
 	    map_pages > map->page_count - offset_pages)
 		return -EINVAL;
 
-	lkmdbg_remote_map_vm_flags_set(vma,
-				      VM_DONTEXPAND | VM_DONTDUMP | VM_IO |
-					      VM_PFNMAP);
+	insert_pages = !!(map->flags & LKMDBG_REMOTE_MAP_FLAG_LOCAL_TO_TARGET);
+	if (insert_pages)
+		lkmdbg_remote_map_vm_flags_set(vma,
+					      VM_DONTEXPAND | VM_DONTDUMP |
+						      VM_MIXEDMAP);
+	else
+		lkmdbg_remote_map_vm_flags_set(vma,
+					      VM_DONTEXPAND | VM_DONTDUMP |
+						      VM_IO | VM_PFNMAP);
 	if (!(map->prot & LKMDBG_REMOTE_MAP_PROT_READ))
 		deny_may_flags |= VM_MAYREAD;
 	if (!(map->prot & LKMDBG_REMOTE_MAP_PROT_WRITE))
@@ -448,9 +455,15 @@ static int lkmdbg_remote_map_mmap(struct file *file, struct vm_area_struct *vma)
 
 	addr = vma->vm_start;
 	for (i = 0; i < map_pages; i++) {
-		ret = remap_pfn_range(vma, addr + (i * PAGE_SIZE),
-				      page_to_pfn(map->pages[offset_pages + i]),
-				      PAGE_SIZE, vma->vm_page_prot);
+		if (insert_pages) {
+			ret = vm_insert_page(vma, addr + (i * PAGE_SIZE),
+					     map->pages[offset_pages + i]);
+		} else {
+			ret = remap_pfn_range(
+				vma, addr + (i * PAGE_SIZE),
+				page_to_pfn(map->pages[offset_pages + i]),
+				PAGE_SIZE, vma->vm_page_prot);
+		}
 		if (ret)
 			return ret;
 	}
