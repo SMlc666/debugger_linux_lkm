@@ -126,6 +126,24 @@ enum lkmdbg_process_vm_write_hook_kind {
 };
 static enum lkmdbg_process_vm_write_hook_kind
 	lkmdbg_process_vm_write_hook_kind;
+static struct lkmdbg_inline_hook *lkmdbg_remote_vm_write_hook;
+static struct lkmdbg_hook_registry_entry *lkmdbg_remote_vm_write_registry;
+static int (*lkmdbg_access_remote_vm_orig)(struct mm_struct *mm,
+					       unsigned long addr, void *buf,
+					       int len, unsigned int gup_flags);
+static int (*lkmdbg_access_remote_vm_inner_orig)(struct mm_struct *mm,
+						     unsigned long addr,
+						     void *buf, int len,
+						     unsigned int gup_flags);
+static atomic_t lkmdbg_remote_vm_write_inflight = ATOMIC_INIT(0);
+static DECLARE_WAIT_QUEUE_HEAD(lkmdbg_remote_vm_write_waitq);
+enum lkmdbg_remote_vm_write_hook_kind {
+	LKMDBG_REMOTE_VM_WRITE_HOOK_NONE = 0,
+	LKMDBG_REMOTE_VM_WRITE_HOOK_ACCESS_REMOTE_VM,
+	LKMDBG_REMOTE_VM_WRITE_HOOK_INNER,
+};
+static enum lkmdbg_remote_vm_write_hook_kind
+	lkmdbg_remote_vm_write_hook_kind;
 #endif
 
 #ifdef CONFIG_ARM64
@@ -902,6 +920,55 @@ static size_t lkmdbg_mmu_collect_tgid_entries(
 	return count;
 }
 
+static size_t lkmdbg_mmu_collect_all_entries(struct lkmdbg_hwpoint **entries,
+					     size_t max_entries)
+{
+	struct lkmdbg_hwpoint *entry;
+	unsigned long irqflags;
+	size_t count = 0;
+
+	spin_lock_irqsave(&lkmdbg_mmu_hwpoint_lock, irqflags);
+	list_for_each_entry(entry, &lkmdbg_mmu_hwpoint_list, mmu_node) {
+		if (count == max_entries)
+			break;
+		lkmdbg_hwpoint_get(entry);
+		entries[count++] = entry;
+	}
+	spin_unlock_irqrestore(&lkmdbg_mmu_hwpoint_lock, irqflags);
+
+	return count;
+}
+
+static bool lkmdbg_mmu_range_overlaps_page(unsigned long addr, size_t len,
+					   unsigned long page_addr)
+{
+	if (!len)
+		return false;
+
+	if (addr <= page_addr)
+		return (page_addr - addr) < len;
+
+	return (addr - page_addr) < LKMDBG_MMU_BREAKPOINT_PAGE_SIZE;
+}
+
+static bool lkmdbg_mmu_entry_targets_mm(struct lkmdbg_hwpoint *entry,
+					struct mm_struct *mm)
+{
+	struct mm_struct *entry_mm;
+	bool match = false;
+
+	if (!entry || !mm)
+		return false;
+
+	entry_mm = lkmdbg_mmu_get_mm_by_tgid(entry->tgid);
+	if (!entry_mm)
+		return false;
+
+	match = entry_mm == mm;
+	mmput(entry_mm);
+	return match;
+}
+
 static void lkmdbg_mmu_recover_after_process_vm_write(
 	pid_t tgid, const struct iovec __user *rvec, unsigned long riovcnt,
 	ssize_t bytes_done)
@@ -920,6 +987,34 @@ static void lkmdbg_mmu_recover_after_process_vm_write(
 
 		if (!lkmdbg_mmu_iov_overlaps_page(rvec, riovcnt, bytes_done,
 						  entry->page_addr)) {
+			lkmdbg_hwpoint_put(entry);
+			continue;
+		}
+
+		lkmdbg_mmu_mark_disturbed(entry);
+		lkmdbg_mmu_refresh_entry_state(entry);
+		lkmdbg_hwpoint_put(entry);
+	}
+}
+
+static void lkmdbg_mmu_recover_after_remote_vm_write(struct mm_struct *mm,
+						     unsigned long addr,
+						     int bytes_done)
+{
+	struct lkmdbg_hwpoint *entries[LKMDBG_HWPOINT_MAX_ENTRIES];
+	size_t count;
+	size_t i;
+
+	if (!mm || bytes_done <= 0)
+		return;
+
+	count = lkmdbg_mmu_collect_all_entries(entries, ARRAY_SIZE(entries));
+	for (i = 0; i < count; i++) {
+		struct lkmdbg_hwpoint *entry = entries[i];
+
+		if (!lkmdbg_mmu_entry_targets_mm(entry, mm) ||
+		    !lkmdbg_mmu_range_overlaps_page(addr, bytes_done,
+						    entry->page_addr)) {
 			lkmdbg_hwpoint_put(entry);
 			continue;
 		}
@@ -973,6 +1068,42 @@ static ssize_t lkmdbg_do_sys_process_vm_writev_replacement(
 	return ret;
 }
 
+static int lkmdbg_access_remote_vm_replacement(struct mm_struct *mm,
+					       unsigned long addr, void *buf,
+					       int len, unsigned int gup_flags)
+{
+	int ret;
+
+	atomic_inc(&lkmdbg_remote_vm_write_inflight);
+	ret = lkmdbg_access_remote_vm_orig ?
+		      lkmdbg_access_remote_vm_orig(mm, addr, buf, len, gup_flags) :
+		      -ENOENT;
+	if (ret > 0 && (gup_flags & FOLL_WRITE))
+		lkmdbg_mmu_recover_after_remote_vm_write(mm, addr, ret);
+	if (atomic_dec_and_test(&lkmdbg_remote_vm_write_inflight))
+		wake_up_all(&lkmdbg_remote_vm_write_waitq);
+	return ret;
+}
+
+static int lkmdbg_access_remote_vm_inner_replacement(struct mm_struct *mm,
+						     unsigned long addr,
+						     void *buf, int len,
+						     unsigned int gup_flags)
+{
+	int ret;
+
+	atomic_inc(&lkmdbg_remote_vm_write_inflight);
+	ret = lkmdbg_access_remote_vm_inner_orig ?
+		      lkmdbg_access_remote_vm_inner_orig(mm, addr, buf, len,
+							 gup_flags) :
+		      -ENOENT;
+	if (ret > 0 && (gup_flags & FOLL_WRITE))
+		lkmdbg_mmu_recover_after_remote_vm_write(mm, addr, ret);
+	if (atomic_dec_and_test(&lkmdbg_remote_vm_write_inflight))
+		wake_up_all(&lkmdbg_remote_vm_write_waitq);
+	return ret;
+}
+
 static int lkmdbg_mmu_install_process_vm_write_hook(void)
 {
 	void *target;
@@ -1023,6 +1154,62 @@ static int lkmdbg_mmu_install_process_vm_write_hook(void)
 		lkmdbg_do_sys_process_vm_writev_orig = orig_fn;
 
 	lkmdbg_hook_registry_mark_installed(lkmdbg_process_vm_write_registry,
+					    target, orig_fn, 0);
+	pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
+		name, orig_fn, target);
+	return 0;
+}
+
+static int lkmdbg_mmu_install_remote_vm_write_hook(void)
+{
+	void *target;
+	void *orig_fn = NULL;
+	void *replacement;
+	const char *name;
+	int ret;
+
+	if (lkmdbg_remote_vm_write_hook)
+		return 0;
+
+	if (lkmdbg_symbols.access_remote_vm_inner_sym) {
+		target = (void *)lkmdbg_symbols.access_remote_vm_inner_sym;
+		replacement = lkmdbg_access_remote_vm_inner_replacement;
+		name = "__access_remote_vm";
+		lkmdbg_remote_vm_write_hook_kind =
+			LKMDBG_REMOTE_VM_WRITE_HOOK_INNER;
+	} else if (lkmdbg_symbols.access_remote_vm_sym) {
+		target = (void *)lkmdbg_symbols.access_remote_vm_sym;
+		replacement = lkmdbg_access_remote_vm_replacement;
+		name = "access_remote_vm";
+		lkmdbg_remote_vm_write_hook_kind =
+			LKMDBG_REMOTE_VM_WRITE_HOOK_ACCESS_REMOTE_VM;
+	} else {
+		return -ENOENT;
+	}
+
+	lkmdbg_remote_vm_write_registry =
+		lkmdbg_hook_registry_register(name, target, replacement);
+	if (!lkmdbg_remote_vm_write_registry)
+		return -ENOMEM;
+
+	ret = lkmdbg_hook_install(target, replacement,
+				  &lkmdbg_remote_vm_write_hook, &orig_fn);
+	if (ret) {
+		lkmdbg_hook_registry_unregister(lkmdbg_remote_vm_write_registry,
+						ret);
+		lkmdbg_remote_vm_write_registry = NULL;
+		lkmdbg_remote_vm_write_hook_kind =
+			LKMDBG_REMOTE_VM_WRITE_HOOK_NONE;
+		return ret;
+	}
+
+	if (lkmdbg_remote_vm_write_hook_kind ==
+	    LKMDBG_REMOTE_VM_WRITE_HOOK_INNER)
+		lkmdbg_access_remote_vm_inner_orig = orig_fn;
+	else
+		lkmdbg_access_remote_vm_orig = orig_fn;
+
+	lkmdbg_hook_registry_mark_installed(lkmdbg_remote_vm_write_registry,
 					    target, orig_fn, 0);
 	pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
 		name, orig_fn, target);
@@ -1119,6 +1306,10 @@ static int lkmdbg_register_mmu_hwpoint(struct lkmdbg_session *session,
 		return ret;
 
 	ret = lkmdbg_mmu_install_process_vm_write_hook();
+	if (ret && ret != -ENOENT)
+		return ret;
+
+	ret = lkmdbg_mmu_install_remote_vm_write_hook();
 	if (ret && ret != -ENOENT)
 		return ret;
 
@@ -1933,6 +2124,25 @@ void lkmdbg_thread_ctrl_exit(void)
 	lkmdbg_do_sys_process_vm_writev_orig = NULL;
 	lkmdbg_process_vm_write_hook_kind =
 		LKMDBG_PROCESS_VM_WRITE_HOOK_NONE;
+
+	if (lkmdbg_remote_vm_write_hook) {
+		if (!lkmdbg_hook_deactivate(lkmdbg_remote_vm_write_hook))
+			wait_event_timeout(
+				lkmdbg_remote_vm_write_waitq,
+				atomic_read(&lkmdbg_remote_vm_write_inflight) == 0,
+				msecs_to_jiffies(1000));
+		lkmdbg_hook_destroy(lkmdbg_remote_vm_write_hook);
+		lkmdbg_remote_vm_write_hook = NULL;
+	}
+	if (lkmdbg_remote_vm_write_registry) {
+		lkmdbg_hook_registry_unregister(lkmdbg_remote_vm_write_registry,
+						0);
+		lkmdbg_remote_vm_write_registry = NULL;
+	}
+	lkmdbg_access_remote_vm_orig = NULL;
+	lkmdbg_access_remote_vm_inner_orig = NULL;
+	lkmdbg_remote_vm_write_hook_kind =
+		LKMDBG_REMOTE_VM_WRITE_HOOK_NONE;
 #endif
 }
 

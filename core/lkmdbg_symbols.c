@@ -151,6 +151,14 @@ static int lkmdbg_resolve_runtime_symbols(void)
 	if (addr)
 		lkmdbg_symbols.do_sys_process_vm_writev_sym = addr;
 
+	addr = lkmdbg_lookup_runtime_symbol("access_remote_vm");
+	if (addr)
+		lkmdbg_symbols.access_remote_vm_sym = addr;
+
+	addr = lkmdbg_lookup_runtime_symbol("__access_remote_vm");
+	if (addr)
+		lkmdbg_symbols.access_remote_vm_inner_sym = addr;
+
 	return 0;
 }
 
@@ -186,4 +194,6 @@ void lkmdbg_symbols_exit(void)
 	lkmdbg_symbols.do_page_fault_sym = 0;
 	lkmdbg_symbols.process_vm_rw_sym = 0;
 	lkmdbg_symbols.do_sys_process_vm_writev_sym = 0;
+	lkmdbg_symbols.access_remote_vm_sym = 0;
+	lkmdbg_symbols.access_remote_vm_inner_sym = 0;
 }
