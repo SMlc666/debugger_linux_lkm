@@ -320,6 +320,37 @@ static bool lkmdbg_session_signal_mask_matches(const struct lkmdbg_session *sess
 	return !!(word & (1ULL << ((sig - 1U) % 64U)));
 }
 
+static bool lkmdbg_session_syscall_trace_matches(
+	const struct lkmdbg_session *session, pid_t tid, u32 phase,
+	s32 syscall_nr, u32 *mode_out)
+{
+	u32 phases;
+	u32 mode;
+	s32 filter_tid;
+	s32 filter_nr;
+
+	mode = READ_ONCE(session->syscall_trace_mode);
+	if (!(mode &
+	      (LKMDBG_SYSCALL_TRACE_MODE_EVENT | LKMDBG_SYSCALL_TRACE_MODE_STOP)))
+		return false;
+
+	phases = READ_ONCE(session->syscall_trace_phases);
+	if (!(phases & phase))
+		return false;
+
+	filter_tid = READ_ONCE(session->syscall_trace_tid);
+	if (filter_tid > 0 && filter_tid != tid)
+		return false;
+
+	filter_nr = READ_ONCE(session->syscall_trace_nr);
+	if (filter_nr >= 0 && filter_nr != syscall_nr)
+		return false;
+
+	if (mode_out)
+		*mode_out = mode;
+	return true;
+}
+
 void lkmdbg_session_broadcast_signal_event(pid_t target_tgid, u32 sig,
 					   pid_t tid, u32 flags,
 					   u64 siginfo_code, int result)
@@ -367,6 +398,62 @@ void lkmdbg_session_broadcast_signal_event(pid_t target_tgid, u32 sig,
 		lkmdbg_session_request_async_stop(session, LKMDBG_STOP_REASON_SIGNAL,
 						  target_tgid, tid, flags, 0,
 						  (u64)sig, siginfo_code, NULL);
+		lkmdbg_session_async_put(session);
+	}
+}
+
+void lkmdbg_session_broadcast_syscall_event(
+	pid_t target_tgid, pid_t tid, u32 phase, s32 syscall_nr, s64 retval,
+	const struct lkmdbg_regs_arm64 *regs)
+{
+	struct lkmdbg_session *session;
+	struct lkmdbg_session *stop_sessions[64];
+	u32 stop_count = 0;
+	unsigned long irqflags;
+
+	if (target_tgid <= 0 || tid <= 0 || syscall_nr < 0)
+		return;
+
+	spin_lock_irqsave(&lkmdbg_session_list_lock, irqflags);
+	list_for_each_entry(session, &lkmdbg_session_list, node) {
+		unsigned long session_irqflags;
+		pid_t session_tgid;
+		u32 mode;
+
+		session_tgid = READ_ONCE(session->target_tgid);
+		if (session_tgid != target_tgid)
+			continue;
+		if (!lkmdbg_session_syscall_trace_matches(session, tid, phase,
+							  syscall_nr, &mode))
+			continue;
+
+		if (mode & LKMDBG_SYSCALL_TRACE_MODE_EVENT) {
+			spin_lock_irqsave(&session->event_lock, session_irqflags);
+			lkmdbg_session_queue_event_locked(
+				session, LKMDBG_EVENT_TARGET_SYSCALL, 0,
+				target_tgid, tid, phase, (u64)(u32)syscall_nr,
+				(u64)retval);
+			spin_unlock_irqrestore(&session->event_lock,
+					       session_irqflags);
+			wake_up_interruptible(&session->readq);
+		}
+
+		if (!(mode & LKMDBG_SYSCALL_TRACE_MODE_STOP))
+			continue;
+
+		atomic_inc(&session->async_refs);
+		if (stop_count < ARRAY_SIZE(stop_sessions))
+			stop_sessions[stop_count++] = session;
+		else
+			lkmdbg_session_async_put(session);
+	}
+	spin_unlock_irqrestore(&lkmdbg_session_list_lock, irqflags);
+
+	while (stop_count > 0) {
+		session = stop_sessions[--stop_count];
+		lkmdbg_session_request_async_stop(
+			session, LKMDBG_STOP_REASON_SYSCALL, target_tgid, tid,
+			phase, 0, (u64)(u32)syscall_nr, (u64)retval, regs);
 		lkmdbg_session_async_put(session);
 	}
 }
@@ -692,6 +779,10 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_set_signal_config(session, argp);
 	case LKMDBG_IOC_GET_SIGNAL_CONFIG:
 		return lkmdbg_get_signal_config(session, argp);
+	case LKMDBG_IOC_SET_SYSCALL_TRACE:
+		return lkmdbg_set_syscall_trace(session, argp);
+	case LKMDBG_IOC_GET_SYSCALL_TRACE:
+		return lkmdbg_get_syscall_trace(session, argp);
 	case LKMDBG_IOC_GET_STOP_STATE:
 		return lkmdbg_get_stop_state(session, argp);
 	case LKMDBG_IOC_CONTINUE_TARGET:
@@ -763,6 +854,7 @@ int lkmdbg_open_session(void __user *argp)
 	INIT_WORK(&session->stop_work, lkmdbg_session_stop_workfn);
 	atomic_set(&session->async_refs, 0);
 	session->owner_tgid = current->tgid;
+	session->syscall_trace_nr = -1;
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.next_session_id++;

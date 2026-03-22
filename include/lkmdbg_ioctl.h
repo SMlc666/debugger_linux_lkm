@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 16
+#define LKMDBG_PROTO_VERSION 17
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -19,6 +19,7 @@
 #define LKMDBG_EVENT_TARGET_EXIT 34
 #define LKMDBG_EVENT_TARGET_SIGNAL 35
 #define LKMDBG_EVENT_TARGET_STOP 36
+#define LKMDBG_EVENT_TARGET_SYSCALL 37
 
 #define LKMDBG_THREAD_COMM_MAX 16
 
@@ -35,11 +36,19 @@
 #define LKMDBG_SIGNAL_EVENT_GROUP 0x00000001U
 #define LKMDBG_SIGNAL_CONFIG_STOP 0x00000001U
 
+#define LKMDBG_SYSCALL_TRACE_MODE_OFF 0U
+#define LKMDBG_SYSCALL_TRACE_MODE_EVENT 0x00000001U
+#define LKMDBG_SYSCALL_TRACE_MODE_STOP 0x00000002U
+
+#define LKMDBG_SYSCALL_TRACE_PHASE_ENTER 0x00000001U
+#define LKMDBG_SYSCALL_TRACE_PHASE_EXIT 0x00000002U
+
 #define LKMDBG_STOP_REASON_FREEZE 1U
 #define LKMDBG_STOP_REASON_BREAKPOINT 2U
 #define LKMDBG_STOP_REASON_WATCHPOINT 3U
 #define LKMDBG_STOP_REASON_SINGLE_STEP 4U
 #define LKMDBG_STOP_REASON_SIGNAL 5U
+#define LKMDBG_STOP_REASON_SYSCALL 6U
 
 #define LKMDBG_STOP_FLAG_ACTIVE 0x00000001U
 #define LKMDBG_STOP_FLAG_FROZEN 0x00000002U
@@ -633,6 +642,17 @@ struct lkmdbg_signal_config_request {
 	__u32 reserved0;
 };
 
+struct lkmdbg_syscall_trace_request {
+	__u32 version;
+	__u32 size;
+	__s32 tid;
+	__s32 syscall_nr;
+	__u32 mode;
+	__u32 phases;
+	__u32 flags;
+	__u32 reserved0;
+};
+
 #define LKMDBG_IOC_OPEN_SESSION \
 	_IOW(LKMDBG_IOC_MAGIC, 0x01, struct lkmdbg_open_session_request)
 #define LKMDBG_IOC_GET_STATUS \
@@ -700,5 +720,9 @@ struct lkmdbg_signal_config_request {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x2D, struct lkmdbg_remote_alloc_handle_request)
 #define LKMDBG_IOC_QUERY_REMOTE_ALLOCS \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x2E, struct lkmdbg_remote_alloc_query_request)
+#define LKMDBG_IOC_SET_SYSCALL_TRACE \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x2F, struct lkmdbg_syscall_trace_request)
+#define LKMDBG_IOC_GET_SYSCALL_TRACE \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x30, struct lkmdbg_syscall_trace_request)
 
 #endif

@@ -94,10 +94,14 @@ static bool lkmdbg_trace_fork_registered;
 static bool lkmdbg_trace_exec_registered;
 static bool lkmdbg_trace_exit_registered;
 static bool lkmdbg_trace_signal_registered;
+static bool lkmdbg_trace_sys_enter_registered;
+static bool lkmdbg_trace_sys_exit_registered;
 static struct tracepoint *lkmdbg_trace_fork_tp;
 static struct tracepoint *lkmdbg_trace_exec_tp;
 static struct tracepoint *lkmdbg_trace_exit_tp;
 static struct tracepoint *lkmdbg_trace_signal_tp;
+static struct tracepoint *lkmdbg_trace_sys_enter_tp;
+static struct tracepoint *lkmdbg_trace_sys_exit_tp;
 static bool lkmdbg_perf_disable_missing_logged;
 #ifdef CONFIG_ARM64
 static LIST_HEAD(lkmdbg_mmu_hwpoint_list);
@@ -340,6 +344,38 @@ static int lkmdbg_validate_signal_config(
 		return -EINVAL;
 
 	if (req->flags & ~LKMDBG_SIGNAL_CONFIG_STOP)
+		return -EINVAL;
+
+	return 0;
+}
+
+static int lkmdbg_validate_syscall_trace_request(
+	struct lkmdbg_syscall_trace_request *req)
+{
+	u32 valid_modes = LKMDBG_SYSCALL_TRACE_MODE_EVENT |
+			  LKMDBG_SYSCALL_TRACE_MODE_STOP;
+	u32 valid_phases = LKMDBG_SYSCALL_TRACE_PHASE_ENTER |
+			    LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
+
+	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
+		return -EINVAL;
+
+	if (req->flags)
+		return -EINVAL;
+
+	if (req->tid < 0 || req->syscall_nr < -1)
+		return -EINVAL;
+
+	if (req->mode & ~valid_modes)
+		return -EINVAL;
+
+	if (!req->mode) {
+		if (req->phases)
+			return -EINVAL;
+		return 0;
+	}
+
+	if (!req->phases || (req->phases & ~valid_phases))
 		return -EINVAL;
 
 	return 0;
@@ -1629,6 +1665,53 @@ static void lkmdbg_trace_signal_generate(void *data, int sig,
 		group ? LKMDBG_SIGNAL_EVENT_GROUP : 0, siginfo_code, result);
 }
 
+static void lkmdbg_trace_raw_sys_enter(void *data, struct pt_regs *regs,
+				       long id)
+{
+	struct lkmdbg_regs_arm64 *stop_regs_ptr = NULL;
+
+	(void)data;
+
+	if (!regs || current->tgid <= 0 || current->pid <= 0 || id < 0)
+		return;
+
+#ifdef CONFIG_ARM64
+	struct lkmdbg_regs_arm64 stop_regs;
+
+	lkmdbg_regs_arm64_export_stop(&stop_regs, regs);
+	stop_regs_ptr = &stop_regs;
+#endif
+	lkmdbg_session_broadcast_syscall_event(
+		current->tgid, current->pid, LKMDBG_SYSCALL_TRACE_PHASE_ENTER,
+		(s32)id, 0, stop_regs_ptr);
+}
+
+static void lkmdbg_trace_raw_sys_exit(void *data, struct pt_regs *regs,
+				      long ret)
+{
+	struct lkmdbg_regs_arm64 *stop_regs_ptr = NULL;
+	long nr;
+
+	(void)data;
+
+	if (!regs || current->tgid <= 0 || current->pid <= 0)
+		return;
+
+	nr = syscall_get_nr(current, regs);
+	if (nr < 0)
+		return;
+
+#ifdef CONFIG_ARM64
+	struct lkmdbg_regs_arm64 stop_regs;
+
+	lkmdbg_regs_arm64_export_stop(&stop_regs, regs);
+	stop_regs_ptr = &stop_regs;
+#endif
+	lkmdbg_session_broadcast_syscall_event(
+		current->tgid, current->pid, LKMDBG_SYSCALL_TRACE_PHASE_EXIT,
+		(s32)nr, (s64)ret, stop_regs_ptr);
+}
+
 struct lkmdbg_tracepoint_lookup {
 	const char *name;
 	struct tracepoint *match;
@@ -2007,6 +2090,32 @@ static int lkmdbg_register_trace_hooks(void)
 		pr_info("lkmdbg: signal_generate tracepoint unavailable\n");
 	}
 
+	lkmdbg_trace_sys_enter_tp = lkmdbg_find_tracepoint("sys_enter");
+	if (lkmdbg_trace_sys_enter_tp) {
+		ret = register_fn(lkmdbg_trace_sys_enter_tp,
+				  (void *)lkmdbg_trace_raw_sys_enter, NULL);
+		if (!ret)
+			lkmdbg_trace_sys_enter_registered = true;
+		else
+			pr_warn("lkmdbg: raw sys_enter trace hook failed ret=%d\n",
+				ret);
+	} else {
+		pr_info("lkmdbg: raw sys_enter tracepoint unavailable\n");
+	}
+
+	lkmdbg_trace_sys_exit_tp = lkmdbg_find_tracepoint("sys_exit");
+	if (lkmdbg_trace_sys_exit_tp) {
+		ret = register_fn(lkmdbg_trace_sys_exit_tp,
+				  (void *)lkmdbg_trace_raw_sys_exit, NULL);
+		if (!ret)
+			lkmdbg_trace_sys_exit_registered = true;
+		else
+			pr_warn("lkmdbg: raw sys_exit trace hook failed ret=%d\n",
+				ret);
+	} else {
+		pr_info("lkmdbg: raw sys_exit tracepoint unavailable\n");
+	}
+
 	return 0;
 }
 
@@ -2071,12 +2180,75 @@ long lkmdbg_get_signal_config(struct lkmdbg_session *session, void __user *argp)
 	return 0;
 }
 
+long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_syscall_trace_request req;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	if (lkmdbg_validate_syscall_trace_request(&req))
+		return -EINVAL;
+
+	mutex_lock(&session->lock);
+	session->syscall_trace_tid = req.tid;
+	session->syscall_trace_nr = req.syscall_nr;
+	session->syscall_trace_mode = req.mode;
+	session->syscall_trace_phases = req.phases;
+	mutex_unlock(&session->lock);
+
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
+}
+
+long lkmdbg_get_syscall_trace(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_syscall_trace_request req;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	if (req.version != LKMDBG_PROTO_VERSION || req.size != sizeof(req) ||
+	    req.flags)
+		return -EINVAL;
+
+	mutex_lock(&session->lock);
+	req.tid = session->syscall_trace_tid;
+	req.syscall_nr = session->syscall_trace_nr;
+	req.mode = session->syscall_trace_mode;
+	req.phases = session->syscall_trace_phases;
+	mutex_unlock(&session->lock);
+
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
+}
+
 void lkmdbg_thread_ctrl_exit(void)
 {
 	lkmdbg_tracepoint_probe_unregister_fn unregister_fn;
 
 	unregister_fn = (lkmdbg_tracepoint_probe_unregister_fn)
 		lkmdbg_symbols.tracepoint_probe_unregister_sym;
+
+	if (unregister_fn && lkmdbg_trace_sys_exit_registered &&
+	    lkmdbg_trace_sys_exit_tp) {
+		unregister_fn(lkmdbg_trace_sys_exit_tp,
+			      (void *)lkmdbg_trace_raw_sys_exit, NULL);
+		lkmdbg_trace_sys_exit_registered = false;
+	}
+	lkmdbg_trace_sys_exit_tp = NULL;
+
+	if (unregister_fn && lkmdbg_trace_sys_enter_registered &&
+	    lkmdbg_trace_sys_enter_tp) {
+		unregister_fn(lkmdbg_trace_sys_enter_tp,
+			      (void *)lkmdbg_trace_raw_sys_enter, NULL);
+		lkmdbg_trace_sys_enter_registered = false;
+	}
+	lkmdbg_trace_sys_enter_tp = NULL;
 
 	if (unregister_fn && lkmdbg_trace_signal_registered &&
 	    lkmdbg_trace_signal_tp) {

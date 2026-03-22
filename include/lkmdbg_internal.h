@@ -173,6 +173,10 @@ struct lkmdbg_session {
 	u64 next_remote_alloc_id;
 	u64 signal_mask_words[2];
 	u32 signal_flags;
+	s32 syscall_trace_tid;
+	s32 syscall_trace_nr;
+	u32 syscall_trace_mode;
+	u32 syscall_trace_phases;
 	pid_t step_tgid;
 	pid_t step_tid;
 	bool step_armed;
@@ -239,6 +243,9 @@ void lkmdbg_session_broadcast_target_event(pid_t target_tgid, u32 type,
 void lkmdbg_session_broadcast_signal_event(pid_t target_tgid, u32 sig,
 					   pid_t tid, u32 flags,
 					   u64 siginfo_code, int result);
+void lkmdbg_session_broadcast_syscall_event(
+	pid_t target_tgid, pid_t tid, u32 phase, s32 syscall_nr, s64 retval,
+	const struct lkmdbg_regs_arm64 *regs);
 int lkmdbg_get_target_mm(struct lkmdbg_session *session,
 			 struct mm_struct **mm_out);
 int lkmdbg_get_target_identity(struct lkmdbg_session *session, pid_t *tgid_out,
@@ -308,6 +315,8 @@ long lkmdbg_get_regs(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_set_regs(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_set_signal_config(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_get_signal_config(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_get_syscall_trace(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_get_stop_state(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_continue_target(struct lkmdbg_session *session, void __user *argp);
 void lkmdbg_session_commit_stop(struct lkmdbg_session *session, u32 reason,
