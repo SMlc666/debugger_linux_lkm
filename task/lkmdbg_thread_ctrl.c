@@ -104,8 +104,17 @@ static LIST_HEAD(lkmdbg_mmu_hwpoint_list);
 static DEFINE_SPINLOCK(lkmdbg_mmu_hwpoint_lock);
 static struct lkmdbg_inline_hook *lkmdbg_do_page_fault_hook;
 static struct lkmdbg_hook_registry_entry *lkmdbg_do_page_fault_registry;
+enum lkmdbg_page_fault_hook_kind {
+	LKMDBG_PAGE_FAULT_HOOK_NONE = 0,
+	LKMDBG_PAGE_FAULT_HOOK_DO_PAGE_FAULT,
+	LKMDBG_PAGE_FAULT_HOOK_DO_PAGE_FAULT_INNER,
+};
+static enum lkmdbg_page_fault_hook_kind lkmdbg_do_page_fault_hook_kind;
 static int (*lkmdbg_do_page_fault_orig)(unsigned long far, unsigned long esr,
 					struct pt_regs *regs);
+static vm_fault_t (*lkmdbg_do_page_fault_inner_orig)(
+	struct mm_struct *mm, struct vm_area_struct *vma, unsigned long addr,
+	unsigned int mm_flags, unsigned long vm_flags, struct pt_regs *regs);
 static atomic_t lkmdbg_do_page_fault_inflight = ATOMIC_INIT(0);
 static DECLARE_WAIT_QUEUE_HEAD(lkmdbg_do_page_fault_waitq);
 static struct lkmdbg_inline_hook *lkmdbg_process_vm_write_hook;
@@ -155,6 +164,9 @@ static int lkmdbg_user_step_handler(struct pt_regs *regs, unsigned long esr);
 static int lkmdbg_do_page_fault_replacement(unsigned long far,
 					    unsigned long esr,
 					    struct pt_regs *regs);
+static vm_fault_t lkmdbg_do_page_fault_inner_replacement(
+	struct mm_struct *mm, struct vm_area_struct *vma, unsigned long addr,
+	unsigned int mm_flags, unsigned long vm_flags, struct pt_regs *regs);
 
 static struct step_hook lkmdbg_user_step_hook = {
 	.fn = lkmdbg_user_step_handler,
@@ -681,35 +693,52 @@ static int lkmdbg_mmu_refresh_entry_state(struct lkmdbg_hwpoint *entry)
 static int lkmdbg_mmu_install_page_fault_hook(void)
 {
 	void *target;
+	void *replacement;
 	void *orig_fn = NULL;
+	const char *name;
 	int ret;
 
 	if (lkmdbg_do_page_fault_hook)
 		return 0;
-	if (!lkmdbg_symbols.do_page_fault_sym)
+	if (lkmdbg_symbols.do_page_fault_inner_sym) {
+		target = (void *)lkmdbg_symbols.do_page_fault_inner_sym;
+		replacement = lkmdbg_do_page_fault_inner_replacement;
+		name = "__do_page_fault";
+		lkmdbg_do_page_fault_hook_kind =
+			LKMDBG_PAGE_FAULT_HOOK_DO_PAGE_FAULT_INNER;
+	} else if (lkmdbg_symbols.do_page_fault_sym) {
+		target = (void *)lkmdbg_symbols.do_page_fault_sym;
+		replacement = lkmdbg_do_page_fault_replacement;
+		name = "do_page_fault";
+		lkmdbg_do_page_fault_hook_kind =
+			LKMDBG_PAGE_FAULT_HOOK_DO_PAGE_FAULT;
+	} else {
 		return -ENOENT;
-
-	target = (void *)lkmdbg_symbols.do_page_fault_sym;
+	}
 
 	lkmdbg_do_page_fault_registry =
-		lkmdbg_hook_registry_register("do_page_fault", target,
-					      lkmdbg_do_page_fault_replacement);
+		lkmdbg_hook_registry_register(name, target, replacement);
 	if (!lkmdbg_do_page_fault_registry)
 		return -ENOMEM;
 
-	ret = lkmdbg_hook_install(target, lkmdbg_do_page_fault_replacement,
+	ret = lkmdbg_hook_install(target, replacement,
 				  &lkmdbg_do_page_fault_hook, &orig_fn);
 	if (ret) {
 		lkmdbg_hook_registry_unregister(lkmdbg_do_page_fault_registry, ret);
 		lkmdbg_do_page_fault_registry = NULL;
+		lkmdbg_do_page_fault_hook_kind = LKMDBG_PAGE_FAULT_HOOK_NONE;
 		return ret;
 	}
 
-	lkmdbg_do_page_fault_orig = orig_fn;
+	if (lkmdbg_do_page_fault_hook_kind ==
+	    LKMDBG_PAGE_FAULT_HOOK_DO_PAGE_FAULT_INNER)
+		lkmdbg_do_page_fault_inner_orig = orig_fn;
+	else
+		lkmdbg_do_page_fault_orig = orig_fn;
 	lkmdbg_hook_registry_mark_installed(lkmdbg_do_page_fault_registry, target,
 						orig_fn, 0);
-	pr_info("lkmdbg: runtime hook active target=do_page_fault origin=%px trampoline=%px\n",
-		target, orig_fn);
+	pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
+		name, orig_fn, target);
 	return 0;
 }
 
@@ -1660,50 +1689,40 @@ static int lkmdbg_mmu_queue_step_rearm(struct lkmdbg_hwpoint *entry)
 	return 0;
 }
 
-static int lkmdbg_do_page_fault_replacement(unsigned long far,
-					    unsigned long esr,
-					    struct pt_regs *regs)
+static bool lkmdbg_mmu_try_handle_fault(struct mm_struct *mm,
+					unsigned long addr, u32 actual_type,
+					struct pt_regs *regs)
 {
 	struct lkmdbg_hwpoint *entry = NULL;
 	struct lkmdbg_regs_arm64 stop_regs;
 	pte_t current_pte;
 	u64 cycle_hits;
 	u64 ip;
-	u32 actual_type;
 	u32 reason;
 	unsigned long vm_flags = 0;
 	unsigned long irqflags;
 	int ret;
 
-	atomic_inc(&lkmdbg_do_page_fault_inflight);
-
-	if (!user_mode(regs) || !current->mm ||
-	    !lkmdbg_mmu_fault_from_user(esr))
-		goto passthrough;
-
-	actual_type = lkmdbg_mmu_fault_access_type(esr);
-	if (!actual_type)
-		goto passthrough;
+	if (!mm || !regs || !actual_type)
+		return false;
 
 	ip = instruction_pointer(regs);
 	spin_lock_irqsave(&lkmdbg_mmu_hwpoint_lock, irqflags);
 	entry = lkmdbg_mmu_find_breakpoint_locked(current->tgid,
-						  (unsigned long)far &
-							  PAGE_MASK);
+						  addr & PAGE_MASK);
 	if (entry)
 		lkmdbg_hwpoint_get(entry);
 	spin_unlock_irqrestore(&lkmdbg_mmu_hwpoint_lock, irqflags);
 	if (!entry)
-		goto passthrough;
+		return false;
 
-	ret = lkmdbg_pte_capture(current->mm, entry->page_addr, &current_pte,
-				 &vm_flags);
+	ret = lkmdbg_pte_capture(mm, entry->page_addr, &current_pte, &vm_flags);
 	if (ret) {
 		entry->armed = false;
 		lkmdbg_mmu_mark_state(entry, LKMDBG_HWPOINT_STATE_LOST,
 				      LKMDBG_HWPOINT_STATE_MUTATED);
 		lkmdbg_hwpoint_put(entry);
-		goto passthrough;
+		return false;
 	}
 
 	if (!entry->armed ||
@@ -1713,32 +1732,34 @@ static int lkmdbg_do_page_fault_replacement(unsigned long far,
 		lkmdbg_mmu_mark_state(entry, LKMDBG_HWPOINT_STATE_MUTATED,
 				      LKMDBG_HWPOINT_STATE_LOST);
 		lkmdbg_hwpoint_put(entry);
-		goto passthrough;
+		return false;
 	}
 
-	ret = lkmdbg_mmu_restore_baseline(current->mm, entry);
+	ret = lkmdbg_mmu_restore_baseline(mm, entry);
 	if (ret) {
 		entry->armed = false;
 		lkmdbg_mmu_mark_state(entry, LKMDBG_HWPOINT_STATE_LOST,
 				      LKMDBG_HWPOINT_STATE_MUTATED);
 		lkmdbg_hwpoint_put(entry);
-		goto passthrough;
+		return false;
 	}
 
 	entry->armed = false;
 	if (!(entry->type & actual_type)) {
-		if (lkmdbg_pte_allows_access(__pte(entry->mmu_baseline_pte),
-					     entry->mmu_baseline_vm_flags,
-					     actual_type) &&
-		    !lkmdbg_mmu_queue_step_rearm(entry)) {
+		if (!lkmdbg_pte_allows_access(__pte(entry->mmu_baseline_pte),
+					      entry->mmu_baseline_vm_flags,
+					      actual_type)) {
 			lkmdbg_hwpoint_put(entry);
-			if (atomic_dec_and_test(&lkmdbg_do_page_fault_inflight))
-				wake_up_all(&lkmdbg_do_page_fault_waitq);
-			return 0;
+			return false;
+		}
+
+		if (!lkmdbg_mmu_queue_step_rearm(entry)) {
+			lkmdbg_hwpoint_put(entry);
+			return true;
 		}
 
 		lkmdbg_hwpoint_put(entry);
-		goto passthrough;
+		return false;
 	}
 
 	reason = actual_type == LKMDBG_HWPOINT_TYPE_EXEC ?
@@ -1761,18 +1782,11 @@ static int lkmdbg_do_page_fault_replacement(unsigned long far,
 	if (!lkmdbg_hwpoint_threshold_reached(entry, cycle_hits)) {
 		if (lkmdbg_pte_allows_access(__pte(entry->mmu_baseline_pte),
 					     entry->mmu_baseline_vm_flags,
-					     actual_type) &&
-		    !lkmdbg_mmu_queue_step_rearm(entry)) {
-			lkmdbg_hwpoint_put(entry);
-			if (atomic_dec_and_test(&lkmdbg_do_page_fault_inflight))
-				wake_up_all(&lkmdbg_do_page_fault_waitq);
-			return 0;
-		}
+					     actual_type))
+			lkmdbg_mmu_queue_step_rearm(entry);
 
 		lkmdbg_hwpoint_put(entry);
-		if (atomic_dec_and_test(&lkmdbg_do_page_fault_inflight))
-			wake_up_all(&lkmdbg_do_page_fault_waitq);
-		return 0;
+		return true;
 	}
 
 	if (lkmdbg_hwpoint_is_oneshot(entry))
@@ -1782,18 +1796,11 @@ static int lkmdbg_do_page_fault_replacement(unsigned long far,
 		if (!entry->oneshot_complete &&
 		    lkmdbg_pte_allows_access(__pte(entry->mmu_baseline_pte),
 					     entry->mmu_baseline_vm_flags,
-					     actual_type) &&
-		    !lkmdbg_mmu_queue_step_rearm(entry)) {
-			lkmdbg_hwpoint_put(entry);
-			if (atomic_dec_and_test(&lkmdbg_do_page_fault_inflight))
-				wake_up_all(&lkmdbg_do_page_fault_waitq);
-			return 0;
-		}
+					     actual_type))
+			lkmdbg_mmu_queue_step_rearm(entry);
 
 		lkmdbg_hwpoint_put(entry);
-		if (atomic_dec_and_test(&lkmdbg_do_page_fault_inflight))
-			wake_up_all(&lkmdbg_do_page_fault_waitq);
-		return 0;
+		return true;
 	}
 
 	if (!atomic_xchg(&entry->stop_latched, 1)) {
@@ -1806,13 +1813,74 @@ static int lkmdbg_do_page_fault_replacement(unsigned long far,
 	}
 
 	lkmdbg_hwpoint_put(entry);
-	if (atomic_dec_and_test(&lkmdbg_do_page_fault_inflight))
-		wake_up_all(&lkmdbg_do_page_fault_waitq);
-	return 0;
+	return true;
+}
+
+static int lkmdbg_do_page_fault_replacement(unsigned long far,
+					    unsigned long esr,
+					    struct pt_regs *regs)
+{
+	u32 actual_type;
+	int ret;
+
+	atomic_inc(&lkmdbg_do_page_fault_inflight);
+
+	if (!user_mode(regs) || !current->mm ||
+	    !lkmdbg_mmu_fault_from_user(esr))
+		goto passthrough;
+
+	actual_type = lkmdbg_mmu_fault_access_type(esr);
+	if (!actual_type)
+		goto passthrough;
+
+	if (lkmdbg_mmu_try_handle_fault(current->mm, (unsigned long)far,
+					actual_type, regs)) {
+		if (atomic_dec_and_test(&lkmdbg_do_page_fault_inflight))
+			wake_up_all(&lkmdbg_do_page_fault_waitq);
+		return 0;
+	}
 
 passthrough:
 	ret = lkmdbg_do_page_fault_orig ?
 		      lkmdbg_do_page_fault_orig(far, esr, regs) :
+		      0;
+	if (atomic_dec_and_test(&lkmdbg_do_page_fault_inflight))
+		wake_up_all(&lkmdbg_do_page_fault_waitq);
+	return ret;
+}
+
+static vm_fault_t lkmdbg_do_page_fault_inner_replacement(
+	struct mm_struct *mm, struct vm_area_struct *vma, unsigned long addr,
+	unsigned int mm_flags, unsigned long vm_flags, struct pt_regs *regs)
+{
+	vm_fault_t ret;
+	u32 actual_type;
+
+	(void)vma;
+	(void)vm_flags;
+
+	atomic_inc(&lkmdbg_do_page_fault_inflight);
+
+	if (!(mm_flags & FAULT_FLAG_USER) || !user_mode(regs) || !mm)
+		goto passthrough;
+
+	if (mm_flags & FAULT_FLAG_INSTRUCTION)
+		actual_type = LKMDBG_HWPOINT_TYPE_EXEC;
+	else if (mm_flags & FAULT_FLAG_WRITE)
+		actual_type = LKMDBG_HWPOINT_TYPE_WRITE;
+	else
+		actual_type = LKMDBG_HWPOINT_TYPE_READ;
+
+	if (lkmdbg_mmu_try_handle_fault(mm, addr, actual_type, regs)) {
+		if (atomic_dec_and_test(&lkmdbg_do_page_fault_inflight))
+			wake_up_all(&lkmdbg_do_page_fault_waitq);
+		return 0;
+	}
+
+passthrough:
+	ret = lkmdbg_do_page_fault_inner_orig ?
+		      lkmdbg_do_page_fault_inner_orig(mm, vma, addr, mm_flags,
+						      vm_flags, regs) :
 		      0;
 	if (atomic_dec_and_test(&lkmdbg_do_page_fault_inflight))
 		wake_up_all(&lkmdbg_do_page_fault_waitq);
@@ -2060,7 +2128,9 @@ void lkmdbg_thread_ctrl_exit(void)
 		lkmdbg_hook_registry_unregister(lkmdbg_do_page_fault_registry, 0);
 		lkmdbg_do_page_fault_registry = NULL;
 	}
+	lkmdbg_do_page_fault_hook_kind = LKMDBG_PAGE_FAULT_HOOK_NONE;
 	lkmdbg_do_page_fault_orig = NULL;
+	lkmdbg_do_page_fault_inner_orig = NULL;
 
 	if (lkmdbg_process_vm_write_hook) {
 		if (!lkmdbg_hook_deactivate(lkmdbg_process_vm_write_hook))
