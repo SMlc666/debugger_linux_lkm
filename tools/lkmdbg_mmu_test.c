@@ -25,6 +25,7 @@
 #define QUERY_BATCH 16U
 #define STOP_TIMEOUT_MS 5000
 #define NO_EVENT_TIMEOUT_MS 400
+#define EXTERNAL_REPEAT_ROUNDS 8U
 
 struct child_info {
 	uintptr_t data_addr;
@@ -58,6 +59,14 @@ enum {
 	CHILD_OP_MPROTECT_MUTATE_READ = 9,
 	CHILD_OP_MUNMAP_LOST = 10,
 	CHILD_OP_EXIT = 11,
+};
+
+enum external_op_kind {
+	EXTERNAL_OP_PROCESS_VM_READ = 0,
+	EXTERNAL_OP_PROCESS_VM_WRITE,
+	EXTERNAL_OP_MINCORE,
+	EXTERNAL_OP_MAPS,
+	EXTERNAL_OP_PAGEMAP,
 };
 
 static ssize_t read_full(int fd, void *buf, size_t len)
@@ -872,6 +881,107 @@ static int check_process_vm_write(pid_t pid, uintptr_t remote_addr)
 	return -1;
 }
 
+static const char *external_op_name(enum external_op_kind kind)
+{
+	switch (kind) {
+	case EXTERNAL_OP_PROCESS_VM_READ:
+		return "process_vm_read";
+	case EXTERNAL_OP_PROCESS_VM_WRITE:
+		return "process_vm_write";
+	case EXTERNAL_OP_MINCORE:
+		return "mincore";
+	case EXTERNAL_OP_MAPS:
+		return "maps";
+	case EXTERNAL_OP_PAGEMAP:
+		return "pagemap";
+	default:
+		return "unknown";
+	}
+}
+
+static int validate_external_hwpoint_state(int session_fd, uint64_t id,
+					   const char *label,
+					   uint32_t *state_out)
+{
+	struct lkmdbg_hwpoint_entry entry;
+
+	if (query_hwpoint_entry(session_fd, id, &entry) < 0)
+		return -1;
+	if (entry.state & LKMDBG_HWPOINT_STATE_LOST) {
+		fprintf(stderr, "%s lost hwpoint state=0x%x\n", label,
+			entry.state);
+		return -1;
+	}
+	if (!(entry.state &
+	      (LKMDBG_HWPOINT_STATE_ACTIVE | LKMDBG_HWPOINT_STATE_MUTATED))) {
+		fprintf(stderr, "%s unexpected hwpoint state=0x%x\n", label,
+			entry.state);
+		return -1;
+	}
+	if (state_out)
+		*state_out = entry.state;
+	return 0;
+}
+
+static int run_external_op(int session_fd, int cmd_fd, int reply_fd, pid_t pid,
+			   const struct child_info *info,
+			   enum external_op_kind kind, int *resident_out,
+			   uint64_t *pagemap_out, char perms_out[5])
+{
+	switch (kind) {
+	case EXTERNAL_OP_PROCESS_VM_READ:
+		if (check_process_vm_read(pid, info->data_addr) < 0)
+			return -1;
+		if (expect_no_stop_event(session_fd, "process_vm_read") < 0)
+			return -1;
+		return 0;
+	case EXTERNAL_OP_PROCESS_VM_WRITE:
+		if (check_process_vm_write(pid, info->data_addr) < 0)
+			return -1;
+		if (expect_no_stop_event(session_fd, "process_vm_write") < 0)
+			return -1;
+		return 0;
+	case EXTERNAL_OP_MINCORE:
+		if (!resident_out) {
+			fprintf(stderr, "mincore requires resident_out\n");
+			return -1;
+		}
+		if (run_mincore_command(session_fd, cmd_fd, reply_fd,
+					resident_out) < 0)
+			return -1;
+		if (*resident_out != 0 && *resident_out != 1) {
+			fprintf(stderr, "mincore resident=%d\n", *resident_out);
+			return -1;
+		}
+		if (expect_no_stop_event(session_fd, "external_after_mincore") < 0)
+			return -1;
+		return 0;
+	case EXTERNAL_OP_MAPS:
+		if (!perms_out) {
+			fprintf(stderr, "maps requires perms_out\n");
+			return -1;
+		}
+		if (read_maps_perms(pid, info->data_addr, perms_out) < 0)
+			return -1;
+		if (expect_no_stop_event(session_fd, "maps") < 0)
+			return -1;
+		return 0;
+	case EXTERNAL_OP_PAGEMAP:
+		if (!pagemap_out) {
+			fprintf(stderr, "pagemap requires pagemap_out\n");
+			return -1;
+		}
+		if (read_pagemap_entry(pid, info->data_addr, pagemap_out) < 0)
+			return -1;
+		if (expect_no_stop_event(session_fd, "pagemap") < 0)
+			return -1;
+		return 0;
+	default:
+		fprintf(stderr, "unknown external op kind=%d\n", (int)kind);
+		return -1;
+	}
+}
+
 static int test_read_filter(int session_fd, int cmd_fd, int reply_fd,
 			    const struct child_info *info)
 {
@@ -1190,6 +1300,243 @@ fail:
 	return -1;
 }
 
+static int test_external_op_process_vm_read(int session_fd, int cmd_fd,
+					    int reply_fd, pid_t pid,
+					    const struct child_info *info)
+{
+	struct lkmdbg_hwpoint_request req;
+	uint32_t state = 0;
+
+	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
+		return -1;
+	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
+			    EXTERNAL_OP_PROCESS_VM_READ, NULL, NULL,
+			    NULL) < 0)
+		goto fail;
+	if (validate_external_hwpoint_state(session_fd, req.id,
+					    "process_vm_read_state",
+					    &state) < 0)
+		goto fail;
+	if (remove_hwpoint(session_fd, req.id) < 0)
+		return -1;
+
+	printf("mmu test: external process_vm_read ok state=0x%x\n", state);
+	return 0;
+
+fail:
+	remove_hwpoint(session_fd, req.id);
+	return -1;
+}
+
+static int test_external_op_process_vm_write(int session_fd, int cmd_fd,
+					     int reply_fd, pid_t pid,
+					     const struct child_info *info)
+{
+	struct lkmdbg_hwpoint_request req;
+	uint32_t state = 0;
+
+	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
+		return -1;
+	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
+			    EXTERNAL_OP_PROCESS_VM_WRITE, NULL, NULL,
+			    NULL) < 0)
+		goto fail;
+	if (validate_external_hwpoint_state(session_fd, req.id,
+					    "process_vm_write_state",
+					    &state) < 0)
+		goto fail;
+	if (remove_hwpoint(session_fd, req.id) < 0)
+		return -1;
+
+	printf("mmu test: external process_vm_write ok state=0x%x\n", state);
+	return 0;
+
+fail:
+	remove_hwpoint(session_fd, req.id);
+	return -1;
+}
+
+static int test_external_op_mincore(int session_fd, int cmd_fd, int reply_fd,
+				    pid_t pid, const struct child_info *info)
+{
+	struct lkmdbg_hwpoint_request req;
+	uint32_t state = 0;
+	int resident = 0;
+
+	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
+		return -1;
+	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
+			    EXTERNAL_OP_MINCORE, &resident, NULL, NULL) < 0)
+		goto fail;
+	if (validate_external_hwpoint_state(session_fd, req.id,
+					    "mincore_state", &state) < 0)
+		goto fail;
+	if (remove_hwpoint(session_fd, req.id) < 0)
+		return -1;
+
+	printf("mmu test: external mincore ok resident=%d state=0x%x\n",
+	       resident, state);
+	return 0;
+
+fail:
+	remove_hwpoint(session_fd, req.id);
+	return -1;
+}
+
+static int test_external_op_maps(int session_fd, int cmd_fd, int reply_fd,
+				 pid_t pid, const struct child_info *info)
+{
+	struct lkmdbg_hwpoint_request req;
+	char perms_before[5];
+	char perms_after[5];
+	uint32_t state = 0;
+
+	(void)cmd_fd;
+	(void)reply_fd;
+
+	if (read_maps_perms(pid, info->data_addr, perms_before) < 0)
+		return -1;
+	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
+		return -1;
+	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
+			    EXTERNAL_OP_MAPS, NULL, NULL, perms_after) < 0)
+		goto fail;
+	if (strcmp(perms_before, perms_after) != 0) {
+		fprintf(stderr, "maps perms changed %s -> %s\n", perms_before,
+			perms_after);
+		goto fail;
+	}
+	if (validate_external_hwpoint_state(session_fd, req.id, "maps_state",
+					    &state) < 0)
+		goto fail;
+	if (remove_hwpoint(session_fd, req.id) < 0)
+		return -1;
+
+	printf("mmu test: external maps ok perms=%s state=0x%x\n",
+	       perms_after, state);
+	return 0;
+
+fail:
+	remove_hwpoint(session_fd, req.id);
+	return -1;
+}
+
+static int test_external_op_pagemap(int session_fd, int cmd_fd, int reply_fd,
+				    pid_t pid,
+				    const struct child_info *info)
+{
+	struct lkmdbg_hwpoint_request req;
+	uint64_t pagemap_before = 0;
+	uint64_t pagemap_after = 0;
+	uint32_t state = 0;
+
+	(void)cmd_fd;
+	(void)reply_fd;
+
+	if (read_pagemap_entry(pid, info->data_addr, &pagemap_before) < 0)
+		return -1;
+	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
+		return -1;
+	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
+			    EXTERNAL_OP_PAGEMAP, NULL, &pagemap_after,
+			    NULL) < 0)
+		goto fail;
+	if (pagemap_before != pagemap_after) {
+		fprintf(stderr,
+			"pagemap changed before=0x%016" PRIx64 " after=0x%016" PRIx64 "\n",
+			pagemap_before, pagemap_after);
+		goto fail;
+	}
+	if (validate_external_hwpoint_state(session_fd, req.id, "pagemap_state",
+					    &state) < 0)
+		goto fail;
+	if (remove_hwpoint(session_fd, req.id) < 0)
+		return -1;
+
+	printf("mmu test: external pagemap ok value=0x%016" PRIx64 " state=0x%x\n",
+	       pagemap_after, state);
+	return 0;
+
+fail:
+	remove_hwpoint(session_fd, req.id);
+	return -1;
+}
+
+static int test_external_ops_repeat(int session_fd, int cmd_fd, int reply_fd,
+				    pid_t pid, const struct child_info *info)
+{
+	static const enum external_op_kind ops[] = {
+		EXTERNAL_OP_PROCESS_VM_READ,
+		EXTERNAL_OP_PROCESS_VM_WRITE,
+		EXTERNAL_OP_MINCORE,
+		EXTERNAL_OP_MAPS,
+		EXTERNAL_OP_PAGEMAP,
+	};
+	struct lkmdbg_hwpoint_request req;
+	unsigned int active_count = 0;
+	unsigned int mutated_count = 0;
+	unsigned int round;
+	unsigned int op_index;
+	int first_mutated_round = -1;
+	const char *first_mutated_op = NULL;
+	uint32_t state = 0;
+
+	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
+		return -1;
+
+	for (round = 0; round < EXTERNAL_REPEAT_ROUNDS; round++) {
+		for (op_index = 0; op_index < sizeof(ops) / sizeof(ops[0]);
+		     op_index++) {
+			int resident = 0;
+			uint64_t pagemap = 0;
+			char perms[5];
+
+			if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
+					    ops[op_index], &resident, &pagemap,
+					    perms) < 0) {
+				fprintf(stderr,
+					"repeat external op failed round=%u op=%s\n",
+					round + 1, external_op_name(ops[op_index]));
+				goto fail;
+			}
+			if (validate_external_hwpoint_state(session_fd, req.id,
+						    external_op_name(
+							    ops[op_index]),
+						    &state) < 0)
+				goto fail;
+			if (state & LKMDBG_HWPOINT_STATE_ACTIVE)
+				active_count++;
+			if (state & LKMDBG_HWPOINT_STATE_MUTATED) {
+				mutated_count++;
+				if (first_mutated_round < 0) {
+					first_mutated_round = (int)round + 1;
+					first_mutated_op =
+						external_op_name(ops[op_index]);
+				}
+			}
+		}
+	}
+
+	if (remove_hwpoint(session_fd, req.id) < 0)
+		return -1;
+
+	printf("mmu test: external repeat ok rounds=%u active_checks=%u mutated_checks=%u first_mutated_round=%d first_mutated_op=%s final_state=0x%x\n",
+	       EXTERNAL_REPEAT_ROUNDS, active_count, mutated_count,
+	       first_mutated_round,
+	       first_mutated_op ? first_mutated_op : "none", state);
+	return 0;
+
+fail:
+	remove_hwpoint(session_fd, req.id);
+	return -1;
+}
+
 static int test_mutated_mapping(int session_fd, int cmd_fd, int reply_fd,
 				const struct child_info *info)
 {
@@ -1308,8 +1655,26 @@ static int run_selftest(void)
 		goto out;
 	if (test_combo_rwx(session_fd, cmd_pipe[1], reply_pipe[0], &info) < 0)
 		goto out;
+	if (test_external_op_process_vm_read(session_fd, cmd_pipe[1],
+					     reply_pipe[0], child, &info) < 0)
+		goto out;
+	if (test_external_op_process_vm_write(session_fd, cmd_pipe[1],
+					      reply_pipe[0], child, &info) < 0)
+		goto out;
+	if (test_external_op_mincore(session_fd, cmd_pipe[1], reply_pipe[0], child,
+				     &info) < 0)
+		goto out;
+	if (test_external_op_maps(session_fd, cmd_pipe[1], reply_pipe[0], child,
+				  &info) < 0)
+		goto out;
+	if (test_external_op_pagemap(session_fd, cmd_pipe[1], reply_pipe[0], child,
+				     &info) < 0)
+		goto out;
 	if (test_external_ops(session_fd, cmd_pipe[1], reply_pipe[0], child, &info) <
 	    0)
+		goto out;
+	if (test_external_ops_repeat(session_fd, cmd_pipe[1], reply_pipe[0], child,
+				     &info) < 0)
 		goto out;
 	if (test_mutated_mapping(session_fd, cmd_pipe[1], reply_pipe[0], &info) < 0)
 		goto out;
