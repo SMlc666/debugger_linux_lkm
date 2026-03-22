@@ -122,7 +122,8 @@ static bool qemu_cmdline_has_flag(const char *flag)
 
 	while ((pos = strstr(pos, flag)) != NULL) {
 		if ((pos == cmdline || pos[-1] == ' ') &&
-		    (pos[flag_len] == '\0' || pos[flag_len] == ' '))
+		    (pos[flag_len] == '\0' || pos[flag_len] == ' ' ||
+		     pos[flag_len] == '\n'))
 			return true;
 		pos += flag_len;
 	}
@@ -150,7 +151,8 @@ static unsigned int qemu_cmdline_get_u32(const char *key,
 			errno = 0;
 			value = strtoul(pos, &endptr, 0);
 			qemu_check(errno == 0 && endptr != pos &&
-				   (*endptr == '\0' || *endptr == ' '),
+				   (*endptr == '\0' || *endptr == ' ' ||
+				    *endptr == '\n'),
 				   "bad_cmdline_u32_%s", key);
 			qemu_check(value <= UINT_MAX, "cmdline_u32_overflow_%s", key);
 			return (unsigned int)value;
