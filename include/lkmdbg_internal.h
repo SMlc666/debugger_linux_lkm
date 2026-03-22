@@ -270,6 +270,8 @@ int lkmdbg_pte_capture(struct mm_struct *mm, unsigned long addr,
 long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_read(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_write(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_phys_read(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_phys_write(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_page_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_image_query(struct lkmdbg_session *session, void __user *argp);

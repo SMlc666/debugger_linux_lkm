@@ -21,6 +21,7 @@ lkmdbg-transport-y := \
 
 lkmdbg-mem-y := \
 	mem/lkmdbg_mem.o \
+	mem/lkmdbg_phys.o \
 	mem/lkmdbg_pte.o \
 	mem/lkmdbg_remote_map.o \
 	mem/lkmdbg_target.o \

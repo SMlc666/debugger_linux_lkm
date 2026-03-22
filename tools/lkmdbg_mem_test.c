@@ -921,6 +921,36 @@ static int xfer_target_memory(int session_fd, struct lkmdbg_mem_op *ops,
 	return 0;
 }
 
+static int xfer_physical_memory(int session_fd, struct lkmdbg_phys_op *ops,
+				uint32_t op_count, int write,
+				struct lkmdbg_phys_request *reply_out,
+				int verbose)
+{
+	struct lkmdbg_phys_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.ops_addr = (uintptr_t)ops,
+		.op_count = op_count,
+	};
+	unsigned long cmd = write ? LKMDBG_IOC_WRITE_PHYS : LKMDBG_IOC_READ_PHYS;
+
+	if (ioctl(session_fd, cmd, &req) < 0) {
+		fprintf(stderr, "%s failed: %s\n",
+			write ? "WRITE_PHYS" : "READ_PHYS", strerror(errno));
+		return -1;
+	}
+
+	if (verbose)
+		printf("%s ops_done=%u bytes_done=%" PRIu64 "\n",
+		       write ? "WRITE_PHYS" : "READ_PHYS", req.ops_done,
+		       (uint64_t)req.bytes_done);
+
+	if (reply_out)
+		*reply_out = req;
+
+	return 0;
+}
+
 static int read_target_memory_flags(int session_fd, uintptr_t remote_addr,
 				    void *buf, size_t len, uint32_t op_flags,
 				    uint32_t *bytes_done_out, int verbose);
@@ -928,6 +958,12 @@ static int write_target_memory_flags(int session_fd, uintptr_t remote_addr,
 				     const void *buf, size_t len,
 				     uint32_t op_flags,
 				     uint32_t *bytes_done_out, int verbose);
+static int read_physical_memory(int session_fd, uint64_t phys_addr, void *buf,
+				size_t len, uint32_t *bytes_done_out,
+				int verbose);
+static int write_physical_memory(int session_fd, uint64_t phys_addr,
+				 const void *buf, size_t len,
+				 uint32_t *bytes_done_out, int verbose);
 
 static int read_target_memory(int session_fd, uintptr_t remote_addr, void *buf,
 			      size_t len, uint32_t *bytes_done_out,
@@ -1018,6 +1054,46 @@ static int write_target_memoryv(int session_fd, struct lkmdbg_mem_op *ops,
 	if (bytes_done_out)
 		*bytes_done_out = req.bytes_done;
 	return 0;
+}
+
+static int read_physical_memory(int session_fd, uint64_t phys_addr, void *buf,
+				size_t len, uint32_t *bytes_done_out,
+				int verbose)
+{
+	struct lkmdbg_phys_op op = {
+		.phys_addr = phys_addr,
+		.local_addr = (uintptr_t)buf,
+		.length = len,
+	};
+	struct lkmdbg_phys_request req;
+
+	if (xfer_physical_memory(session_fd, &op, 1, 0, &req, verbose) < 0)
+		return -1;
+
+	if (bytes_done_out)
+		*bytes_done_out = op.bytes_done;
+
+	return req.ops_done == 1 || !op.bytes_done ? 0 : -1;
+}
+
+static int write_physical_memory(int session_fd, uint64_t phys_addr,
+				 const void *buf, size_t len,
+				 uint32_t *bytes_done_out, int verbose)
+{
+	struct lkmdbg_phys_op op = {
+		.phys_addr = phys_addr,
+		.local_addr = (uintptr_t)buf,
+		.length = len,
+	};
+	struct lkmdbg_phys_request req;
+
+	if (xfer_physical_memory(session_fd, &op, 1, 1, &req, verbose) < 0)
+		return -1;
+
+	if (bytes_done_out)
+		*bytes_done_out = op.bytes_done;
+
+	return req.ops_done == 1 || !op.bytes_done ? 0 : -1;
 }
 
 static int query_target_vmas(int session_fd, uint64_t start_addr,
@@ -1632,6 +1708,103 @@ static int verify_pte_patch_api(int session_fd, const struct child_info *info)
 fail_remove:
 	remove_pte_patch(session_fd, apply_reply.id, &remove_reply);
 	return -1;
+}
+
+static int verify_physical_memory_api(int session_fd, const struct child_info *info)
+{
+	struct page_query_buffer buf = { 0 };
+	struct lkmdbg_page_entry entry;
+	uint32_t bytes_done = 0;
+	uint8_t virt_before;
+	uint8_t phys_before;
+	uint8_t phys_after;
+	uint8_t phys_new;
+	int ret = -1;
+
+	buf.entries = calloc(PAGE_QUERY_BATCH, sizeof(*buf.entries));
+	if (!buf.entries) {
+		fprintf(stderr, "physical query allocation failed\n");
+		return -1;
+	}
+
+	memset(&entry, 0, sizeof(entry));
+	if (lookup_target_page(session_fd, info->basic_addr, info->page_size, &buf,
+			       &entry) < 0)
+		goto out;
+	if (!(entry.flags & LKMDBG_PAGE_FLAG_PT_PRESENT) || !entry.phys_addr) {
+		fprintf(stderr,
+			"basic page missing physical mapping flags=0x%x phys=0x%" PRIx64 "\n",
+			entry.flags, (uint64_t)entry.phys_addr);
+		goto out;
+	}
+
+	if (read_target_memory(session_fd, info->basic_addr, &virt_before,
+			       sizeof(virt_before), &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(virt_before)) {
+		fprintf(stderr, "baseline virtual read failed bytes_done=%u\n",
+			bytes_done);
+		goto out;
+	}
+
+	bytes_done = 0;
+	if (read_physical_memory(session_fd,
+				 entry.phys_addr +
+					 (info->basic_addr & (info->page_size - 1)),
+				 &phys_before, sizeof(phys_before), &bytes_done,
+				 0) < 0 ||
+	    bytes_done != sizeof(phys_before)) {
+		fprintf(stderr, "baseline physical read failed bytes_done=%u\n",
+			bytes_done);
+		goto out;
+	}
+	if (phys_before != virt_before) {
+		fprintf(stderr, "physical/virtual mismatch before phys=0x%02x virt=0x%02x\n",
+			phys_before, virt_before);
+		goto out;
+	}
+
+	phys_new = (uint8_t)(phys_before ^ 0x5aU);
+	bytes_done = 0;
+	if (write_physical_memory(session_fd,
+				  entry.phys_addr +
+					  (info->basic_addr & (info->page_size - 1)),
+				  &phys_new, sizeof(phys_new), &bytes_done, 0) <
+		    0 ||
+	    bytes_done != sizeof(phys_new)) {
+		fprintf(stderr, "physical write failed bytes_done=%u\n",
+			bytes_done);
+		goto out;
+	}
+
+	bytes_done = 0;
+	if (read_target_memory(session_fd, info->basic_addr, &phys_after,
+			       sizeof(phys_after), &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(phys_after)) {
+		fprintf(stderr, "post-write virtual read failed bytes_done=%u\n",
+			bytes_done);
+		goto restore;
+	}
+	if (phys_after != phys_new) {
+		fprintf(stderr, "physical write not reflected virt=0x%02x expected=0x%02x\n",
+			phys_after, phys_new);
+		goto restore;
+	}
+
+	ret = 0;
+	printf("selftest physical memory ok phys=0x%" PRIx64 " byte=0x%02x\n",
+	       (uint64_t)(entry.phys_addr +
+			  (info->basic_addr & (info->page_size - 1))),
+	       phys_new);
+
+restore:
+	bytes_done = 0;
+	write_physical_memory(session_fd,
+			      entry.phys_addr +
+				      (info->basic_addr & (info->page_size - 1)),
+			      &phys_before, sizeof(phys_before), &bytes_done, 0);
+out:
+	free(buf.entries);
+	return ret;
 }
 
 static int verify_remote_map(int session_fd, const struct child_info *info,
@@ -4002,10 +4175,12 @@ static void usage(const char *prog)
 		"  %s ptset <pid> <remote_addr_hex> <ro|rw|rx|rwx|protnone|execonly|raw:<pte_hex>>\n"
 		"  %s ptdel <pid> <id>\n"
 		"  %s ptlist <pid>\n"
+		"  %s physread <phys_addr_hex> <length>\n"
+		"  %s physwrite <phys_addr_hex> <ascii_data>\n"
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog);
+		prog, prog, prog);
 }
 
 static int run_selftest(const char *prog)
@@ -4405,6 +4580,16 @@ static int run_selftest(const char *prog)
 		return 1;
 	}
 
+	if (verify_physical_memory_api(session_fd, &info) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
 	if (verify_vma_query(session_fd, &info) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
@@ -4669,8 +4854,10 @@ int main(int argc, char **argv)
 	pid_t pid;
 	pid_t tid = 0;
 	uintptr_t remote_addr = 0;
+	uint64_t phys_addr = 0;
 	char *endp;
 	int needs_remote_addr;
+	int needs_target = 1;
 	pid_t target_tid = 0;
 	uint32_t timeout_ms = 0;
 	uint64_t reg_value = 0;
@@ -4696,10 +4883,17 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	pid = (pid_t)strtol(argv[2], &endp, 10);
-	if (*endp != '\0' || pid <= 0) {
-		fprintf(stderr, "invalid pid: %s\n", argv[2]);
-		return 1;
+	if (strcmp(argv[1], "physread") == 0 || strcmp(argv[1], "physwrite") == 0)
+		needs_target = 0;
+
+	if (needs_target) {
+		pid = (pid_t)strtol(argv[2], &endp, 10);
+		if (*endp != '\0' || pid <= 0) {
+			fprintf(stderr, "invalid pid: %s\n", argv[2]);
+			return 1;
+		}
+	} else {
+		pid = 0;
 	}
 
 	needs_remote_addr = strcmp(argv[1], "read") == 0 ||
@@ -4715,6 +4909,19 @@ int main(int argc, char **argv)
 		remote_addr = (uintptr_t)strtoull(argv[3], &endp, 16);
 		if (*endp != '\0') {
 			fprintf(stderr, "invalid remote address: %s\n", argv[3]);
+			return 1;
+		}
+	}
+
+	if (!needs_target) {
+		if (argc < 4) {
+			usage(argv[0]);
+			return 1;
+		}
+
+		phys_addr = strtoull(argv[2], &endp, 16);
+		if (*endp != '\0') {
+			fprintf(stderr, "invalid physical address: %s\n", argv[2]);
 			return 1;
 		}
 	}
@@ -4904,7 +5111,7 @@ int main(int argc, char **argv)
 	if (session_fd < 0)
 		return 1;
 
-	if (set_target_ex(session_fd, pid, target_tid) < 0) {
+	if (needs_target && set_target_ex(session_fd, pid, target_tid) < 0) {
 		close(session_fd);
 		return 1;
 	}
@@ -5212,6 +5419,62 @@ int main(int argc, char **argv)
 		print_pte_patch_reply("pte_patch", &reply);
 	} else if (strcmp(argv[1], "ptlist") == 0) {
 		if (dump_target_pte_patches(session_fd) < 0) {
+			close(session_fd);
+			return 1;
+		}
+	} else if (strcmp(argv[1], "physread") == 0) {
+		size_t len;
+		unsigned char *buf;
+		size_t i;
+		uint32_t bytes_done = 0;
+
+		len = (size_t)strtoul(argv[3], &endp, 0);
+		if (*endp != '\0' || len == 0) {
+			fprintf(stderr, "invalid length: %s\n", argv[3]);
+			close(session_fd);
+			return 1;
+		}
+
+		buf = calloc(1, len);
+		if (!buf) {
+			fprintf(stderr, "calloc failed\n");
+			close(session_fd);
+			return 1;
+		}
+
+		if (read_physical_memory(session_fd, phys_addr, buf, len,
+					 &bytes_done, 1) < 0) {
+			free(buf);
+			close(session_fd);
+			return 1;
+		}
+		if (bytes_done != len) {
+			fprintf(stderr,
+				"short physical read bytes_done=%u expected=%zu\n",
+				bytes_done, len);
+			free(buf);
+			close(session_fd);
+			return 1;
+		}
+
+		for (i = 0; i < len; i++)
+			printf("%02x", buf[i]);
+		printf("\n");
+		free(buf);
+	} else if (strcmp(argv[1], "physwrite") == 0) {
+		const char *data = argv[3];
+		size_t len = strlen(data);
+		uint32_t bytes_done = 0;
+
+		if (write_physical_memory(session_fd, phys_addr, data, len,
+					  &bytes_done, 1) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		if (bytes_done != len) {
+			fprintf(stderr,
+				"short physical write bytes_done=%u expected=%zu\n",
+				bytes_done, len);
 			close(session_fd);
 			return 1;
 		}

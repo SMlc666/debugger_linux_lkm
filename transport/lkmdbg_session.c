@@ -584,6 +584,10 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_mem_read(session, argp);
 	case LKMDBG_IOC_WRITE_MEM:
 		return lkmdbg_mem_write(session, argp);
+	case LKMDBG_IOC_READ_PHYS:
+		return lkmdbg_phys_read(session, argp);
+	case LKMDBG_IOC_WRITE_PHYS:
+		return lkmdbg_phys_write(session, argp);
 	case LKMDBG_IOC_QUERY_PAGES:
 		return lkmdbg_page_query(session, argp);
 	case LKMDBG_IOC_QUERY_VMAS:

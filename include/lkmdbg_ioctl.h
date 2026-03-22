@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 9
+#define LKMDBG_PROTO_VERSION 10
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -203,6 +203,26 @@ struct lkmdbg_mem_op {
 #define LKMDBG_MEM_OP_FLAG_FORCE_ACCESS 0x00000001U
 
 struct lkmdbg_mem_request {
+	__u32 version;
+	__u32 size;
+	__u64 ops_addr;
+	__u32 op_count;
+	__u32 flags;
+	__u32 ops_done;
+	__u32 reserved0;
+	__u64 bytes_done;
+};
+
+struct lkmdbg_phys_op {
+	__u64 phys_addr;
+	__u64 local_addr;
+	__u32 length;
+	__u32 flags;
+	__u32 bytes_done;
+	__u32 reserved0;
+};
+
+struct lkmdbg_phys_request {
 	__u32 version;
 	__u32 size;
 	__u64 ops_addr;
@@ -556,5 +576,9 @@ struct lkmdbg_event_record {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x24, struct lkmdbg_pte_patch_request)
 #define LKMDBG_IOC_QUERY_PTE_PATCHES \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x25, struct lkmdbg_pte_patch_query_request)
+#define LKMDBG_IOC_READ_PHYS \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x26, struct lkmdbg_phys_request)
+#define LKMDBG_IOC_WRITE_PHYS \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x27, struct lkmdbg_phys_request)
 
 #endif
