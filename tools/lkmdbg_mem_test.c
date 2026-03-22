@@ -1903,6 +1903,8 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	int stealth_fd = -1;
 	int ret = -1;
 	int restore_needed = 0;
+	int stealth_restore_needed = 0;
+	int keep_stealth_mapping = 0;
 	int wake_thread_started = 0;
 
 	memset(&reply, 0, sizeof(reply));
@@ -1996,6 +1998,7 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 			      LKMDBG_REMOTE_MAP_FLAG_STEALTH_LOCAL,
 			      &stealth_reply) < 0)
 		goto out;
+	keep_stealth_mapping = 1;
 
 	if (stealth_reply.map_fd != -1 ||
 	    stealth_reply.mapped_length != reply.mapped_length) {
@@ -2029,6 +2032,7 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 
 	fill_pattern(expected_buf, 64, 41);
 	memcpy(stealth_view + 256, expected_buf, 64);
+	stealth_restore_needed = 1;
 	memset(verify_buf, 0, test_len);
 	if (read_target_memory(session_fd, info->large_addr, verify_buf, test_len,
 			       &bytes_done, 0) < 0 ||
@@ -2041,6 +2045,14 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	if (memcmp(verify_buf + 256, expected_buf, 64) != 0) {
 		fprintf(stderr, "stealth remote map write-through failed\n");
 		goto out;
+	}
+
+	if (stealth_restore_needed) {
+		size_t i;
+
+		for (i = 0; i < 64; i++)
+			stealth_view[256 + i] = pattern_byte(256 + i, 1);
+		stealth_restore_needed = 0;
 	}
 
 	if (create_remote_map(session_fd, info->large_addr, 0, test_len,
@@ -2164,6 +2176,12 @@ out:
 		for (i = 0; i < 64; i++)
 			view[128 + i] = pattern_byte(128 + i, 1);
 	}
+	if (stealth_restore_needed && stealth_view != MAP_FAILED) {
+		size_t i;
+
+		for (i = 0; i < 64; i++)
+			stealth_view[256 + i] = pattern_byte(256 + i, 1);
+	}
 	if (ro_view != MAP_FAILED)
 		munmap(ro_view, ro_reply.mapped_length);
 	if (ro_reply.map_fd >= 0)
@@ -2172,9 +2190,9 @@ out:
 		munmap(local_map, info->page_size);
 	if (local_fd >= 0)
 		close(local_fd);
-	if (stealth_view != MAP_FAILED)
+	if (!keep_stealth_mapping && stealth_view != MAP_FAILED)
 		munmap(stealth_view, test_len);
-	if (stealth_fd >= 0)
+	if (!keep_stealth_mapping && stealth_fd >= 0)
 		close(stealth_fd);
 	if (view != MAP_FAILED)
 		munmap(view, reply.mapped_length);

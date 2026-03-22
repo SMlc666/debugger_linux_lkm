@@ -8,7 +8,6 @@
 #include <linux/mman.h>
 #include <linux/mmap_lock.h>
 #include <linux/module.h>
-#include <linux/percpu_counter.h>
 #include <linux/pid.h>
 #include <linux/refcount.h>
 #include <linux/sched/mm.h>
@@ -385,36 +384,6 @@ static int lkmdbg_remote_map_validate_local_alias_range(
 	return 0;
 }
 
-static void lkmdbg_remote_map_adjust_mm_rss(struct mm_struct *mm,
-					    struct page *from_page,
-					    struct page *to_page)
-{
-	int from_counter;
-	int to_counter;
-
-	if (!mm || !from_page || !to_page)
-		return;
-
-	if (PageAnon(from_page))
-		from_counter = MM_ANONPAGES;
-	else if (PageSwapBacked(from_page))
-		from_counter = MM_SHMEMPAGES;
-	else
-		from_counter = MM_FILEPAGES;
-
-	if (PageAnon(to_page))
-		to_counter = MM_ANONPAGES;
-	else if (PageSwapBacked(to_page))
-		to_counter = MM_SHMEMPAGES;
-	else
-		to_counter = MM_FILEPAGES;
-	if (from_counter == to_counter)
-		return;
-
-	percpu_counter_add(&mm->rss_stat[from_counter], -1);
-	percpu_counter_add(&mm->rss_stat[to_counter], 1);
-}
-
 static int lkmdbg_remote_map_prepare_local_file(struct mm_struct *mm,
 						u64 local_addr, u64 length,
 						u32 prot, u64 *vm_flags_out,
@@ -594,12 +563,9 @@ static void lkmdbg_remote_map_restore_stealth(struct lkmdbg_remote_stealth_map *
 				(unsigned long)map->local_addr +
 				(i * PAGE_SIZE);
 
-			if (!lkmdbg_pte_rewrite_locked(
-				    mm, addr, map->baseline_local_ptes[i], NULL,
-				    NULL))
-				lkmdbg_remote_map_adjust_mm_rss(
-					mm, map->source_pages[i],
-					map->local_pages[i]);
+			lkmdbg_pte_rewrite_locked(mm, addr,
+						  map->baseline_local_ptes[i],
+						  NULL, NULL);
 		}
 		mmap_write_unlock(mm);
 		mmput(mm);
@@ -916,20 +882,14 @@ static int lkmdbg_remote_map_create_stealth_local(
 						NULL);
 		if (ret)
 			break;
-		lkmdbg_remote_map_adjust_mm_rss(local_mm, map->local_pages[i],
-						map->source_pages[i]);
 	}
 	if (ret) {
 		while (i > 0) {
 			unsigned long addr = (unsigned long)req->local_addr +
 					      ((i - 1) * PAGE_SIZE);
-			if (!lkmdbg_pte_rewrite_locked(
-				    local_mm, addr,
-				    map->baseline_local_ptes[i - 1], NULL,
-				    NULL))
-				lkmdbg_remote_map_adjust_mm_rss(
-					local_mm, map->source_pages[i - 1],
-					map->local_pages[i - 1]);
+			lkmdbg_pte_rewrite_locked(local_mm, addr,
+						  map->baseline_local_ptes[i - 1],
+						  NULL, NULL);
 			i--;
 		}
 	}

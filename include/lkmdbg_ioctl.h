@@ -150,6 +150,11 @@
 
 #define LKMDBG_REMOTE_MAP_FLAG_LOCAL_TO_TARGET 0x00000001U
 #define LKMDBG_REMOTE_MAP_FLAG_FIXED_TARGET 0x00000002U
+/*
+ * Reuse an existing caller-owned shared file-backed VMA as the local view.
+ * The caller must keep that VMA alive until the session closes so the module
+ * can restore the original PTEs during session teardown.
+ */
 #define LKMDBG_REMOTE_MAP_FLAG_STEALTH_LOCAL 0x00000004U
 
 struct lkmdbg_open_session_request {
