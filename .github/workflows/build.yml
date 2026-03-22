@@ -392,3 +392,45 @@ jobs:
           name: qemu-arm64-smoke-log
           path: ${{ runner.temp }}/qemu-smoke-tcg.log
           if-no-files-found: ignore
+
+  qemu-arm64-hook-soak:
+    runs-on: ubuntu-24.04
+    needs: qemu-arm64-build-artifacts
+    timeout-minutes: 30
+
+    steps:
+      - name: Download QEMU boot artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: qemu-arm64-boot
+          path: ${{ runner.temp }}/qemu-artifacts
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-arm
+
+      - name: Run QEMU hook soak test (TCG)
+        run: |
+          KERNEL_IMAGE="$RUNNER_TEMP/qemu-artifacts/Image"
+          INITRAMFS="$RUNNER_TEMP/qemu-artifacts/initramfs.cpio.gz"
+          LOG="$RUNNER_TEMP/qemu-hook-soak-tcg.log"
+          timeout 300s qemu-system-aarch64 \
+            -machine virt \
+            -cpu cortex-a72 \
+            -smp 2 \
+            -m 1024 \
+            -nographic \
+            -kernel "$KERNEL_IMAGE" \
+            -initrd "$INITRAMFS" \
+            -append "console=ttyAMA0 rdinit=/init panic=-1 lkmdbg.hook_soak_only lkmdbg.proc_version_repeats=50 lkmdbg.seq_read_repeats=50" \
+            -no-reboot | tee "$LOG"
+          grep -q 'LKMDBG_QEMU_HOOK_SOAK_OK' "$LOG"
+
+      - name: Upload QEMU hook soak log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-arm64-hook-soak-log
+          path: ${{ runner.temp }}/qemu-hook-soak-tcg.log
+          if-no-files-found: ignore

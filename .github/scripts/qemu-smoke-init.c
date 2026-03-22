@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/reboot.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -32,6 +33,8 @@
 #define QEMU_HOOK_SELFTEST_STRESS_REPEATS 5U
 #define QEMU_PROC_VERSION_REPEATS 5U
 #define QEMU_SEQ_READ_REPEATS 3U
+#define QEMU_HOOK_SOAK_PROC_VERSION_REPEATS 50U
+#define QEMU_HOOK_SOAK_SEQ_READ_REPEATS 50U
 
 static void qemu_poweroff(void)
 {
@@ -96,6 +99,66 @@ static void qemu_read_file(const char *path, char *buf, size_t size)
 
 	buf[nr] = '\0';
 	close(fd);
+}
+
+static const char *qemu_cmdline(void)
+{
+	static char buf[4096];
+	static bool loaded;
+
+	if (!loaded) {
+		qemu_read_file("/proc/cmdline", buf, sizeof(buf));
+		loaded = true;
+	}
+
+	return buf;
+}
+
+static bool qemu_cmdline_has_flag(const char *flag)
+{
+	const char *cmdline = qemu_cmdline();
+	size_t flag_len = strlen(flag);
+	const char *pos = cmdline;
+
+	while ((pos = strstr(pos, flag)) != NULL) {
+		if ((pos == cmdline || pos[-1] == ' ') &&
+		    (pos[flag_len] == '\0' || pos[flag_len] == ' '))
+			return true;
+		pos += flag_len;
+	}
+
+	return false;
+}
+
+static unsigned int qemu_cmdline_get_u32(const char *key,
+					 unsigned int default_value)
+{
+	char needle[64];
+	const char *cmdline = qemu_cmdline();
+	const char *pos = cmdline;
+	char *endptr;
+	unsigned long value;
+	int len;
+
+	len = snprintf(needle, sizeof(needle), "%s=", key);
+	qemu_check(len > 0 && (size_t)len < sizeof(needle),
+		   "cmdline_key_too_long_%s", key);
+
+	while ((pos = strstr(pos, needle)) != NULL) {
+		if (pos == cmdline || pos[-1] == ' ') {
+			pos += len;
+			errno = 0;
+			value = strtoul(pos, &endptr, 0);
+			qemu_check(errno == 0 && endptr != pos &&
+				   (*endptr == '\0' || *endptr == ' '),
+				   "bad_cmdline_u32_%s", key);
+			qemu_check(value <= UINT_MAX, "cmdline_u32_overflow_%s", key);
+			return (unsigned int)value;
+		}
+		pos += len;
+	}
+
+	return default_value;
 }
 
 static void qemu_expect_status_line(const char *needle)
@@ -343,6 +406,10 @@ int main(void)
 	char *const mmu_test_argv[] = { MMU_TEST_TOOL, "selftest", NULL };
 	char *const watchpoint_ctrl_argv[] = { WATCHPOINT_CTRL_TOOL, NULL };
 	int watchpoint_ctrl_status;
+	bool hook_soak_only;
+	unsigned int selftest_stress_repeats;
+	unsigned int proc_version_repeats;
+	unsigned int seq_read_repeats;
 
 	mkdir("/dev", 0755);
 	mkdir("/proc", 0555);
@@ -355,41 +422,68 @@ int main(void)
 	qemu_mount_or_fail("sysfs", "/sys", "sysfs");
 	qemu_mount_or_fail("debugfs", "/sys/kernel/debug", "debugfs");
 
-	printf("LKMDBG_QEMU_SMOKE_BEGIN\n");
-	fflush(stdout);
+	hook_soak_only = qemu_cmdline_has_flag("lkmdbg.hook_soak_only");
+	selftest_stress_repeats = qemu_cmdline_get_u32(
+		"lkmdbg.selftest_stress_repeats", QEMU_HOOK_SELFTEST_STRESS_REPEATS);
+	proc_version_repeats = qemu_cmdline_get_u32(
+		"lkmdbg.proc_version_repeats",
+		hook_soak_only ? QEMU_HOOK_SOAK_PROC_VERSION_REPEATS :
+				 QEMU_PROC_VERSION_REPEATS);
+	seq_read_repeats = qemu_cmdline_get_u32(
+		"lkmdbg.seq_read_repeats",
+		hook_soak_only ? QEMU_HOOK_SOAK_SEQ_READ_REPEATS :
+				 QEMU_SEQ_READ_REPEATS);
 
-	watchpoint_ctrl_status = qemu_run_tool_status(watchpoint_ctrl_argv);
-	if (watchpoint_ctrl_status == 0) {
-		printf("LKMDBG_QEMU_WATCHPOINT_CTRL_OK\n");
-	} else if (watchpoint_ctrl_status == 2) {
-		printf("LKMDBG_QEMU_WATCHPOINT_CTRL_SKIP\n");
+	if (hook_soak_only) {
+		printf("LKMDBG_QEMU_HOOK_SOAK_BEGIN proc=%u seq=%u\n",
+		       proc_version_repeats, seq_read_repeats);
 	} else {
-		qemu_fail("watchpoint_ctrl_exit_%d", watchpoint_ctrl_status);
+		printf("LKMDBG_QEMU_SMOKE_BEGIN\n");
 	}
 	fflush(stdout);
 
-	for (i = 0; i < sizeof(selftests) / sizeof(selftests[0]); i++) {
-		for (iter = 0; iter < selftests[i].repeats; iter++) {
-			qemu_insmod(selftests[i].params);
-			qemu_expect_status_line(selftests[i].status_line);
-			if (selftests[i].expect_installed) {
-				qemu_expect_status_line("hook_selftest_installed=1\n");
-				qemu_expect_status_u64_at_least("inline_hook_active=", 1);
-			} else {
-				qemu_expect_status_line("hook_selftest_installed=0\n");
+	if (!hook_soak_only) {
+		watchpoint_ctrl_status = qemu_run_tool_status(watchpoint_ctrl_argv);
+		if (watchpoint_ctrl_status == 0) {
+			printf("LKMDBG_QEMU_WATCHPOINT_CTRL_OK\n");
+		} else if (watchpoint_ctrl_status == 2) {
+			printf("LKMDBG_QEMU_WATCHPOINT_CTRL_SKIP\n");
+		} else {
+			qemu_fail("watchpoint_ctrl_exit_%d", watchpoint_ctrl_status);
+		}
+		fflush(stdout);
+	}
+
+	if (!hook_soak_only) {
+		for (i = 0; i < sizeof(selftests) / sizeof(selftests[0]); i++) {
+			unsigned int repeats = selftests[i].repeats;
+
+			if (strcmp(selftests[i].params, "hook_selftest_mode=5") == 0 ||
+			    strcmp(selftests[i].params, "hook_selftest_mode=6") == 0)
+				repeats = selftest_stress_repeats;
+
+			for (iter = 0; iter < repeats; iter++) {
+				qemu_insmod(selftests[i].params);
+				qemu_expect_status_line(selftests[i].status_line);
+				if (selftests[i].expect_installed) {
+					qemu_expect_status_line("hook_selftest_installed=1\n");
+					qemu_expect_status_u64_at_least("inline_hook_active=", 1);
+				} else {
+					qemu_expect_status_line("hook_selftest_installed=0\n");
+				}
+				qemu_rmmod();
 			}
-			qemu_rmmod();
 		}
 	}
 
-	for (iter = 0; iter < QEMU_PROC_VERSION_REPEATS; iter++) {
+	for (iter = 0; iter < proc_version_repeats; iter++) {
 		qemu_insmod("hook_proc_version=1");
 		qemu_expect_status_u64_at_least("inline_hook_active=", 1);
 		qemu_read_file("/proc/version", version_buf, sizeof(version_buf));
 		qemu_check(version_buf[0] != '\0', "empty_proc_version");
 		qemu_expect_status_line("proc_version_hook_active=1\n");
 		qemu_expect_status_u64_at_least("proc_open_successes=", 1);
-		if (iter == 0) {
+		if (!hook_soak_only && iter == 0) {
 			qemu_run_tool(open_session_argv);
 			qemu_run_tool_capture(stealth_report_argv, report_buf,
 					      sizeof(report_buf));
@@ -429,8 +523,8 @@ int main(void)
 	 * Keep seq_read covered in the main smoke path, but cap the repeat count
 	 * so runtime stays short enough for CI.
 	 */
-	for (iter = 0; iter < QEMU_SEQ_READ_REPEATS; iter++) {
-		int session_fd;
+	for (iter = 0; iter < seq_read_repeats; iter++) {
+		int session_fd = -1;
 
 		qemu_insmod("hook_proc_version=1 hook_seq_read=1");
 		qemu_expect_status_line("seq_read_hook_active=1\n");
@@ -441,15 +535,26 @@ int main(void)
 			   "missing_seq_read_registry");
 		qemu_check(strstr(version_buf, "name=proc_version_open") != NULL,
 			   "missing_proc_version_open_registry");
-		session_fd = qemu_open_session();
-		qemu_drain_one_event(session_fd);
+		if (!hook_soak_only) {
+			session_fd = qemu_open_session();
+			qemu_drain_one_event(session_fd);
+		}
 		qemu_read_file("/proc/version", version_buf, sizeof(version_buf));
 		qemu_check(version_buf[0] != '\0', "empty_proc_version_seq_read");
-		qemu_expect_event_type(session_fd, LKMDBG_EVENT_HOOK_HIT);
+		if (!hook_soak_only)
+			qemu_expect_event_type(session_fd, LKMDBG_EVENT_HOOK_HIT);
 		qemu_expect_status_u64_at_least("seq_read_hook_hits=", 2);
 		qemu_expect_status_u64_at_least("inline_hook_install_total=", 1);
-		close(session_fd);
+		if (session_fd >= 0)
+			close(session_fd);
 		qemu_rmmod();
+	}
+
+	if (hook_soak_only) {
+		printf("LKMDBG_QEMU_HOOK_SOAK_OK\n");
+		fflush(stdout);
+		qemu_poweroff();
+		return 0;
 	}
 
 	printf("LKMDBG_QEMU_SMOKE_OK\n");
