@@ -443,7 +443,6 @@ static vm_fault_t lkmdbg_remote_map_vma_fault(struct vm_fault *vmf)
 	if (!page || !page_count(page))
 		return VM_FAULT_SIGBUS;
 
-	flush_dcache_page(page);
 	if (map->prot & LKMDBG_REMOTE_MAP_PROT_WRITE)
 		return vmf_insert_mixed_mkwrite(vma, addr, page_to_pfn_t(page));
 
