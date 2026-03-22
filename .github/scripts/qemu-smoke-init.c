@@ -29,6 +29,9 @@
 #define MEM_TEST_TOOL "/lkmdbg_mem_test"
 #define MMU_TEST_TOOL "/lkmdbg_mmu_test"
 #define WATCHPOINT_CTRL_TOOL "/qemu_watchpoint_control"
+#define QEMU_HOOK_SELFTEST_STRESS_REPEATS 5U
+#define QEMU_PROC_VERSION_REPEATS 5U
+#define QEMU_SEQ_READ_REPEATS 3U
 
 static void qemu_poweroff(void)
 {
@@ -325,8 +328,10 @@ int main(void)
 		{ "hook_selftest_mode=2", "hook_selftest_exec_pool_ready=1\n", false, 1 },
 		{ "hook_selftest_mode=3", "hook_selftest_exec_allocated=1\n", false, 1 },
 		{ "hook_selftest_mode=4", "hook_selftest_exec_ready=1\n", false, 1 },
-		{ "hook_selftest_mode=5", "hook_selftest_exec_ready=1\n", true, 3 },
-		{ "hook_selftest_mode=6", "hook_selftest_actual=", true, 3 },
+		{ "hook_selftest_mode=5", "hook_selftest_exec_ready=1\n", true,
+		  QEMU_HOOK_SELFTEST_STRESS_REPEATS },
+		{ "hook_selftest_mode=6", "hook_selftest_actual=", true,
+		  QEMU_HOOK_SELFTEST_STRESS_REPEATS },
 	};
 	char version_buf[4096];
 	char report_buf[4096];
@@ -377,46 +382,54 @@ int main(void)
 		}
 	}
 
-	qemu_insmod("hook_proc_version=1");
-	qemu_expect_status_u64_at_least("inline_hook_active=", 1);
-	qemu_read_file("/proc/version", version_buf, sizeof(version_buf));
-	qemu_check(version_buf[0] != '\0', "empty_proc_version");
-	qemu_expect_status_line("proc_version_hook_active=1\n");
-	qemu_expect_status_u64_at_least("proc_open_successes=", 1);
-	qemu_run_tool(open_session_argv);
-	qemu_run_tool_capture(stealth_report_argv, report_buf, sizeof(report_buf));
-	printf("%s", report_buf);
-	fflush(stdout);
-	qemu_check(strstr(report_buf, "report.stealth.flags=0x1(debugfs)") != NULL,
-		   "missing_report_stealth_flags");
-	qemu_check(strstr(report_buf, "report.exposure.proc_modules=visible") != NULL,
-		   "missing_report_proc_modules");
-	qemu_check(strstr(report_buf, "report.exposure.sysfs_module=visible") != NULL,
-		   "missing_report_sysfs_module");
-	qemu_check(strstr(report_buf, "report.exposure.debugfs_dir=visible") != NULL,
-		   "missing_report_debugfs_dir");
-	qemu_run_tool(mem_test_argv);
-	qemu_run_tool(mmu_test_argv);
-	printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
-	       qemu_read_status_u64("hwpoint_callback_total="),
-	       qemu_read_status_u64("breakpoint_callback_total="),
-	       qemu_read_status_u64("watchpoint_callback_total="),
-	       qemu_read_status_u64("target_stop_event_read_total="),
-	       qemu_read_status_u64("breakpoint_stop_event_read_total="),
-	       qemu_read_status_u64("watchpoint_stop_event_read_total="),
-	       qemu_read_status_u64("hwpoint_last_reason="),
-	       qemu_read_status_u64("hwpoint_last_type="),
-	       qemu_read_status_u64("hwpoint_last_addr="),
-	       qemu_read_status_u64("hwpoint_last_ip="));
-	fflush(stdout);
-	qemu_rmmod();
+	for (iter = 0; iter < QEMU_PROC_VERSION_REPEATS; iter++) {
+		qemu_insmod("hook_proc_version=1");
+		qemu_expect_status_u64_at_least("inline_hook_active=", 1);
+		qemu_read_file("/proc/version", version_buf, sizeof(version_buf));
+		qemu_check(version_buf[0] != '\0', "empty_proc_version");
+		qemu_expect_status_line("proc_version_hook_active=1\n");
+		qemu_expect_status_u64_at_least("proc_open_successes=", 1);
+		if (iter == 0) {
+			qemu_run_tool(open_session_argv);
+			qemu_run_tool_capture(stealth_report_argv, report_buf,
+					      sizeof(report_buf));
+			printf("%s", report_buf);
+			fflush(stdout);
+			qemu_check(strstr(report_buf,
+					  "report.stealth.flags=0x1(debugfs)") != NULL,
+				   "missing_report_stealth_flags");
+			qemu_check(strstr(report_buf,
+					  "report.exposure.proc_modules=visible") != NULL,
+				   "missing_report_proc_modules");
+			qemu_check(strstr(report_buf,
+					  "report.exposure.sysfs_module=visible") != NULL,
+				   "missing_report_sysfs_module");
+			qemu_check(strstr(report_buf,
+					  "report.exposure.debugfs_dir=visible") != NULL,
+				   "missing_report_debugfs_dir");
+			qemu_run_tool(mem_test_argv);
+			qemu_run_tool(mmu_test_argv);
+			printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
+			       qemu_read_status_u64("hwpoint_callback_total="),
+			       qemu_read_status_u64("breakpoint_callback_total="),
+			       qemu_read_status_u64("watchpoint_callback_total="),
+			       qemu_read_status_u64("target_stop_event_read_total="),
+			       qemu_read_status_u64("breakpoint_stop_event_read_total="),
+			       qemu_read_status_u64("watchpoint_stop_event_read_total="),
+			       qemu_read_status_u64("hwpoint_last_reason="),
+			       qemu_read_status_u64("hwpoint_last_type="),
+			       qemu_read_status_u64("hwpoint_last_addr="),
+			       qemu_read_status_u64("hwpoint_last_ip="));
+			fflush(stdout);
+		}
+		qemu_rmmod();
+	}
 
 	/*
-	 * Keep one end-to-end seq_read hook pass in smoke coverage.
-	 * Repeated unload/reload stress still needs separate stabilization and
-	 * should not gate the main feature pipeline.
+	 * Keep seq_read covered in the main smoke path, but cap the repeat count
+	 * so runtime stays short enough for CI.
 	 */
-	for (iter = 0; iter < 1; iter++) {
+	for (iter = 0; iter < QEMU_SEQ_READ_REPEATS; iter++) {
 		int session_fd;
 
 		qemu_insmod("hook_proc_version=1 hook_seq_read=1");
