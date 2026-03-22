@@ -139,11 +139,16 @@ static int set_signal_config(int session_fd, const uint64_t mask_words[2],
 			     struct lkmdbg_signal_config_request *reply_out);
 static int get_signal_config(int session_fd,
 			     struct lkmdbg_signal_config_request *reply_out);
+static int get_status(int session_fd, struct lkmdbg_status_reply *reply_out);
 static int set_syscall_trace(int session_fd, pid_t tid, int syscall_nr,
 			     uint32_t mode, uint32_t phases,
 			     struct lkmdbg_syscall_trace_request *reply_out);
 static int get_syscall_trace(int session_fd,
 			     struct lkmdbg_syscall_trace_request *reply_out);
+static int set_stealth(int session_fd, uint32_t flags,
+		       struct lkmdbg_stealth_request *reply_out);
+static int get_stealth(int session_fd,
+		       struct lkmdbg_stealth_request *reply_out);
 static int child_query_nofault_residency(int cmd_fd, int resp_fd);
 static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   void *buf, size_t len);
@@ -201,6 +206,24 @@ static int set_target_ex(int session_fd, pid_t pid, pid_t tid)
 static int set_target(int session_fd, pid_t pid)
 {
 	return set_target_ex(session_fd, pid, 0);
+}
+
+static int get_status(int session_fd, struct lkmdbg_status_reply *reply_out)
+{
+	struct lkmdbg_status_reply reply = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(reply),
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_GET_STATUS, &reply) < 0) {
+		fprintf(stderr, "GET_STATUS failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = reply;
+
+	return 0;
 }
 
 static int drain_session_events(int session_fd)
@@ -1101,6 +1124,45 @@ static int get_syscall_trace(int session_fd,
 	if (ioctl(session_fd, LKMDBG_IOC_GET_SYSCALL_TRACE, &req) < 0) {
 		fprintf(stderr, "GET_SYSCALL_TRACE failed: %s\n",
 			strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+
+	return 0;
+}
+
+static int set_stealth(int session_fd, uint32_t flags,
+		       struct lkmdbg_stealth_request *reply_out)
+{
+	struct lkmdbg_stealth_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.flags = flags,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_SET_STEALTH, &req) < 0) {
+		fprintf(stderr, "SET_STEALTH failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+
+	return 0;
+}
+
+static int get_stealth(int session_fd,
+		       struct lkmdbg_stealth_request *reply_out)
+{
+	struct lkmdbg_stealth_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_GET_STEALTH, &req) < 0) {
+		fprintf(stderr, "GET_STEALTH failed: %s\n", strerror(errno));
 		return -1;
 	}
 
@@ -3612,6 +3674,34 @@ static int child_fill_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 	return 0;
 }
 
+static int proc_modules_has_name(const char *name)
+{
+	char buf[8192];
+	ssize_t nr;
+	int fd;
+
+	if (!name || !*name)
+		return -1;
+
+	fd = open("/proc/modules", O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		fprintf(stderr, "open(/proc/modules) failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	nr = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (nr < 0) {
+		fprintf(stderr, "read(/proc/modules) failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	buf[nr] = '\0';
+	return strstr(buf, name) != NULL;
+}
+
 static void *worker_thread_main(void *arg)
 {
 	struct worker_ctx *ctx = arg;
@@ -4095,6 +4185,21 @@ static const char *describe_syscall_trace_phases(uint32_t phases, char *buf,
 	return buf;
 }
 
+static const char *describe_stealth_flags(uint32_t flags, char *buf,
+					  size_t buf_size)
+{
+	buf[0] = '\0';
+
+	if (flags & LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE)
+		append_flag_name(buf, buf_size, "debugfs");
+	if (flags & LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN)
+		append_flag_name(buf, buf_size, "modulehide");
+	if (!buf[0])
+		snprintf(buf, buf_size, "none");
+
+	return buf;
+}
+
 static int parse_pte_mode(const char *arg, uint32_t *mode_out,
 			  uint32_t *flags_out, uint64_t *raw_pte_out)
 {
@@ -4556,6 +4661,51 @@ static int parse_syscall_trace_phases(const char *arg, uint32_t *phases_out)
 		return 0;
 	}
 	return -1;
+}
+
+static int parse_stealth_flags(const char *arg, uint32_t *flags_out)
+{
+	char *copy;
+	char *token;
+	char *saveptr = NULL;
+	char *endp = NULL;
+	uint32_t flags = 0;
+
+	if (strcmp(arg, "none") == 0 || strcmp(arg, "0") == 0) {
+		*flags_out = 0;
+		return 0;
+	}
+
+	copy = strdup(arg);
+	if (!copy)
+		return -1;
+
+	for (token = strtok_r(copy, ",|", &saveptr); token;
+	     token = strtok_r(NULL, ",|", &saveptr)) {
+		if (strcmp(token, "debugfs") == 0 ||
+		    strcmp(token, "debugfs_on") == 0) {
+			flags |= LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE;
+			continue;
+		}
+		if (strcmp(token, "modulehide") == 0 ||
+		    strcmp(token, "module_hidden") == 0 ||
+		    strcmp(token, "hide") == 0) {
+			flags |= LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN;
+			continue;
+		}
+		free(copy);
+		goto numeric;
+	}
+
+	free(copy);
+	*flags_out = flags;
+	return 0;
+
+numeric:
+	*flags_out = (uint32_t)strtoul(arg, &endp, 0);
+	if (*endp != '\0')
+		return -1;
+	return 0;
 }
 
 static int query_hwpoint_entry_by_id(int session_fd, uint64_t id,
@@ -5322,6 +5472,96 @@ fail:
 	return -1;
 }
 
+static int verify_stealth_control(int session_fd)
+{
+	struct lkmdbg_stealth_request stealth_req;
+	struct lkmdbg_status_reply status_reply;
+	uint32_t original_flags;
+	int present;
+	int aux_session_fd = -1;
+
+	memset(&stealth_req, 0, sizeof(stealth_req));
+	memset(&status_reply, 0, sizeof(status_reply));
+
+	if (get_stealth(session_fd, &stealth_req) < 0)
+		return -1;
+	if (get_status(session_fd, &status_reply) < 0)
+		return -1;
+	if (status_reply.stealth_flags != stealth_req.flags ||
+	    status_reply.stealth_supported_flags != stealth_req.supported_flags) {
+		fprintf(stderr,
+			"stealth status mismatch flags=0x%x/0x%x supported=0x%x/0x%x\n",
+			status_reply.stealth_flags, stealth_req.flags,
+			status_reply.stealth_supported_flags,
+			stealth_req.supported_flags);
+		return -1;
+	}
+
+	if (!(stealth_req.supported_flags & LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN)) {
+		printf("selftest stealth: module list hide unavailable, skipping\n");
+		return 0;
+	}
+
+	original_flags = stealth_req.flags;
+	present = proc_modules_has_name("lkmdbg ");
+	if (present < 0)
+		return -1;
+	if (!present) {
+		fprintf(stderr, "module missing from /proc/modules before hide\n");
+		return -1;
+	}
+
+	if (set_stealth(session_fd,
+			original_flags | LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN,
+			&stealth_req) < 0)
+		return -1;
+	if (!(stealth_req.flags & LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN)) {
+		fprintf(stderr, "module list hide did not stick flags=0x%x\n",
+			stealth_req.flags);
+		goto fail;
+	}
+
+	present = proc_modules_has_name("lkmdbg ");
+	if (present < 0)
+		goto fail;
+	if (present) {
+		fprintf(stderr, "module still visible in /proc/modules after hide\n");
+		goto fail;
+	}
+
+	aux_session_fd = open_session_fd();
+	if (aux_session_fd < 0)
+		goto fail;
+	close(aux_session_fd);
+	aux_session_fd = -1;
+
+	if (set_stealth(session_fd, original_flags, &stealth_req) < 0)
+		return -1;
+	if (stealth_req.flags != original_flags) {
+		fprintf(stderr, "stealth restore mismatch flags=0x%x expected=0x%x\n",
+			stealth_req.flags, original_flags);
+		return -1;
+	}
+
+	present = proc_modules_has_name("lkmdbg ");
+	if (present < 0)
+		return -1;
+	if (!present) {
+		fprintf(stderr, "module not restored in /proc/modules\n");
+		return -1;
+	}
+
+	printf("selftest stealth control ok original=0x%x restored=0x%x\n",
+	       original_flags, stealth_req.flags);
+	return 0;
+
+fail:
+	if (aux_session_fd >= 0)
+		close(aux_session_fd);
+	set_stealth(session_fd, original_flags, NULL);
+	return -1;
+}
+
 static int verify_single_step_event(int session_fd, const struct child_info *info)
 {
 	struct lkmdbg_freeze_request req;
@@ -5427,6 +5667,8 @@ static void usage(const char *prog)
 		"  %s thaw <pid> [timeout_ms]\n"
 		"  %s sysset <pid> <off|event|stop|both> <enter|exit|both> [tid] [syscall_nr]\n"
 		"  %s sysget <pid>\n"
+		"  %s stealthset <pid> <none|debugfs|modulehide|debugfs,modulehide>\n"
+		"  %s stealthget <pid>\n"
 		"  %s events <pid> [max_events] [timeout_ms]\n"
 		"  %s vmas <pid>\n"
 		"  %s pages <pid> <remote_addr_hex> <length>\n"
@@ -5443,7 +5685,8 @@ static void usage(const char *prog)
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog);
+		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
+		prog, prog);
 }
 
 static int run_selftest(const char *prog)
@@ -5915,6 +6158,16 @@ static int run_selftest(const char *prog)
 		return 1;
 	}
 
+	if (verify_stealth_control(session_fd) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
 	if (verify_single_step_event(session_fd, &info) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
@@ -6164,6 +6417,7 @@ int main(int argc, char **argv)
 	int syscall_trace_nr = -1;
 	uint32_t syscall_trace_mode = 0;
 	uint32_t syscall_trace_phases = 0;
+	uint32_t stealth_flags = 0;
 	unsigned int max_events = EVENT_READ_BATCH;
 
 	if (argc == 2 && strcmp(argv[1], "selftest") == 0)
@@ -6326,6 +6580,17 @@ int main(int argc, char **argv)
 			syscall_trace_phases = 0;
 			syscall_trace_nr = -1;
 			tid = 0;
+		}
+	}
+
+	if (strcmp(argv[1], "stealthset") == 0) {
+		if (argc < 4) {
+			usage(argv[0]);
+			return 1;
+		}
+		if (parse_stealth_flags(argv[3], &stealth_flags) < 0) {
+			fprintf(stderr, "invalid stealth flags: %s\n", argv[3]);
+			return 1;
 		}
 	}
 
@@ -6777,6 +7042,40 @@ int main(int argc, char **argv)
 		printf("syscall_trace.phases=0x%x(%s)\n", reply.phases,
 		       describe_syscall_trace_phases(reply.phases, phase_buf,
 						     sizeof(phase_buf)));
+	} else if (strcmp(argv[1], "stealthset") == 0) {
+		struct lkmdbg_stealth_request reply;
+		char flags_buf[48];
+		char supported_buf[48];
+
+		memset(&reply, 0, sizeof(reply));
+		if (set_stealth(session_fd, stealth_flags, &reply) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		printf("stealth.flags=0x%x(%s)\n", reply.flags,
+		       describe_stealth_flags(reply.flags, flags_buf,
+					      sizeof(flags_buf)));
+		printf("stealth.supported=0x%x(%s)\n", reply.supported_flags,
+		       describe_stealth_flags(reply.supported_flags,
+					      supported_buf,
+					      sizeof(supported_buf)));
+	} else if (strcmp(argv[1], "stealthget") == 0) {
+		struct lkmdbg_stealth_request reply;
+		char flags_buf[48];
+		char supported_buf[48];
+
+		memset(&reply, 0, sizeof(reply));
+		if (get_stealth(session_fd, &reply) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		printf("stealth.flags=0x%x(%s)\n", reply.flags,
+		       describe_stealth_flags(reply.flags, flags_buf,
+					      sizeof(flags_buf)));
+		printf("stealth.supported=0x%x(%s)\n", reply.supported_flags,
+		       describe_stealth_flags(reply.supported_flags,
+					      supported_buf,
+					      sizeof(supported_buf)));
 	} else if (strcmp(argv[1], "events") == 0) {
 		if (dump_session_events(session_fd, max_events, timeout_ms) < 0) {
 			close(session_fd);

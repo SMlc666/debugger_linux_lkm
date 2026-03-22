@@ -44,6 +44,8 @@ static void print_status(const struct lkmdbg_status_reply *reply)
 	printf("stop_flags=0x%x\n", reply->stop_flags);
 	printf("stop_tgid=%d\n", reply->stop_tgid);
 	printf("stop_tid=%d\n", reply->stop_tid);
+	printf("stealth_flags=0x%x\n", reply->stealth_flags);
+	printf("stealth_supported_flags=0x%x\n", reply->stealth_supported_flags);
 }
 
 static void print_event(const struct lkmdbg_event_record *event)

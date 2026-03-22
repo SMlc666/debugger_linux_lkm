@@ -8,6 +8,7 @@ lkmdbg-core-y := \
 	core/lkmdbg_hook_registry.o \
 	core/lkmdbg_main.o \
 	core/lkmdbg_runtime_hooks.o \
+	core/lkmdbg_stealth.o \
 	core/lkmdbg_symbols.o \
 	core/lkmdbg_protect.o
 

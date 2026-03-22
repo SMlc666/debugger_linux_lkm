@@ -501,6 +501,8 @@ static int lkmdbg_session_copy_status_to_user(struct lkmdbg_session *session,
 	reply.stop_flags = stop.flags;
 	reply.stop_tgid = stop.tgid;
 	reply.stop_tid = stop.tid;
+	reply.stealth_flags = lkmdbg_stealth_current_flags();
+	reply.stealth_supported_flags = lkmdbg_stealth_supported_flags();
 
 	if (copy_to_user(argp, &reply, sizeof(reply)))
 		return -EFAULT;
@@ -783,6 +785,10 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_set_syscall_trace(session, argp);
 	case LKMDBG_IOC_GET_SYSCALL_TRACE:
 		return lkmdbg_get_syscall_trace(session, argp);
+	case LKMDBG_IOC_SET_STEALTH:
+		return lkmdbg_set_stealth(session, argp);
+	case LKMDBG_IOC_GET_STEALTH:
+		return lkmdbg_get_stealth(session, argp);
 	case LKMDBG_IOC_GET_STOP_STATE:
 		return lkmdbg_get_stop_state(session, argp);
 	case LKMDBG_IOC_CONTINUE_TARGET:

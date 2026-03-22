@@ -24,6 +24,11 @@ module_param(hook_seq_read, bool, 0444);
 MODULE_PARM_DESC(hook_seq_read,
 		 "Install a pass-through inline hook on seq_read and expose hit counters in debugfs");
 
+bool enable_debugfs;
+module_param(enable_debugfs, bool, 0644);
+MODULE_PARM_DESC(enable_debugfs,
+		 "Create the debugfs diagnostics surface under /sys/kernel/debug/lkmdbg");
+
 bool bypass_kprobe_blacklist;
 module_param(bypass_kprobe_blacklist, bool, 0644);
 MODULE_PARM_DESC(bypass_kprobe_blacklist,
@@ -233,7 +238,7 @@ static int __init lkmdbg_init(void)
 	lkmdbg_trace_stage("init_begin");
 	lkmdbg_state.load_jiffies = jiffies;
 
-	ret = lkmdbg_debugfs_init();
+	ret = lkmdbg_debugfs_set_visible(enable_debugfs);
 	if (ret)
 		return ret;
 	lkmdbg_trace_stage("debugfs_ready");
@@ -245,8 +250,16 @@ static int __init lkmdbg_init(void)
 	}
 	lkmdbg_trace_stage("symbols_ready");
 
+	ret = lkmdbg_stealth_init();
+	if (ret) {
+		lkmdbg_symbols_exit();
+		lkmdbg_debugfs_exit();
+		return ret;
+	}
+
 	ret = lkmdbg_hooks_init();
 	if (ret) {
+		lkmdbg_stealth_exit();
 		lkmdbg_symbols_exit();
 		lkmdbg_debugfs_exit();
 		return ret;
@@ -271,6 +284,7 @@ static int __init lkmdbg_init(void)
 		if (ret) {
 			pr_err("lkmdbg: hook selftest failed ret=%d\n", ret);
 			lkmdbg_hooks_exit();
+			lkmdbg_stealth_exit();
 			lkmdbg_symbols_exit();
 			lkmdbg_debugfs_exit();
 			return ret;
@@ -280,6 +294,7 @@ static int __init lkmdbg_init(void)
 	ret = lkmdbg_transport_init();
 	if (ret) {
 		lkmdbg_hooks_exit();
+		lkmdbg_stealth_exit();
 		lkmdbg_symbols_exit();
 		lkmdbg_debugfs_exit();
 		return ret;
@@ -290,6 +305,7 @@ static int __init lkmdbg_init(void)
 	if (ret) {
 		lkmdbg_transport_exit();
 		lkmdbg_hooks_exit();
+		lkmdbg_stealth_exit();
 		lkmdbg_symbols_exit();
 		lkmdbg_debugfs_exit();
 		return ret;
@@ -301,6 +317,7 @@ static int __init lkmdbg_init(void)
 		lkmdbg_runtime_hooks_exit();
 		lkmdbg_transport_exit();
 		lkmdbg_hooks_exit();
+		lkmdbg_stealth_exit();
 		lkmdbg_symbols_exit();
 		lkmdbg_debugfs_exit();
 		return ret;
@@ -315,6 +332,7 @@ static int __init lkmdbg_init(void)
 
 static void __exit lkmdbg_exit(void)
 {
+	lkmdbg_stealth_exit();
 	lkmdbg_thread_ctrl_exit();
 	lkmdbg_runtime_hooks_exit();
 	lkmdbg_transport_exit();

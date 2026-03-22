@@ -53,7 +53,9 @@ struct lkmdbg_state {
 	u64 session_opened_total;
 	u64 active_sessions;
 	u64 next_session_id;
+	bool debugfs_active;
 	bool proc_version_hook_active;
+	bool module_list_hidden;
 	bool hook_selftest_enabled;
 	bool hook_selftest_exec_pool_ready;
 	bool hook_selftest_exec_allocated;
@@ -87,6 +89,7 @@ struct lkmdbg_state {
 	u32 hwpoint_last_type;
 	u64 hwpoint_last_addr;
 	u64 hwpoint_last_ip;
+	u32 stealth_supported_flags;
 };
 
 struct lkmdbg_symbols {
@@ -196,6 +199,7 @@ extern char *tag;
 extern bool hook_proc_version;
 extern unsigned int hook_selftest_mode;
 extern bool hook_seq_read;
+extern bool enable_debugfs;
 extern bool bypass_kprobe_blacklist;
 extern bool bypass_cfi;
 extern struct lkmdbg_state lkmdbg_state;
@@ -203,6 +207,15 @@ extern struct lkmdbg_symbols lkmdbg_symbols;
 
 int lkmdbg_debugfs_init(void);
 void lkmdbg_debugfs_exit(void);
+int lkmdbg_debugfs_set_visible(bool visible);
+bool lkmdbg_debugfs_is_active(void);
+
+int lkmdbg_stealth_init(void);
+void lkmdbg_stealth_exit(void);
+u32 lkmdbg_stealth_current_flags(void);
+u32 lkmdbg_stealth_supported_flags(void);
+long lkmdbg_set_stealth(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_get_stealth(struct lkmdbg_session *session, void __user *argp);
 
 int lkmdbg_symbols_init(void);
 void lkmdbg_symbols_exit(void);

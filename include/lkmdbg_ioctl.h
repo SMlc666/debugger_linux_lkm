@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 17
+#define LKMDBG_PROTO_VERSION 18
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -42,6 +42,9 @@
 
 #define LKMDBG_SYSCALL_TRACE_PHASE_ENTER 0x00000001U
 #define LKMDBG_SYSCALL_TRACE_PHASE_EXIT 0x00000002U
+
+#define LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE 0x00000001U
+#define LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN 0x00000002U
 
 #define LKMDBG_STOP_REASON_FREEZE 1U
 #define LKMDBG_STOP_REASON_BREAKPOINT 2U
@@ -209,6 +212,8 @@ struct lkmdbg_status_reply {
 	__u32 stop_flags;
 	__s32 stop_tgid;
 	__s32 stop_tid;
+	__u32 stealth_flags;
+	__u32 stealth_supported_flags;
 };
 
 struct lkmdbg_target_request {
@@ -653,6 +658,13 @@ struct lkmdbg_syscall_trace_request {
 	__u32 reserved0;
 };
 
+struct lkmdbg_stealth_request {
+	__u32 version;
+	__u32 size;
+	__u32 flags;
+	__u32 supported_flags;
+};
+
 #define LKMDBG_IOC_OPEN_SESSION \
 	_IOW(LKMDBG_IOC_MAGIC, 0x01, struct lkmdbg_open_session_request)
 #define LKMDBG_IOC_GET_STATUS \
@@ -724,5 +736,9 @@ struct lkmdbg_syscall_trace_request {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x2F, struct lkmdbg_syscall_trace_request)
 #define LKMDBG_IOC_GET_SYSCALL_TRACE \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x30, struct lkmdbg_syscall_trace_request)
+#define LKMDBG_IOC_SET_STEALTH \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x31, struct lkmdbg_stealth_request)
+#define LKMDBG_IOC_GET_STEALTH \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x32, struct lkmdbg_stealth_request)
 
 #endif

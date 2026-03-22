@@ -31,7 +31,10 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	u64 event_drop_total;
 	u64 hwpoint_last_addr;
 	u64 hwpoint_last_ip;
+	u32 stealth_flags;
+	u32 stealth_supported_flags;
 	bool hook_active;
+	bool debugfs_active;
 	bool selftest_enabled;
 	bool selftest_exec_pool_ready;
 	bool selftest_exec_allocated;
@@ -74,6 +77,13 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	seq_read_hook_active = lkmdbg_state.seq_read_hook_active;
 	seq_read_hook_hits = lkmdbg_state.seq_read_hook_hits;
 	seq_read_hook_last_ret = lkmdbg_state.seq_read_hook_last_ret;
+	debugfs_active = lkmdbg_state.debugfs_active;
+	stealth_supported_flags = lkmdbg_state.stealth_supported_flags;
+	stealth_flags = 0;
+	if (debugfs_active)
+		stealth_flags |= LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE;
+	if (lkmdbg_state.module_list_hidden)
+		stealth_flags |= LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN;
 	mutex_unlock(&lkmdbg_state.lock);
 
 	hwpoint_callback_total = atomic64_read(&lkmdbg_state.hwpoint_callback_total);
@@ -111,6 +121,11 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	seq_printf(m, "session_opened_total=%llu\n",
 		   (unsigned long long)sessions_total);
 	seq_printf(m, "target_path=%s\n", LKMDBG_TARGET_PATH);
+	seq_printf(m, "debugfs_requested=%u\n", enable_debugfs);
+	seq_printf(m, "debugfs_active=%u\n", debugfs_active);
+	seq_printf(m, "stealth_flags=0x%x\n", stealth_flags);
+	seq_printf(m, "stealth_supported_flags=0x%x\n",
+		   stealth_supported_flags);
 	seq_printf(m, "hook_selftest_mode=%u\n", hook_selftest_mode);
 	seq_printf(m, "hook_selftest_enabled=%u\n", selftest_enabled);
 	seq_printf(m, "hook_selftest_exec_pool_ready=%u\n",
@@ -206,6 +221,9 @@ static const struct file_operations lkmdbg_hooks_fops = {
 
 int lkmdbg_debugfs_init(void)
 {
+	if (lkmdbg_state.debugfs_dir)
+		return 0;
+
 	lkmdbg_state.debugfs_dir = debugfs_create_dir(LKMDBG_DIR_NAME, NULL);
 	if (IS_ERR_OR_NULL(lkmdbg_state.debugfs_dir))
 		return -ENOMEM;
@@ -224,6 +242,10 @@ int lkmdbg_debugfs_init(void)
 		return -ENOMEM;
 	}
 
+	mutex_lock(&lkmdbg_state.lock);
+	lkmdbg_state.debugfs_active = true;
+	mutex_unlock(&lkmdbg_state.lock);
+
 	return 0;
 }
 
@@ -231,4 +253,21 @@ void lkmdbg_debugfs_exit(void)
 {
 	debugfs_remove_recursive(lkmdbg_state.debugfs_dir);
 	lkmdbg_state.debugfs_dir = NULL;
+	mutex_lock(&lkmdbg_state.lock);
+	lkmdbg_state.debugfs_active = false;
+	mutex_unlock(&lkmdbg_state.lock);
+}
+
+int lkmdbg_debugfs_set_visible(bool visible)
+{
+	if (visible)
+		return lkmdbg_debugfs_init();
+
+	lkmdbg_debugfs_exit();
+	return 0;
+}
+
+bool lkmdbg_debugfs_is_active(void)
+{
+	return READ_ONCE(lkmdbg_state.debugfs_active);
 }
