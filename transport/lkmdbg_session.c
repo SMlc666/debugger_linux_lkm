@@ -587,6 +587,8 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_page_query(session, argp);
 	case LKMDBG_IOC_QUERY_VMAS:
 		return lkmdbg_vma_query(session, argp);
+	case LKMDBG_IOC_QUERY_IMAGES:
+		return lkmdbg_image_query(session, argp);
 	case LKMDBG_IOC_QUERY_THREADS:
 		return lkmdbg_query_threads(session, argp);
 	case LKMDBG_IOC_GET_REGS:

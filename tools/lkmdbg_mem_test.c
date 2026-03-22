@@ -32,6 +32,8 @@
 #define SELFTEST_REG_SENTINEL 0x5A17C0DEULL
 #define VMA_QUERY_BATCH 64
 #define VMA_QUERY_NAMES_SIZE 65536
+#define IMAGE_QUERY_BATCH 64
+#define IMAGE_QUERY_NAMES_SIZE 65536
 #define THREAD_QUERY_BATCH 64
 #define PAGE_QUERY_BATCH 64
 #define EVENT_READ_BATCH 16
@@ -80,6 +82,11 @@ struct freeze_child_ctx {
 
 struct vma_query_buffer {
 	struct lkmdbg_vma_entry *entries;
+	char *names;
+};
+
+struct image_query_buffer {
+	struct lkmdbg_image_entry *entries;
 	char *names;
 };
 
@@ -420,9 +427,10 @@ static int set_target_regs(int session_fd,
 	return 0;
 }
 
-static int add_hwpoint(int session_fd, pid_t tid, uint64_t addr, uint32_t type,
-		       uint32_t len, uint32_t flags,
-		       struct lkmdbg_hwpoint_request *reply_out)
+static int add_hwpoint_ex(int session_fd, pid_t tid, uint64_t addr,
+			  uint32_t type, uint32_t len, uint32_t flags,
+			  uint64_t trigger_hit_count, uint32_t action_flags,
+			  struct lkmdbg_hwpoint_request *reply_out)
 {
 	struct lkmdbg_hwpoint_request req = {
 		.version = LKMDBG_PROTO_VERSION,
@@ -432,6 +440,8 @@ static int add_hwpoint(int session_fd, pid_t tid, uint64_t addr, uint32_t type,
 		.type = type,
 		.len = len,
 		.flags = flags,
+		.trigger_hit_count = trigger_hit_count,
+		.action_flags = action_flags,
 	};
 
 	if (ioctl(session_fd, LKMDBG_IOC_ADD_HWPOINT, &req) < 0) {
@@ -444,9 +454,19 @@ static int add_hwpoint(int session_fd, pid_t tid, uint64_t addr, uint32_t type,
 	return 0;
 }
 
-static int add_hwpoint_expect_errno(int session_fd, pid_t tid, uint64_t addr,
-				    uint32_t type, uint32_t len,
-				    uint32_t flags, int expected_errno)
+static int add_hwpoint(int session_fd, pid_t tid, uint64_t addr, uint32_t type,
+		       uint32_t len, uint32_t flags,
+		       struct lkmdbg_hwpoint_request *reply_out)
+{
+	return add_hwpoint_ex(session_fd, tid, addr, type, len, flags, 1, 0,
+			      reply_out);
+}
+
+static int add_hwpoint_expect_errno_ex(int session_fd, pid_t tid, uint64_t addr,
+				       uint32_t type, uint32_t len,
+				       uint32_t flags, uint64_t trigger_hit_count,
+				       uint32_t action_flags,
+				       int expected_errno)
 {
 	struct lkmdbg_hwpoint_request req = {
 		.version = LKMDBG_PROTO_VERSION,
@@ -456,6 +476,8 @@ static int add_hwpoint_expect_errno(int session_fd, pid_t tid, uint64_t addr,
 		.type = type,
 		.len = len,
 		.flags = flags,
+		.trigger_hit_count = trigger_hit_count,
+		.action_flags = action_flags,
 	};
 
 	errno = 0;
@@ -474,6 +496,14 @@ static int add_hwpoint_expect_errno(int session_fd, pid_t tid, uint64_t addr,
 	}
 
 	return 0;
+}
+
+static int add_hwpoint_expect_errno(int session_fd, pid_t tid, uint64_t addr,
+				    uint32_t type, uint32_t len,
+				    uint32_t flags, int expected_errno)
+{
+	return add_hwpoint_expect_errno_ex(session_fd, tid, addr, type, len,
+					   flags, 1, 0, expected_errno);
 }
 
 static int remove_hwpoint(int session_fd, uint64_t id)
@@ -884,9 +914,46 @@ static int query_target_vmas(int session_fd, uint64_t start_addr,
 	return 0;
 }
 
+static int query_target_images(int session_fd, uint64_t start_addr,
+			       struct image_query_buffer *buf,
+			       struct lkmdbg_image_query_request *reply_out)
+{
+	struct lkmdbg_image_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.start_addr = start_addr,
+		.entries_addr = (uintptr_t)buf->entries,
+		.max_entries = IMAGE_QUERY_BATCH,
+		.names_addr = (uintptr_t)buf->names,
+		.names_size = IMAGE_QUERY_NAMES_SIZE,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_IMAGES, &req) < 0) {
+		fprintf(stderr, "QUERY_IMAGES failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
 static const char *vma_name_ptr(const struct lkmdbg_vma_query_request *reply,
 				const struct lkmdbg_vma_entry *entry,
 				const struct vma_query_buffer *buf)
+{
+	if (!entry->name_size)
+		return "";
+
+	if ((uint64_t)entry->name_offset + entry->name_size > reply->names_used)
+		return "";
+
+	return buf->names + entry->name_offset;
+}
+
+static const char *image_name_ptr(const struct lkmdbg_image_query_request *reply,
+				  const struct lkmdbg_image_entry *entry,
+				  const struct image_query_buffer *buf)
 {
 	if (!entry->name_size)
 		return "";
@@ -1093,6 +1160,121 @@ static int verify_vma_query(int session_fd, const struct child_info *info)
 	printf("selftest vma query ok file=%s inode=%" PRIu64 " dev=%u:%u\n",
 	       name, (uint64_t)info->file_inode, info->file_dev_major,
 	       info->file_dev_minor);
+	ret = 0;
+
+out:
+	free(buf.names);
+	free(buf.entries);
+	return ret;
+}
+
+static int verify_image_query(int session_fd, const struct child_info *info)
+{
+	struct image_query_buffer buf = { 0 };
+	uint64_t cursor = 0;
+	uint64_t prev_end = 0;
+	unsigned int passes = 0;
+	unsigned int total = 0;
+	int saw_file = 0;
+	int saw_main = 0;
+	int ret = -1;
+
+	buf.entries = calloc(IMAGE_QUERY_BATCH, sizeof(*buf.entries));
+	buf.names = calloc(1, IMAGE_QUERY_NAMES_SIZE);
+	if (!buf.entries || !buf.names) {
+		fprintf(stderr, "image query allocation failed\n");
+		goto out;
+	}
+
+	for (;;) {
+		struct lkmdbg_image_query_request reply;
+		unsigned int i;
+
+		if (query_target_images(session_fd, cursor, &buf, &reply) < 0)
+			goto out;
+
+		if (!reply.entries_filled && !reply.done) {
+			fprintf(stderr,
+				"QUERY_IMAGES returned no entries without done\n");
+			goto out;
+		}
+
+		for (i = 0; i < reply.entries_filled; i++) {
+			const struct lkmdbg_image_entry *entry = &buf.entries[i];
+			const char *name = image_name_ptr(&reply, entry, &buf);
+
+			if (entry->start_addr >= entry->end_addr) {
+				fprintf(stderr,
+					"invalid image range start=0x%" PRIx64 " end=0x%" PRIx64 "\n",
+					(uint64_t)entry->start_addr,
+					(uint64_t)entry->end_addr);
+				goto out;
+			}
+
+			if (total == 0 && i == 0)
+				prev_end = entry->end_addr;
+			else if (prev_end > entry->start_addr) {
+				fprintf(stderr, "non-monotonic image iteration output\n");
+				goto out;
+			}
+
+			if (!(entry->flags & LKMDBG_IMAGE_FLAG_FILE) ||
+			    !entry->name_size) {
+				fprintf(stderr,
+					"image entry missing file backing flags=0x%x name_size=%u\n",
+					entry->flags, entry->name_size);
+				goto out;
+			}
+
+			if (info->file_addr >= entry->start_addr &&
+			    info->file_addr < entry->end_addr) {
+				if (entry->inode != info->file_inode ||
+				    entry->dev_major != info->file_dev_major ||
+				    entry->dev_minor != info->file_dev_minor ||
+				    strstr(name, "lkmdbg-vma") == NULL) {
+					fprintf(stderr,
+						"file image mismatch inode=%" PRIu64 " dev=%u:%u name=%s\n",
+						(uint64_t)entry->inode,
+						entry->dev_major,
+						entry->dev_minor, name);
+					goto out;
+				}
+				saw_file = 1;
+			}
+
+			if ((entry->flags & LKMDBG_IMAGE_FLAG_MAIN_EXE) &&
+			    (entry->prot & LKMDBG_VMA_PROT_EXEC))
+				saw_main = 1;
+
+			prev_end = entry->end_addr;
+		}
+
+		total += reply.entries_filled;
+		passes++;
+		if (reply.done)
+			break;
+
+		if (reply.next_addr <= cursor) {
+			fprintf(stderr,
+				"QUERY_IMAGES cursor did not advance old=0x%" PRIx64 " new=0x%" PRIx64 "\n",
+				(uint64_t)cursor, (uint64_t)reply.next_addr);
+			goto out;
+		}
+		cursor = reply.next_addr;
+		if (passes > 1024) {
+			fprintf(stderr, "QUERY_IMAGES iteration exceeded sane pass count\n");
+			goto out;
+		}
+	}
+
+	if (!saw_file || !saw_main || !total) {
+		fprintf(stderr,
+			"QUERY_IMAGES missing targets file=%d main=%d total=%u\n",
+			saw_file, saw_main, total);
+		goto out;
+	}
+
+	printf("selftest image query ok passes=%u total=%u\n", passes, total);
 	ret = 0;
 
 out:
@@ -2010,6 +2192,55 @@ numeric:
 	return 0;
 }
 
+static int parse_hwpoint_actions(const char *arg, uint32_t *actions_out)
+{
+	char *copy;
+	char *token;
+	char *saveptr = NULL;
+	char *endp = NULL;
+	uint32_t actions = 0;
+
+	if (strcmp(arg, "stop") == 0 || strcmp(arg, "0") == 0) {
+		*actions_out = 0;
+		return 0;
+	}
+
+	copy = strdup(arg);
+	if (!copy)
+		return -1;
+
+	for (token = strtok_r(copy, ",|", &saveptr); token;
+	     token = strtok_r(NULL, ",|", &saveptr)) {
+		if (strcmp(token, "stop") == 0)
+			continue;
+		if (strcmp(token, "oneshot") == 0) {
+			actions |= LKMDBG_HWPOINT_ACTION_ONESHOT;
+			continue;
+		}
+		if (strcmp(token, "autocont") == 0 ||
+		    strcmp(token, "autocontinue") == 0 ||
+		    strcmp(token, "continue") == 0) {
+			actions |= LKMDBG_HWPOINT_ACTION_AUTO_CONTINUE;
+			continue;
+		}
+		free(copy);
+		goto numeric;
+	}
+
+	free(copy);
+	*actions_out = actions;
+	return 0;
+
+numeric:
+	*actions_out = (uint32_t)strtoul(arg, &endp, 0);
+	if (*endp != '\0' ||
+	    (*actions_out &
+	     ~(LKMDBG_HWPOINT_ACTION_ONESHOT |
+	       LKMDBG_HWPOINT_ACTION_AUTO_CONTINUE)))
+		return -1;
+	return 0;
+}
+
 static void append_flag_name(char *buf, size_t buf_size, const char *name)
 {
 	size_t used;
@@ -2057,6 +2288,21 @@ static const char *describe_hwpoint_flags(uint32_t flags, char *buf, size_t buf_
 	return buf;
 }
 
+static const char *describe_hwpoint_actions(uint32_t actions, char *buf,
+					    size_t buf_size)
+{
+	buf[0] = '\0';
+
+	if (actions & LKMDBG_HWPOINT_ACTION_ONESHOT)
+		append_flag_name(buf, buf_size, "oneshot");
+	if (actions & LKMDBG_HWPOINT_ACTION_AUTO_CONTINUE)
+		append_flag_name(buf, buf_size, "autocont");
+	if (!buf[0])
+		snprintf(buf, buf_size, "stop");
+
+	return buf;
+}
+
 static const char *describe_hwpoint_state(uint32_t state, char *buf, size_t buf_size)
 {
 	buf[0] = '\0';
@@ -2071,6 +2317,25 @@ static const char *describe_hwpoint_state(uint32_t state, char *buf, size_t buf_
 		append_flag_name(buf, buf_size, "mutated");
 	if (!buf[0])
 		snprintf(buf, buf_size, "idle");
+
+	return buf;
+}
+
+static const char *describe_image_flags(uint32_t flags, char *buf,
+					size_t buf_size)
+{
+	buf[0] = '\0';
+
+	if (flags & LKMDBG_IMAGE_FLAG_FILE)
+		append_flag_name(buf, buf_size, "file");
+	if (flags & LKMDBG_IMAGE_FLAG_MAIN_EXE)
+		append_flag_name(buf, buf_size, "main-exe");
+	if (flags & LKMDBG_IMAGE_FLAG_SHARED)
+		append_flag_name(buf, buf_size, "shared");
+	if (flags & LKMDBG_IMAGE_FLAG_DELETED)
+		append_flag_name(buf, buf_size, "deleted");
+	if (!buf[0])
+		snprintf(buf, buf_size, "none");
 
 	return buf;
 }
@@ -2101,6 +2366,62 @@ static int dump_target_threads(int session_fd)
 			return 0;
 		cursor = reply.next_tid;
 	}
+}
+
+static int dump_target_images(int session_fd)
+{
+	struct image_query_buffer buf = { 0 };
+	uint64_t cursor = 0;
+	int ret = -1;
+
+	buf.entries = calloc(IMAGE_QUERY_BATCH, sizeof(*buf.entries));
+	buf.names = calloc(1, IMAGE_QUERY_NAMES_SIZE);
+	if (!buf.entries || !buf.names) {
+		fprintf(stderr, "image query allocation failed\n");
+		goto out;
+	}
+
+	for (;;) {
+		struct lkmdbg_image_query_request reply;
+		uint32_t i;
+
+		if (query_target_images(session_fd, cursor, &buf, &reply) < 0)
+			goto out;
+
+		for (i = 0; i < reply.entries_filled; i++) {
+			char flag_buf[64];
+
+			printf("start=0x%016" PRIx64 " end=0x%016" PRIx64
+			       " base=0x%016" PRIx64 " pgoff=0x%" PRIx64
+			       " inode=%" PRIu64 " dev=%u:%u prot=0x%x"
+			       " flags=0x%x(%s) segs=%u path=%s\n",
+			       (uint64_t)buf.entries[i].start_addr,
+			       (uint64_t)buf.entries[i].end_addr,
+			       (uint64_t)buf.entries[i].base_addr,
+			       (uint64_t)buf.entries[i].pgoff,
+			       (uint64_t)buf.entries[i].inode,
+			       buf.entries[i].dev_major,
+			       buf.entries[i].dev_minor,
+			       buf.entries[i].prot,
+			       buf.entries[i].flags,
+			       describe_image_flags(buf.entries[i].flags,
+						    flag_buf,
+						    sizeof(flag_buf)),
+			       buf.entries[i].segment_count,
+			       image_name_ptr(&reply, &buf.entries[i], &buf));
+		}
+
+		if (reply.done) {
+			ret = 0;
+			break;
+		}
+		cursor = reply.next_addr;
+	}
+
+out:
+	free(buf.names);
+	free(buf.entries);
+	return ret;
 }
 
 static int get_and_print_regs(int session_fd, pid_t tid)
@@ -2330,6 +2651,38 @@ static int find_hwpoint_id(int session_fd, uint64_t id)
 		for (i = 0; i < reply.entries_filled; i++) {
 			if (entries[i].id == id)
 				return 0;
+		}
+
+		if (reply.done)
+			break;
+		cursor = reply.next_id;
+	}
+
+	fprintf(stderr, "hwpoint %" PRIu64 " not found in query\n", id);
+	return -1;
+}
+
+static int query_hwpoint_entry_by_id(int session_fd, uint64_t id,
+				     struct lkmdbg_hwpoint_entry *entry_out)
+{
+	struct lkmdbg_hwpoint_entry entries[16];
+	uint64_t cursor = 0;
+
+	for (;;) {
+		struct lkmdbg_hwpoint_query_request reply;
+		uint32_t i;
+
+		if (query_hwpoints(session_fd, cursor, entries,
+				   (uint32_t)(sizeof(entries) / sizeof(entries[0])),
+				   &reply) < 0)
+			return -1;
+
+		for (i = 0; i < reply.entries_filled; i++) {
+			if (entries[i].id != id)
+				continue;
+			if (entry_out)
+				*entry_out = entries[i];
+			return 0;
 		}
 
 		if (reply.done)
@@ -2586,43 +2939,228 @@ breakpoint_checks:
 		printf("selftest runtime: watchpoint event unavailable, continuing\n");
 		if (remove_hwpoint(session_fd, wp_req.id) < 0)
 			return -1;
-		printf("selftest runtime events ok breakpoint\n");
-		return 0;
-	}
-	if (ret < 0) {
+	} else if (ret < 0) {
 		remove_hwpoint(session_fd, wp_req.id);
 		return -1;
-	}
-	if (event.value0 != info->watch_addr ||
-	    event.flags != LKMDBG_HWPOINT_TYPE_WRITE) {
+	} else if (event.value0 != info->watch_addr ||
+		   event.flags != LKMDBG_HWPOINT_TYPE_WRITE) {
 		fprintf(stderr,
 			"watchpoint event mismatch addr=0x%" PRIx64 " flags=0x%x\n",
 			(uint64_t)event.value0, event.flags);
 		remove_hwpoint(session_fd, wp_req.id);
 		return -1;
-	}
-	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_WATCHPOINT,
-			      &stop_req) < 0) {
+	} else if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_WATCHPOINT,
+				     &stop_req) < 0) {
 		remove_hwpoint(session_fd, wp_req.id);
 		return -1;
-	}
-	if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
-	    !(stop_req.stop.flags & LKMDBG_STOP_FLAG_REARM_REQUIRED) ||
-	    stop_req.stop.value0 != info->watch_addr) {
+	} else if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
+		   !(stop_req.stop.flags & LKMDBG_STOP_FLAG_REARM_REQUIRED) ||
+		   stop_req.stop.value0 != info->watch_addr) {
 		fprintf(stderr,
 			"watchpoint stop state mismatch flags=0x%x value0=0x%" PRIx64 "\n",
 			stop_req.stop.flags, (uint64_t)stop_req.stop.value0);
 		remove_hwpoint(session_fd, wp_req.id);
 		return -1;
-	}
-	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0) {
+	} else if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
+				   NULL) < 0) {
 		remove_hwpoint(session_fd, wp_req.id);
 		return -1;
 	}
 	if (remove_hwpoint(session_fd, wp_req.id) < 0)
 		return -1;
 
-	printf("selftest runtime events ok clone signal breakpoint mmu-breakpoint oneshot rearm watchpoint\n");
+	{
+		struct lkmdbg_hwpoint_request threshold_req;
+		struct lkmdbg_hwpoint_request auto_req;
+		struct lkmdbg_hwpoint_request mmu_skip_req;
+		struct lkmdbg_hwpoint_entry entry;
+
+		memset(&threshold_req, 0, sizeof(threshold_req));
+		memset(&auto_req, 0, sizeof(auto_req));
+		memset(&mmu_skip_req, 0, sizeof(mmu_skip_req));
+		memset(&entry, 0, sizeof(entry));
+
+		if (add_hwpoint_ex(session_fd, child, info->exec_target_addr,
+				   LKMDBG_HWPOINT_TYPE_EXEC, 4, 0, 2,
+				   LKMDBG_HWPOINT_ACTION_ONESHOT,
+				   &threshold_req) < 0)
+			return -1;
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
+			remove_hwpoint(session_fd, threshold_req.id);
+			return -1;
+		}
+		ret = wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+					     LKMDBG_STOP_REASON_BREAKPOINT,
+					     1000, &event);
+		if (ret != -ETIMEDOUT) {
+			remove_hwpoint(session_fd, threshold_req.id);
+			fprintf(stderr,
+				"threshold breakpoint unexpectedly stopped on first hit ret=%d\n",
+				ret);
+			return -1;
+		}
+		if (query_hwpoint_entry_by_id(session_fd, threshold_req.id,
+					      &entry) < 0 ||
+		    entry.hits != 1 ||
+		    entry.trigger_hit_count != 2 ||
+		    entry.action_flags != LKMDBG_HWPOINT_ACTION_ONESHOT ||
+		    !(entry.state & LKMDBG_HWPOINT_STATE_ACTIVE)) {
+			fprintf(stderr,
+				"threshold breakpoint state mismatch hits=%" PRIu64 " after=%" PRIu64 " actions=0x%x state=0x%x\n",
+				(uint64_t)entry.hits,
+				(uint64_t)entry.trigger_hit_count,
+				entry.action_flags, entry.state);
+			remove_hwpoint(session_fd, threshold_req.id);
+			return -1;
+		}
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
+			remove_hwpoint(session_fd, threshold_req.id);
+			return -1;
+		}
+		if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+					   LKMDBG_STOP_REASON_BREAKPOINT,
+					   event_timeout_ms, &event) < 0) {
+			remove_hwpoint(session_fd, threshold_req.id);
+			return -1;
+		}
+		if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_BREAKPOINT,
+				      &stop_req) < 0) {
+			remove_hwpoint(session_fd, threshold_req.id);
+			return -1;
+		}
+		if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
+				    NULL) < 0) {
+			remove_hwpoint(session_fd, threshold_req.id);
+			return -1;
+		}
+		if (query_hwpoint_entry_by_id(session_fd, threshold_req.id,
+					      &entry) < 0 ||
+		    entry.hits != 2 ||
+		    (entry.state & LKMDBG_HWPOINT_STATE_ACTIVE)) {
+			fprintf(stderr,
+				"oneshot breakpoint failed to disarm hits=%" PRIu64 " state=0x%x\n",
+				(uint64_t)entry.hits, entry.state);
+			remove_hwpoint(session_fd, threshold_req.id);
+			return -1;
+		}
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
+			remove_hwpoint(session_fd, threshold_req.id);
+			return -1;
+		}
+		ret = wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+					     LKMDBG_STOP_REASON_BREAKPOINT,
+					     1000, &event);
+		if (ret != -ETIMEDOUT) {
+			remove_hwpoint(session_fd, threshold_req.id);
+			fprintf(stderr,
+				"oneshot breakpoint retriggered after disarm ret=%d\n",
+				ret);
+			return -1;
+		}
+		if (remove_hwpoint(session_fd, threshold_req.id) < 0)
+			return -1;
+
+		if (add_hwpoint_ex(session_fd, child, info->exec_target_addr,
+				   LKMDBG_HWPOINT_TYPE_EXEC, 4, 0, 1,
+				   LKMDBG_HWPOINT_ACTION_ONESHOT |
+					   LKMDBG_HWPOINT_ACTION_AUTO_CONTINUE,
+				   &auto_req) < 0)
+			return -1;
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
+			remove_hwpoint(session_fd, auto_req.id);
+			return -1;
+		}
+		ret = wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+					     LKMDBG_STOP_REASON_BREAKPOINT,
+					     1000, &event);
+		if (ret != -ETIMEDOUT) {
+			remove_hwpoint(session_fd, auto_req.id);
+			fprintf(stderr,
+				"auto-continue breakpoint unexpectedly stopped ret=%d\n",
+				ret);
+			return -1;
+		}
+		if (query_hwpoint_entry_by_id(session_fd, auto_req.id, &entry) < 0 ||
+		    entry.hits != 1 ||
+		    entry.action_flags !=
+			    (LKMDBG_HWPOINT_ACTION_ONESHOT |
+			     LKMDBG_HWPOINT_ACTION_AUTO_CONTINUE) ||
+		    (entry.state & LKMDBG_HWPOINT_STATE_ACTIVE)) {
+			fprintf(stderr,
+				"auto-continue breakpoint state mismatch hits=%" PRIu64 " actions=0x%x state=0x%x\n",
+				(uint64_t)entry.hits, entry.action_flags,
+				entry.state);
+			remove_hwpoint(session_fd, auto_req.id);
+			return -1;
+		}
+		if (remove_hwpoint(session_fd, auto_req.id) < 0)
+			return -1;
+
+		if (add_hwpoint_ex(session_fd, child, info->exec_target_addr,
+				   LKMDBG_HWPOINT_TYPE_EXEC, 4,
+				   LKMDBG_HWPOINT_FLAG_MMU_EXEC, 2, 0,
+				   &mmu_skip_req) < 0)
+			return -1;
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
+			remove_hwpoint(session_fd, mmu_skip_req.id);
+			return -1;
+		}
+		ret = wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+					     LKMDBG_STOP_REASON_BREAKPOINT,
+					     1000, &event);
+		if (ret != -ETIMEDOUT) {
+			remove_hwpoint(session_fd, mmu_skip_req.id);
+			fprintf(stderr,
+				"mmu threshold breakpoint unexpectedly stopped on first hit ret=%d\n",
+				ret);
+			return -1;
+		}
+		if (query_hwpoint_entry_by_id(session_fd, mmu_skip_req.id,
+					      &entry) < 0 ||
+		    entry.hits != 1 ||
+		    entry.trigger_hit_count != 2 ||
+		    !(entry.state & LKMDBG_HWPOINT_STATE_ACTIVE)) {
+			fprintf(stderr,
+				"mmu threshold breakpoint state mismatch hits=%" PRIu64 " after=%" PRIu64 " state=0x%x\n",
+				(uint64_t)entry.hits,
+				(uint64_t)entry.trigger_hit_count, entry.state);
+			remove_hwpoint(session_fd, mmu_skip_req.id);
+			return -1;
+		}
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
+			remove_hwpoint(session_fd, mmu_skip_req.id);
+			return -1;
+		}
+		if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+					   LKMDBG_STOP_REASON_BREAKPOINT,
+					   event_timeout_ms, &event) < 0) {
+			remove_hwpoint(session_fd, mmu_skip_req.id);
+			return -1;
+		}
+		if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_BREAKPOINT,
+				      &stop_req) < 0) {
+			remove_hwpoint(session_fd, mmu_skip_req.id);
+			return -1;
+		}
+		if (stop_req.stop.event_flags !=
+		    (LKMDBG_HWPOINT_TYPE_EXEC |
+		     LKMDBG_HWPOINT_FLAG_MMU_EXEC)) {
+			fprintf(stderr,
+				"mmu threshold stop flags mismatch event_flags=0x%x\n",
+				stop_req.stop.event_flags);
+			remove_hwpoint(session_fd, mmu_skip_req.id);
+			return -1;
+		}
+		if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
+				    NULL) < 0) {
+			remove_hwpoint(session_fd, mmu_skip_req.id);
+			return -1;
+		}
+		if (remove_hwpoint(session_fd, mmu_skip_req.id) < 0)
+			return -1;
+	}
+
+	printf("selftest runtime events ok clone signal breakpoint mmu-breakpoint oneshot rearm watchpoint threshold actions\n");
 	return 0;
 }
 
@@ -2717,9 +3255,10 @@ static void usage(const char *prog)
 		"  %s selftest\n"
 		"  %s read <pid> <remote_addr_hex> <length>\n"
 		"  %s threads <pid>\n"
+		"  %s images <pid>\n"
 		"  %s getregs <pid> <tid>\n"
 		"  %s setreg <pid> <tid> <reg> <value_hex>\n"
-		"  %s hwadd <pid> <tid> <r|w|rw|x|rx|wx|rwx> <addr_hex> <len> [stop|counter|mmu|flags]\n"
+		"  %s hwadd <pid> <tid> <r|w|rw|x|rx|wx|rwx> <addr_hex> <len> [stop|counter|mmu|flags] [after_hits] [oneshot|autocont|actions]\n"
 		"  %s hwdel <pid> <id>\n"
 		"  %s hwrearm <pid> <id>\n"
 		"  %s hwlist <pid>\n"
@@ -2733,7 +3272,7 @@ static void usage(const char *prog)
 		"  %s pages <pid> <remote_addr_hex> <length>\n"
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog, prog, prog, prog, prog, prog, prog);
+		prog, prog, prog, prog, prog, prog, prog, prog);
 }
 
 static int run_selftest(const char *prog)
@@ -3123,6 +3662,16 @@ static int run_selftest(const char *prog)
 		return 1;
 	}
 
+	if (verify_image_query(session_fd, &info) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
 	if (verify_thread_freeze(session_fd, child, &info) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
@@ -3374,9 +3923,11 @@ int main(int argc, char **argv)
 	uint64_t reg_value = 0;
 	uint64_t hwpoint_id = 0;
 	uint64_t hwpoint_addr = 0;
+	uint64_t hwpoint_trigger_hits = 1;
 	uint32_t hwpoint_type = 0;
 	uint32_t hwpoint_len = 0;
 	uint32_t hwpoint_flags = 0;
+	uint32_t hwpoint_action_flags = 0;
 	uint32_t continue_flags = 0;
 	unsigned int max_events = EVENT_READ_BATCH;
 
@@ -3535,6 +4086,21 @@ int main(int argc, char **argv)
 			fprintf(stderr, "invalid hwpoint flags: %s\n", argv[7]);
 			return 1;
 		}
+
+		if (argc >= 9) {
+			hwpoint_trigger_hits = strtoull(argv[8], &endp, 0);
+			if (*endp != '\0' || !hwpoint_trigger_hits) {
+				fprintf(stderr, "invalid trigger hit count: %s\n",
+					argv[8]);
+				return 1;
+			}
+		}
+
+		if (argc >= 10 &&
+		    parse_hwpoint_actions(argv[9], &hwpoint_action_flags) < 0) {
+			fprintf(stderr, "invalid hwpoint actions: %s\n", argv[9]);
+			return 1;
+		}
 	}
 
 	if (strcmp(argv[1], "hwdel") == 0 || strcmp(argv[1], "hwrearm") == 0) {
@@ -3595,6 +4161,11 @@ int main(int argc, char **argv)
 			close(session_fd);
 			return 1;
 		}
+	} else if (strcmp(argv[1], "images") == 0) {
+		if (dump_target_images(session_fd) < 0) {
+			close(session_fd);
+			return 1;
+		}
 	} else if (strcmp(argv[1], "getregs") == 0) {
 		if (get_and_print_regs(session_fd, tid) < 0) {
 			close(session_fd);
@@ -3609,10 +4180,13 @@ int main(int argc, char **argv)
 		struct lkmdbg_hwpoint_request reply;
 		char type_buf[32];
 		char flags_buf[32];
+		char action_buf[32];
 
 		memset(&reply, 0, sizeof(reply));
-		if (add_hwpoint(session_fd, tid, hwpoint_addr, hwpoint_type,
-				hwpoint_len, hwpoint_flags, &reply) < 0) {
+		if (add_hwpoint_ex(session_fd, tid, hwpoint_addr, hwpoint_type,
+				   hwpoint_len, hwpoint_flags,
+				   hwpoint_trigger_hits,
+				   hwpoint_action_flags, &reply) < 0) {
 			close(session_fd);
 			return 1;
 		}
@@ -3624,6 +4198,11 @@ int main(int argc, char **argv)
 		printf("hwpoint.flags=0x%x(%s)\n", reply.flags,
 		       describe_hwpoint_flags(reply.flags, flags_buf,
 					       sizeof(flags_buf)));
+		printf("hwpoint.after_hits=%" PRIu64 "\n",
+		       (uint64_t)reply.trigger_hit_count);
+		printf("hwpoint.actions=0x%x(%s)\n", reply.action_flags,
+		       describe_hwpoint_actions(reply.action_flags, action_buf,
+						sizeof(action_buf)));
 	} else if (strcmp(argv[1], "hwdel") == 0) {
 		if (remove_hwpoint(session_fd, hwpoint_id) < 0) {
 			close(session_fd);
@@ -3632,6 +4211,7 @@ int main(int argc, char **argv)
 	} else if (strcmp(argv[1], "hwrearm") == 0) {
 		struct lkmdbg_hwpoint_request reply;
 		char flags_buf[32];
+		char action_buf[32];
 
 		memset(&reply, 0, sizeof(reply));
 		if (rearm_hwpoint(session_fd, hwpoint_id, &reply) < 0) {
@@ -3643,6 +4223,11 @@ int main(int argc, char **argv)
 		printf("hwpoint.flags=0x%x(%s)\n", reply.flags,
 		       describe_hwpoint_flags(reply.flags, flags_buf,
 					       sizeof(flags_buf)));
+		printf("hwpoint.after_hits=%" PRIu64 "\n",
+		       (uint64_t)reply.trigger_hit_count);
+		printf("hwpoint.actions=0x%x(%s)\n", reply.action_flags,
+		       describe_hwpoint_actions(reply.action_flags, action_buf,
+						sizeof(action_buf)));
 	} else if (strcmp(argv[1], "hwlist") == 0) {
 		struct lkmdbg_hwpoint_entry entries[16];
 		uint64_t cursor = 0;
@@ -3662,9 +4247,10 @@ int main(int argc, char **argv)
 			for (i = 0; i < reply.entries_filled; i++) {
 				char type_buf[32];
 				char flags_buf[32];
+				char action_buf[32];
 				char state_buf[48];
 
-				printf("id=%" PRIu64 " tgid=%d tid=%d type=0x%x(%s) len=%u flags=0x%x(%s) state=0x%x(%s) hits=%" PRIu64 " addr=0x%" PRIx64 "\n",
+				printf("id=%" PRIu64 " tgid=%d tid=%d type=0x%x(%s) len=%u flags=0x%x(%s) actions=0x%x(%s) after_hits=%" PRIu64 " state=0x%x(%s) hits=%" PRIu64 " addr=0x%" PRIx64 "\n",
 				       (uint64_t)entries[i].id, entries[i].tgid,
 				       entries[i].tid, entries[i].type,
 				       describe_hwpoint_type(entries[i].type,
@@ -3674,6 +4260,12 @@ int main(int argc, char **argv)
 				       describe_hwpoint_flags(entries[i].flags,
 							       flags_buf,
 							       sizeof(flags_buf)),
+				       entries[i].action_flags,
+				       describe_hwpoint_actions(
+					       entries[i].action_flags,
+					       action_buf,
+					       sizeof(action_buf)),
+				       (uint64_t)entries[i].trigger_hit_count,
 				       entries[i].state,
 				       describe_hwpoint_state(entries[i].state,
 							       state_buf,

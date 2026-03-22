@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 5
+#define LKMDBG_PROTO_VERSION 6
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -55,6 +55,9 @@
 #define LKMDBG_HWPOINT_FLAG_MMU 0x00000002U
 #define LKMDBG_HWPOINT_FLAG_MMU_EXEC LKMDBG_HWPOINT_FLAG_MMU
 
+#define LKMDBG_HWPOINT_ACTION_ONESHOT 0x00000001U
+#define LKMDBG_HWPOINT_ACTION_AUTO_CONTINUE 0x00000002U
+
 /*
  * HWPOINT state bits are query-time observable state, not requested policy.
  *
@@ -96,6 +99,11 @@
 #define LKMDBG_VMA_FLAG_HEAP 0x00000010U
 #define LKMDBG_VMA_FLAG_PFNMAP 0x00000020U
 #define LKMDBG_VMA_FLAG_IO 0x00000040U
+
+#define LKMDBG_IMAGE_FLAG_FILE 0x00000001U
+#define LKMDBG_IMAGE_FLAG_MAIN_EXE 0x00000002U
+#define LKMDBG_IMAGE_FLAG_SHARED 0x00000004U
+#define LKMDBG_IMAGE_FLAG_DELETED 0x00000008U
 
 #define LKMDBG_PAGE_FLAG_MAPPED 0x00000001U
 #define LKMDBG_PAGE_FLAG_PRESENT 0x00000002U
@@ -207,6 +215,38 @@ struct lkmdbg_vma_query_request {
 	__u64 next_addr;
 };
 
+struct lkmdbg_image_entry {
+	__u64 start_addr;
+	__u64 end_addr;
+	__u64 base_addr;
+	__u64 pgoff;
+	__u64 inode;
+	__u32 prot;
+	__u32 flags;
+	__u32 dev_major;
+	__u32 dev_minor;
+	__u32 segment_count;
+	__u32 name_offset;
+	__u32 name_size;
+	__u32 reserved0;
+};
+
+struct lkmdbg_image_query_request {
+	__u32 version;
+	__u32 size;
+	__u64 start_addr;
+	__u64 entries_addr;
+	__u32 max_entries;
+	__u32 flags;
+	__u64 names_addr;
+	__u32 names_size;
+	__u32 entries_filled;
+	__u32 names_used;
+	__u32 done;
+	__u32 reserved0;
+	__u64 next_addr;
+};
+
 struct lkmdbg_freeze_request {
 	__u32 version;
 	__u32 size;
@@ -298,18 +338,24 @@ struct lkmdbg_hwpoint_request {
 	__u32 type;
 	__u32 len;
 	__u32 flags;
+	__u64 trigger_hit_count;
+	__u32 action_flags;
+	__u32 reserved0;
 };
 
 struct lkmdbg_hwpoint_entry {
 	__u64 id;
 	__u64 addr;
 	__u64 hits;
+	__u64 trigger_hit_count;
 	__s32 tgid;
 	__s32 tid;
 	__u32 type;
 	__u32 len;
 	__u32 flags;
 	__u32 state;
+	__u32 action_flags;
+	__u32 reserved0;
 };
 
 struct lkmdbg_hwpoint_query_request {
@@ -409,5 +455,7 @@ struct lkmdbg_event_record {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x1F, struct lkmdbg_continue_request)
 #define LKMDBG_IOC_QUERY_PAGES \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x20, struct lkmdbg_page_query_request)
+#define LKMDBG_IOC_QUERY_IMAGES \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x21, struct lkmdbg_image_query_request)
 
 #endif
