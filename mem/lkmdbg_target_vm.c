@@ -183,12 +183,11 @@ int lkmdbg_target_pt_lookup_locked(struct mm_struct *mm, unsigned long addr,
 		return 0;
 	}
 
-	ptep = pte_offset_map(pmd, addr);
+	ptep = pte_offset_kernel(pmd, addr);
 	if (!ptep)
 		return 0;
 
 	pte = *ptep;
-	pte_unmap(ptep);
 	if (pte_none(pte))
 		return 0;
 
