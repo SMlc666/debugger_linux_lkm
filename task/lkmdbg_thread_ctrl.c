@@ -18,10 +18,13 @@
 #include <linux/uio.h>
 
 #ifdef CONFIG_ARM64
+#include <asm/syscall.h>
 #include <asm/esr.h>
 #include <asm/pgtable.h>
 #include <asm/tlbflush.h>
 #include <asm/debug-monitors.h>
+#else
+#include <asm/syscall.h>
 #endif
 
 #include "lkmdbg_internal.h"
