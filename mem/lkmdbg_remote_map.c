@@ -684,8 +684,11 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 out_file:
 	if (task)
 		put_task_struct(task);
-	if (map_file)
+	if (map_file) {
 		fput(map_file);
+		if (local_to_target)
+			map = NULL;
+	}
 out_map:
 	lkmdbg_remote_map_put(map);
 out_mm:
