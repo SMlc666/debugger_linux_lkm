@@ -12,11 +12,13 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/ptrace.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "../include/lkmdbg_ioctl.h"
@@ -64,6 +66,10 @@ enum {
 enum external_op_kind {
 	EXTERNAL_OP_PROCESS_VM_READ = 0,
 	EXTERNAL_OP_PROCESS_VM_WRITE,
+	EXTERNAL_OP_PROC_MEM_READ,
+	EXTERNAL_OP_PROC_MEM_WRITE,
+	EXTERNAL_OP_PTRACE_READ,
+	EXTERNAL_OP_PTRACE_WRITE,
 	EXTERNAL_OP_MINCORE,
 	EXTERNAL_OP_MAPS,
 	EXTERNAL_OP_PAGEMAP,
@@ -485,6 +491,62 @@ static int expect_no_stop_event(int session_fd, const char *label)
 	return -1;
 }
 
+static bool is_ptrace_signal_event(const struct lkmdbg_event_record *event)
+{
+	if (!event || event->type != LKMDBG_EVENT_TARGET_SIGNAL)
+		return false;
+
+	return event->code == SIGSTOP || event->code == SIGCONT ||
+	       event->code == SIGTRAP;
+}
+
+static int expect_no_stop_event_filtered(
+	int session_fd, const char *label,
+	bool (*ignore_event)(const struct lkmdbg_event_record *event))
+{
+	struct timespec now;
+	struct lkmdbg_event_record event;
+	int64_t deadline_ms;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+		fprintf(stderr, "clock_gettime failed: %s\n", strerror(errno));
+		return -1;
+	}
+	deadline_ms = (int64_t)now.tv_sec * 1000 +
+		      (int64_t)now.tv_nsec / 1000000 +
+		      NO_EVENT_TIMEOUT_MS;
+
+	for (;;) {
+		int64_t now_ms;
+		int timeout_ms;
+		int ret;
+
+		if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+			fprintf(stderr, "clock_gettime failed: %s\n", strerror(errno));
+			return -1;
+		}
+		now_ms = (int64_t)now.tv_sec * 1000 +
+			 (int64_t)now.tv_nsec / 1000000;
+		timeout_ms = (int)(deadline_ms - now_ms);
+		if (timeout_ms <= 0)
+			return 0;
+
+		ret = wait_for_session_event(session_fd, &event, timeout_ms);
+		if (ret == 1)
+			return 0;
+		if (ret < 0)
+			return -1;
+		if (ignore_event && ignore_event(&event))
+			continue;
+
+		fprintf(stderr,
+			"%s unexpected event type=%u code=%u flags=0x%x value0=0x%" PRIx64 "\n",
+			label, event.type, event.code, event.flags,
+			(uint64_t)event.value0);
+		return -1;
+	}
+}
+
 static int expect_stop_event(int session_fd, uint32_t expected_reason,
 			     uint32_t expected_event_flags,
 			     uint64_t expected_addr,
@@ -881,6 +943,150 @@ static int check_process_vm_write(pid_t pid, uintptr_t remote_addr)
 	return -1;
 }
 
+static int open_proc_mem(pid_t pid, int flags)
+{
+	char path[64];
+	int fd;
+
+	snprintf(path, sizeof(path), "/proc/%d/mem", pid);
+	fd = open(path, flags | O_CLOEXEC);
+	if (fd >= 0)
+		return fd;
+
+	fprintf(stderr, "open(%s) failed: %s\n", path, strerror(errno));
+	return -1;
+}
+
+static int check_proc_mem_read(pid_t pid, uintptr_t remote_addr)
+{
+	uint64_t local = 0;
+	ssize_t nr;
+	int fd;
+
+	fd = open_proc_mem(pid, O_RDONLY);
+	if (fd < 0)
+		return -1;
+
+	errno = 0;
+	nr = pread(fd, &local, sizeof(local), (off_t)remote_addr);
+	close(fd);
+	if (nr == (ssize_t)sizeof(local))
+		return 0;
+	if (nr < 0 && (errno == EFAULT || errno == EIO))
+		return 0;
+
+	fprintf(stderr, "proc_mem_read unexpected nr=%zd errno=%d\n", nr, errno);
+	return -1;
+}
+
+static int check_proc_mem_write(pid_t pid, uintptr_t remote_addr)
+{
+	uint64_t local = 0x3C3CC3C33C3CC3C3ULL;
+	ssize_t nr;
+	int fd;
+
+	fd = open_proc_mem(pid, O_RDWR);
+	if (fd < 0)
+		return -1;
+
+	errno = 0;
+	nr = pwrite(fd, &local, sizeof(local), (off_t)remote_addr);
+	close(fd);
+	if (nr == (ssize_t)sizeof(local))
+		return 0;
+	if (nr < 0 && (errno == EFAULT || errno == EIO))
+		return 0;
+
+	fprintf(stderr, "proc_mem_write unexpected nr=%zd errno=%d\n", nr, errno);
+	return -1;
+}
+
+static int ptrace_attach_wait(pid_t pid)
+{
+	int status;
+
+	if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) < 0) {
+		fprintf(stderr, "ptrace attach failed pid=%d errno=%d\n", pid,
+			errno);
+		return -1;
+	}
+
+	if (waitpid(pid, &status, 0) < 0) {
+		fprintf(stderr, "waitpid after attach failed pid=%d errno=%d\n", pid,
+			errno);
+		return -1;
+	}
+	if (!WIFSTOPPED(status)) {
+		fprintf(stderr, "ptrace attach unexpected wait status=0x%x\n",
+			status);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int ptrace_detach_resume(pid_t pid)
+{
+	if (ptrace(PTRACE_DETACH, pid, NULL, NULL) < 0) {
+		fprintf(stderr, "ptrace detach failed pid=%d errno=%d\n", pid,
+			errno);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int check_ptrace_read(pid_t pid, uintptr_t remote_addr)
+{
+	long word;
+	int ret = -1;
+	bool attached = false;
+
+	if (ptrace_attach_wait(pid) < 0)
+		return -1;
+	attached = true;
+
+	errno = 0;
+	word = ptrace(PTRACE_PEEKDATA, pid, (void *)remote_addr, NULL);
+	if (errno == 0) {
+		(void)word;
+		ret = 0;
+	} else if (errno == EFAULT || errno == EIO) {
+		ret = 0;
+	} else {
+		fprintf(stderr, "ptrace read unexpected errno=%d\n", errno);
+	}
+
+	if (attached && ptrace_detach_resume(pid) < 0)
+		return -1;
+	return ret;
+}
+
+static int check_ptrace_write(pid_t pid, uintptr_t remote_addr)
+{
+	unsigned long word = 0x9696f0f09696f0f0UL;
+	int ret = -1;
+	bool attached = false;
+
+	if (ptrace_attach_wait(pid) < 0)
+		return -1;
+	attached = true;
+
+	errno = 0;
+	if (ptrace(PTRACE_POKEDATA, pid, (void *)remote_addr,
+		   (void *)(uintptr_t)word) == 0) {
+		ret = 0;
+	} else if (errno == EFAULT || errno == EIO) {
+		ret = 0;
+	} else {
+		fprintf(stderr, "ptrace write unexpected errno=%d\n", errno);
+	}
+
+	if (attached && ptrace_detach_resume(pid) < 0)
+		return -1;
+	return ret;
+}
+
 static const char *external_op_name(enum external_op_kind kind)
 {
 	switch (kind) {
@@ -888,6 +1094,14 @@ static const char *external_op_name(enum external_op_kind kind)
 		return "process_vm_read";
 	case EXTERNAL_OP_PROCESS_VM_WRITE:
 		return "process_vm_write";
+	case EXTERNAL_OP_PROC_MEM_READ:
+		return "proc_mem_read";
+	case EXTERNAL_OP_PROC_MEM_WRITE:
+		return "proc_mem_write";
+	case EXTERNAL_OP_PTRACE_READ:
+		return "ptrace_read";
+	case EXTERNAL_OP_PTRACE_WRITE:
+		return "ptrace_write";
 	case EXTERNAL_OP_MINCORE:
 		return "mincore";
 	case EXTERNAL_OP_MAPS:
@@ -956,6 +1170,32 @@ static int run_external_op(int session_fd, int cmd_fd, int reply_fd, pid_t pid,
 		if (check_process_vm_write(pid, info->data_addr) < 0)
 			return -1;
 		if (expect_no_stop_event(session_fd, "process_vm_write") < 0)
+			return -1;
+		return 0;
+	case EXTERNAL_OP_PROC_MEM_READ:
+		if (check_proc_mem_read(pid, info->data_addr) < 0)
+			return -1;
+		if (expect_no_stop_event(session_fd, "proc_mem_read") < 0)
+			return -1;
+		return 0;
+	case EXTERNAL_OP_PROC_MEM_WRITE:
+		if (check_proc_mem_write(pid, info->data_addr) < 0)
+			return -1;
+		if (expect_no_stop_event(session_fd, "proc_mem_write") < 0)
+			return -1;
+		return 0;
+	case EXTERNAL_OP_PTRACE_READ:
+		if (check_ptrace_read(pid, info->data_addr) < 0)
+			return -1;
+		if (expect_no_stop_event_filtered(session_fd, "ptrace_read",
+						  is_ptrace_signal_event) < 0)
+			return -1;
+		return 0;
+	case EXTERNAL_OP_PTRACE_WRITE:
+		if (check_ptrace_write(pid, info->data_addr) < 0)
+			return -1;
+		if (expect_no_stop_event_filtered(session_fd, "ptrace_write",
+						  is_ptrace_signal_event) < 0)
 			return -1;
 		return 0;
 	case EXTERNAL_OP_MINCORE:
@@ -1274,6 +1514,20 @@ static int test_external_ops(int session_fd, int cmd_fd, int reply_fd, pid_t pid
 		goto fail;
 	if (check_process_vm_write(pid, info->data_addr) < 0)
 		goto fail;
+	if (check_proc_mem_read(pid, info->data_addr) < 0)
+		goto fail;
+	if (check_proc_mem_write(pid, info->data_addr) < 0)
+		goto fail;
+	if (check_ptrace_read(pid, info->data_addr) < 0)
+		goto fail;
+	if (expect_no_stop_event_filtered(session_fd, "external_ops_ptrace_read",
+					  is_ptrace_signal_event) < 0)
+		goto fail;
+	if (check_ptrace_write(pid, info->data_addr) < 0)
+		goto fail;
+	if (expect_no_stop_event_filtered(session_fd, "external_ops_ptrace_write",
+					  is_ptrace_signal_event) < 0)
+		goto fail;
 	if (run_mincore_command(session_fd, cmd_fd, reply_fd, &resident) < 0)
 		goto fail;
 	if (resident != 0 && resident != 1) {
@@ -1368,6 +1622,120 @@ static int test_external_op_process_vm_write(int session_fd, int cmd_fd,
 		return -1;
 
 	printf("mmu test: external process_vm_write ok state=0x%x\n", state);
+	return 0;
+
+fail:
+	remove_hwpoint(session_fd, req.id);
+	return -1;
+}
+
+static int test_external_op_proc_mem_read(int session_fd, int cmd_fd,
+					  int reply_fd, pid_t pid,
+					  const struct child_info *info)
+{
+	struct lkmdbg_hwpoint_request req;
+	uint32_t state = 0;
+
+	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
+		return -1;
+	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
+			    EXTERNAL_OP_PROC_MEM_READ, NULL, NULL, NULL) < 0)
+		goto fail;
+	if (validate_external_hwpoint_state(session_fd, req.id,
+					    "proc_mem_read_state", &state) < 0)
+		goto fail;
+	if (remove_hwpoint(session_fd, req.id) < 0)
+		return -1;
+
+	printf("mmu test: external proc_mem_read ok state=0x%x\n", state);
+	return 0;
+
+fail:
+	remove_hwpoint(session_fd, req.id);
+	return -1;
+}
+
+static int test_external_op_proc_mem_write(int session_fd, int cmd_fd,
+					   int reply_fd, pid_t pid,
+					   const struct child_info *info)
+{
+	struct lkmdbg_hwpoint_request req;
+	uint32_t state = 0;
+
+	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
+		return -1;
+	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
+			    EXTERNAL_OP_PROC_MEM_WRITE, NULL, NULL, NULL) < 0)
+		goto fail;
+	if (validate_external_hwpoint_state(session_fd, req.id,
+					    "proc_mem_write_state", &state) < 0)
+		goto fail;
+	if (remove_hwpoint(session_fd, req.id) < 0)
+		return -1;
+
+	printf("mmu test: external proc_mem_write ok state=0x%x\n", state);
+	return 0;
+
+fail:
+	remove_hwpoint(session_fd, req.id);
+	return -1;
+}
+
+static int test_external_op_ptrace_read(int session_fd, int cmd_fd,
+					int reply_fd, pid_t pid,
+					const struct child_info *info)
+{
+	struct lkmdbg_hwpoint_request req;
+	uint32_t state = 0;
+
+	(void)cmd_fd;
+	(void)reply_fd;
+
+	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
+		return -1;
+	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
+			    EXTERNAL_OP_PTRACE_READ, NULL, NULL, NULL) < 0)
+		goto fail;
+	if (validate_external_hwpoint_state(session_fd, req.id,
+					    "ptrace_read_state", &state) < 0)
+		goto fail;
+	if (remove_hwpoint(session_fd, req.id) < 0)
+		return -1;
+
+	printf("mmu test: external ptrace_read ok state=0x%x\n", state);
+	return 0;
+
+fail:
+	remove_hwpoint(session_fd, req.id);
+	return -1;
+}
+
+static int test_external_op_ptrace_write(int session_fd, int cmd_fd,
+					 int reply_fd, pid_t pid,
+					 const struct child_info *info)
+{
+	struct lkmdbg_hwpoint_request req;
+	uint32_t state = 0;
+
+	(void)cmd_fd;
+	(void)reply_fd;
+
+	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
+		return -1;
+	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
+			    EXTERNAL_OP_PTRACE_WRITE, NULL, NULL, NULL) < 0)
+		goto fail;
+	if (validate_external_hwpoint_state(session_fd, req.id,
+					    "ptrace_write_state", &state) < 0)
+		goto fail;
+	if (remove_hwpoint(session_fd, req.id) < 0)
+		return -1;
+
+	printf("mmu test: external ptrace_write ok state=0x%x\n", state);
 	return 0;
 
 fail:
@@ -1490,6 +1858,10 @@ static int test_external_ops_repeat(int session_fd, int cmd_fd, int reply_fd,
 	static const enum external_op_kind ops[] = {
 		EXTERNAL_OP_PROCESS_VM_READ,
 		EXTERNAL_OP_PROCESS_VM_WRITE,
+		EXTERNAL_OP_PROC_MEM_READ,
+		EXTERNAL_OP_PROC_MEM_WRITE,
+		EXTERNAL_OP_PTRACE_READ,
+		EXTERNAL_OP_PTRACE_WRITE,
 		EXTERNAL_OP_MINCORE,
 		EXTERNAL_OP_MAPS,
 		EXTERNAL_OP_PAGEMAP,
@@ -1690,6 +2062,18 @@ static int run_selftest(void)
 		goto out;
 	if (test_external_op_process_vm_write(session_fd, cmd_pipe[1],
 					      reply_pipe[0], child, &info) < 0)
+		goto out;
+	if (test_external_op_proc_mem_read(session_fd, cmd_pipe[1], reply_pipe[0],
+					   child, &info) < 0)
+		goto out;
+	if (test_external_op_proc_mem_write(session_fd, cmd_pipe[1], reply_pipe[0],
+					    child, &info) < 0)
+		goto out;
+	if (test_external_op_ptrace_read(session_fd, cmd_pipe[1], reply_pipe[0],
+					 child, &info) < 0)
+		goto out;
+	if (test_external_op_ptrace_write(session_fd, cmd_pipe[1], reply_pipe[0],
+					  child, &info) < 0)
 		goto out;
 	if (test_external_op_mincore(session_fd, cmd_pipe[1], reply_pipe[0], child,
 				     &info) < 0)
