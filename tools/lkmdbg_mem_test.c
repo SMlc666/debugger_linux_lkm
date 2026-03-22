@@ -3048,23 +3048,23 @@ breakpoint_checks:
 			return -1;
 
 		if (add_hwpoint_ex(session_fd, child, info->exec_target_addr,
-				   LKMDBG_HWPOINT_TYPE_EXEC, 4,
+				   LKMDBG_HWPOINT_TYPE_WRITE, 8,
 				   LKMDBG_HWPOINT_FLAG_MMU_EXEC, 1,
 				   LKMDBG_HWPOINT_ACTION_ONESHOT |
 					   LKMDBG_HWPOINT_ACTION_AUTO_CONTINUE,
 				   &auto_req) < 0)
 			return -1;
-		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_WATCH) < 0) {
 			remove_hwpoint(session_fd, auto_req.id);
 			return -1;
 		}
 		ret = wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-					     LKMDBG_STOP_REASON_BREAKPOINT,
+					     LKMDBG_STOP_REASON_WATCHPOINT,
 					     1000, &event);
 		if (ret != -ETIMEDOUT) {
 			remove_hwpoint(session_fd, auto_req.id);
 			fprintf(stderr,
-				"mmu auto-continue breakpoint unexpectedly stopped ret=%d\n",
+				"mmu auto-continue watchpoint unexpectedly stopped ret=%d\n",
 				ret);
 			return -1;
 		}
@@ -3075,7 +3075,7 @@ breakpoint_checks:
 			     LKMDBG_HWPOINT_ACTION_AUTO_CONTINUE) ||
 		    (entry.state & LKMDBG_HWPOINT_STATE_ACTIVE)) {
 			fprintf(stderr,
-				"mmu auto-continue breakpoint state mismatch hits=%" PRIu64 " actions=0x%x state=0x%x\n",
+				"mmu auto-continue watchpoint state mismatch hits=%" PRIu64 " actions=0x%x state=0x%x\n",
 				(uint64_t)entry.hits, entry.action_flags,
 				entry.state);
 			remove_hwpoint(session_fd, auto_req.id);
@@ -3084,22 +3084,22 @@ breakpoint_checks:
 		if (remove_hwpoint(session_fd, auto_req.id) < 0)
 			return -1;
 
-		if (add_hwpoint_ex(session_fd, child, info->exec_target_addr,
-				   LKMDBG_HWPOINT_TYPE_EXEC, 4,
+		if (add_hwpoint_ex(session_fd, child, info->watch_addr,
+				   LKMDBG_HWPOINT_TYPE_WRITE, 8,
 				   LKMDBG_HWPOINT_FLAG_MMU_EXEC, 2, 0,
 				   &mmu_skip_req) < 0)
 			return -1;
-		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_WATCH) < 0) {
 			remove_hwpoint(session_fd, mmu_skip_req.id);
 			return -1;
 		}
 		ret = wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-					     LKMDBG_STOP_REASON_BREAKPOINT,
+					     LKMDBG_STOP_REASON_WATCHPOINT,
 					     1000, &event);
 		if (ret != -ETIMEDOUT) {
 			remove_hwpoint(session_fd, mmu_skip_req.id);
 			fprintf(stderr,
-				"mmu threshold breakpoint unexpectedly stopped on first hit ret=%d\n",
+				"mmu threshold watchpoint unexpectedly stopped on first hit ret=%d\n",
 				ret);
 			return -1;
 		}
@@ -3109,32 +3109,32 @@ breakpoint_checks:
 		    entry.trigger_hit_count != 2 ||
 		    !(entry.state & LKMDBG_HWPOINT_STATE_ACTIVE)) {
 			fprintf(stderr,
-				"mmu threshold breakpoint state mismatch hits=%" PRIu64 " after=%" PRIu64 " state=0x%x\n",
+				"mmu threshold watchpoint state mismatch hits=%" PRIu64 " after=%" PRIu64 " state=0x%x\n",
 				(uint64_t)entry.hits,
 				(uint64_t)entry.trigger_hit_count, entry.state);
 			remove_hwpoint(session_fd, mmu_skip_req.id);
 			return -1;
 		}
-		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_EXEC) < 0) {
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_WATCH) < 0) {
 			remove_hwpoint(session_fd, mmu_skip_req.id);
 			return -1;
 		}
 		if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-					   LKMDBG_STOP_REASON_BREAKPOINT,
+					   LKMDBG_STOP_REASON_WATCHPOINT,
 					   event_timeout_ms, &event) < 0) {
 			remove_hwpoint(session_fd, mmu_skip_req.id);
 			return -1;
 		}
-		if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_BREAKPOINT,
+		if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_WATCHPOINT,
 				      &stop_req) < 0) {
 			remove_hwpoint(session_fd, mmu_skip_req.id);
 			return -1;
 		}
 		if (stop_req.stop.event_flags !=
-		    (LKMDBG_HWPOINT_TYPE_EXEC |
+		    (LKMDBG_HWPOINT_TYPE_WRITE |
 		     LKMDBG_HWPOINT_FLAG_MMU_EXEC)) {
 			fprintf(stderr,
-				"mmu threshold stop flags mismatch event_flags=0x%x\n",
+				"mmu threshold watchpoint stop flags mismatch event_flags=0x%x\n",
 				stop_req.stop.event_flags);
 			remove_hwpoint(session_fd, mmu_skip_req.id);
 			return -1;
