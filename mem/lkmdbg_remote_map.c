@@ -61,6 +61,7 @@ struct lkmdbg_remote_map_install {
 	struct completion done;
 	struct task_struct *task;
 	struct file *file;
+	struct lkmdbg_remote_map *map;
 	unsigned long addr_hint;
 	unsigned long mapped_length;
 	unsigned long prot;
@@ -68,6 +69,7 @@ struct lkmdbg_remote_map_install {
 	long result;
 	bool callback_entered;
 	bool completed;
+	bool file_detached;
 };
 
 static void lkmdbg_remote_map_put(struct lkmdbg_remote_map *map);
@@ -217,6 +219,16 @@ static void lkmdbg_remote_map_install_task_work(struct callback_head *work)
 	install->result = (long)vm_mmap_fn(install->file, install->addr_hint,
 					   install->mapped_length,
 					   install->prot, install->flags, 0);
+	if (install->result >= 0 && install->file->private_data == install->map) {
+		/*
+		 * The anon file only exists to carry mmap() into the target task.
+		 * After success, keep ownership solely on the installed VMA so
+		 * file release ordering cannot race with VMA close.
+		 */
+		install->file->private_data = NULL;
+		lkmdbg_remote_map_put(install->map);
+		install->file_detached = true;
+	}
 out:
 	install->completed = true;
 	complete(&install->done);
@@ -224,6 +236,7 @@ out:
 
 static long lkmdbg_remote_map_install_into_target(struct task_struct *task,
 						  struct file *file,
+						  struct lkmdbg_remote_map *map,
 						  u64 addr_hint,
 						  u64 mapped_length,
 						  u32 prot, u32 flags)
@@ -232,7 +245,7 @@ static long lkmdbg_remote_map_install_into_target(struct task_struct *task,
 	unsigned long map_flags = MAP_SHARED;
 	long ret;
 
-	if (!task || !file || !mapped_length)
+	if (!task || !file || !map || !mapped_length)
 		return -EINVAL;
 
 	if (flags & LKMDBG_REMOTE_MAP_FLAG_FIXED_TARGET)
@@ -242,6 +255,7 @@ static long lkmdbg_remote_map_install_into_target(struct task_struct *task,
 	init_task_work(&install.work, lkmdbg_remote_map_install_task_work);
 	install.task = task;
 	install.file = file;
+	install.map = map;
 	install.addr_hint = (unsigned long)addr_hint;
 	install.mapped_length = (unsigned long)mapped_length;
 	install.prot = 0;
@@ -249,6 +263,7 @@ static long lkmdbg_remote_map_install_into_target(struct task_struct *task,
 	install.result = -EINPROGRESS;
 	install.callback_entered = false;
 	install.completed = false;
+	install.file_detached = false;
 	if (prot & LKMDBG_REMOTE_MAP_PROT_READ)
 		install.prot |= PROT_READ;
 	if (prot & LKMDBG_REMOTE_MAP_PROT_WRITE)
@@ -625,7 +640,7 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 			goto out_file;
 
 		install_addr = lkmdbg_remote_map_install_into_target(
-			task, map_file, req.remote_addr, mapped_length,
+			task, map_file, map, req.remote_addr, mapped_length,
 			req.prot, req.flags);
 		put_task_struct(task);
 		task = NULL;
