@@ -55,6 +55,26 @@
 #define LKMDBG_HWPOINT_FLAG_MMU 0x00000002U
 #define LKMDBG_HWPOINT_FLAG_MMU_EXEC LKMDBG_HWPOINT_FLAG_MMU
 
+/*
+ * HWPOINT state bits are query-time observable state, not requested policy.
+ *
+ * ACTIVE:
+ *   The backend is currently armed.
+ *
+ * LATCHED:
+ *   A stop was delivered and the hwpoint is waiting for explicit rearm or
+ *   removal. For MMU hwpoints this is the normal post-hit one-shot state.
+ *
+ * LOST:
+ *   The guarded mapping disappeared and the hwpoint can no longer be rearmed.
+ *   Typical cause: munmap/exit.
+ *
+ * MUTATED:
+ *   The guarded mapping or effective PTEs no longer match the original armed
+ *   baseline. Typical causes: mprotect, remap, or kernel access paths that
+ *   disturb a READ-style MMU trap. Rearm may fail with ESTALE until user
+ *   space removes and recreates the hwpoint.
+ */
 #define LKMDBG_HWPOINT_STATE_ACTIVE 0x00000001U
 #define LKMDBG_HWPOINT_STATE_LATCHED 0x00000002U
 #define LKMDBG_HWPOINT_STATE_LOST 0x00000004U

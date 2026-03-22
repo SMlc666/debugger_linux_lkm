@@ -149,23 +149,41 @@ Current session events include:
 - `LKMDBG_EVENT_TARGET_SIGNAL`
 - `LKMDBG_EVENT_TARGET_STOP`
 
-Execution breakpoints now have two backends behind the existing session fd API:
+Execution and watchpoints now have two backends behind the existing session fd
+API:
 
-- hardware execute breakpoints via `LKMDBG_HWPOINT_TYPE_EXEC`
-- arm64 mmu execute breakpoints via `LKMDBG_HWPOINT_TYPE_EXEC` with
-  `LKMDBG_HWPOINT_FLAG_MMU_EXEC`
+- hardware breakpoints/watchpoints via `LKMDBG_HWPOINT_TYPE_*`
+- arm64 mmu breakpoints/watchpoints via `LKMDBG_HWPOINT_FLAG_MMU`
 
-The first mmu execute breakpoint implementation is intentionally conservative:
+The MMU backend currently supports `read`, `write`, `exec`, and mixed
+combinations such as `rx`, `rw`, `wx`, and `rwx`, with one guarded page per
+target page.
 
-- it flips the target user PTE page to non-executable in kernel space
-- it currently stops on execution into the guarded page and reports the
-  requested breakpoint address in `value0` plus the actual faulting PC in
-  `value1`
-- after a hit the page is restored executable, so the breakpoint behaves as
-  a one-shot guard until user space explicitly rearms or removes it
-- `LKMDBG_CONTINUE_FLAG_REARM_HWPOINTS` does not automatically rearm this
-  backend yet; user space must call `LKMDBG_IOC_REARM_HWPOINT`
-- only one mmu execute breakpoint is allowed per target page today
+The current MMU backend is intentionally conservative:
+
+- it rewrites the target user PTEs in kernel space to remove the requested
+  access class from the guarded page
+- it reports the requested guard address in `value0`; execute faults also
+  report the actual faulting PC in `value1`
+- after a hit the backend behaves as a one-shot guard until user space
+  explicitly rearms or removes it
+- `LKMDBG_CONTINUE_FLAG_REARM_HWPOINTS` does not automatically rearm MMU
+  hwpoints; user space must call `LKMDBG_IOC_REARM_HWPOINT`
+- only one MMU hwpoint is allowed per target page today
+
+`LKMDBG_IOC_QUERY_HWPOINTS` exposes live hwpoint state bits:
+
+- `ACTIVE`: the backend is currently armed
+- `LATCHED`: a stop was delivered and explicit rearm or remove is required
+- `LOST`: the original mapping disappeared and the hwpoint can no longer be
+  rearmed
+- `MUTATED`: the guarded mapping or effective PTEs no longer match the
+  originally armed baseline
+
+For MMU hwpoints, `MUTATED` is not necessarily a crash condition. `mprotect`
+and similar mapping changes will intentionally surface as `MUTATED`, and some
+external kernel access paths can disturb a `READ`-style MMU trap enough to
+require remove-and-recreate instead of rearm.
 
 Session fds are readable and pollable:
 
@@ -192,6 +210,8 @@ cc -O2 -Wall -Wextra -pthread -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c
 sudo ./tools/lkmdbg_mem_test selftest
 sudo ./tools/lkmdbg_mem_test read <pid> <remote_addr_hex> <length>
 sudo ./tools/lkmdbg_mem_test write <pid> <remote_addr_hex> <ascii_data>
+sudo ./tools/lkmdbg_mem_test hwadd <pid> <tid> rwx <addr_hex> <len> mmu
+sudo ./tools/lkmdbg_mem_test hwlist <pid>
 ```
 
 ## Android GKI note

@@ -2010,6 +2010,71 @@ numeric:
 	return 0;
 }
 
+static void append_flag_name(char *buf, size_t buf_size, const char *name)
+{
+	size_t used;
+
+	if (!buf_size)
+		return;
+
+	used = strlen(buf);
+	if (used >= buf_size - 1)
+		return;
+	if (used) {
+		snprintf(buf + used, buf_size - used, "|%s", name);
+		return;
+	}
+	snprintf(buf, buf_size, "%s", name);
+}
+
+static const char *describe_hwpoint_type(uint32_t type, char *buf, size_t buf_size)
+{
+	buf[0] = '\0';
+
+	if (type & LKMDBG_HWPOINT_TYPE_READ)
+		append_flag_name(buf, buf_size, "read");
+	if (type & LKMDBG_HWPOINT_TYPE_WRITE)
+		append_flag_name(buf, buf_size, "write");
+	if (type & LKMDBG_HWPOINT_TYPE_EXEC)
+		append_flag_name(buf, buf_size, "exec");
+	if (!buf[0])
+		snprintf(buf, buf_size, "none");
+
+	return buf;
+}
+
+static const char *describe_hwpoint_flags(uint32_t flags, char *buf, size_t buf_size)
+{
+	buf[0] = '\0';
+
+	if (flags & LKMDBG_HWPOINT_FLAG_COUNTER_MODE)
+		append_flag_name(buf, buf_size, "counter");
+	if (flags & LKMDBG_HWPOINT_FLAG_MMU)
+		append_flag_name(buf, buf_size, "mmu");
+	if (!buf[0])
+		snprintf(buf, buf_size, "stop");
+
+	return buf;
+}
+
+static const char *describe_hwpoint_state(uint32_t state, char *buf, size_t buf_size)
+{
+	buf[0] = '\0';
+
+	if (state & LKMDBG_HWPOINT_STATE_ACTIVE)
+		append_flag_name(buf, buf_size, "active");
+	if (state & LKMDBG_HWPOINT_STATE_LATCHED)
+		append_flag_name(buf, buf_size, "latched");
+	if (state & LKMDBG_HWPOINT_STATE_LOST)
+		append_flag_name(buf, buf_size, "lost");
+	if (state & LKMDBG_HWPOINT_STATE_MUTATED)
+		append_flag_name(buf, buf_size, "mutated");
+	if (!buf[0])
+		snprintf(buf, buf_size, "idle");
+
+	return buf;
+}
+
 static int dump_target_threads(int session_fd)
 {
 	struct lkmdbg_thread_entry entries[THREAD_QUERY_BATCH];
@@ -3542,6 +3607,8 @@ int main(int argc, char **argv)
 		}
 	} else if (strcmp(argv[1], "hwadd") == 0) {
 		struct lkmdbg_hwpoint_request reply;
+		char type_buf[32];
+		char flags_buf[32];
 
 		memset(&reply, 0, sizeof(reply));
 		if (add_hwpoint(session_fd, tid, hwpoint_addr, hwpoint_type,
@@ -3551,7 +3618,12 @@ int main(int argc, char **argv)
 		}
 		printf("hwpoint.id=%" PRIu64 "\n", (uint64_t)reply.id);
 		printf("hwpoint.tid=%d\n", reply.tid);
-		printf("hwpoint.flags=0x%x\n", reply.flags);
+		printf("hwpoint.type=0x%x(%s)\n", hwpoint_type,
+		       describe_hwpoint_type(hwpoint_type, type_buf,
+					      sizeof(type_buf)));
+		printf("hwpoint.flags=0x%x(%s)\n", reply.flags,
+		       describe_hwpoint_flags(reply.flags, flags_buf,
+					       sizeof(flags_buf)));
 	} else if (strcmp(argv[1], "hwdel") == 0) {
 		if (remove_hwpoint(session_fd, hwpoint_id) < 0) {
 			close(session_fd);
@@ -3559,6 +3631,7 @@ int main(int argc, char **argv)
 		}
 	} else if (strcmp(argv[1], "hwrearm") == 0) {
 		struct lkmdbg_hwpoint_request reply;
+		char flags_buf[32];
 
 		memset(&reply, 0, sizeof(reply));
 		if (rearm_hwpoint(session_fd, hwpoint_id, &reply) < 0) {
@@ -3567,7 +3640,9 @@ int main(int argc, char **argv)
 		}
 		printf("hwpoint.id=%" PRIu64 "\n", (uint64_t)reply.id);
 		printf("hwpoint.tid=%d\n", reply.tid);
-		printf("hwpoint.flags=0x%x\n", reply.flags);
+		printf("hwpoint.flags=0x%x(%s)\n", reply.flags,
+		       describe_hwpoint_flags(reply.flags, flags_buf,
+					       sizeof(flags_buf)));
 	} else if (strcmp(argv[1], "hwlist") == 0) {
 		struct lkmdbg_hwpoint_entry entries[16];
 		uint64_t cursor = 0;
@@ -3585,11 +3660,24 @@ int main(int argc, char **argv)
 			}
 
 			for (i = 0; i < reply.entries_filled; i++) {
-				printf("id=%" PRIu64 " tgid=%d tid=%d type=0x%x len=%u flags=0x%x state=0x%x hits=%" PRIu64 " addr=0x%" PRIx64 "\n",
+				char type_buf[32];
+				char flags_buf[32];
+				char state_buf[48];
+
+				printf("id=%" PRIu64 " tgid=%d tid=%d type=0x%x(%s) len=%u flags=0x%x(%s) state=0x%x(%s) hits=%" PRIu64 " addr=0x%" PRIx64 "\n",
 				       (uint64_t)entries[i].id, entries[i].tgid,
 				       entries[i].tid, entries[i].type,
+				       describe_hwpoint_type(entries[i].type,
+							      type_buf,
+							      sizeof(type_buf)),
 				       entries[i].len, entries[i].flags,
+				       describe_hwpoint_flags(entries[i].flags,
+							       flags_buf,
+							       sizeof(flags_buf)),
 				       entries[i].state,
+				       describe_hwpoint_state(entries[i].state,
+							       state_buf,
+							       sizeof(state_buf)),
 				       (uint64_t)entries[i].hits,
 				       (uint64_t)entries[i].addr);
 			}
