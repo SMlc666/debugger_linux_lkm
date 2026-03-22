@@ -38,6 +38,7 @@
 #define PAGE_QUERY_BATCH 64
 #define PTE_PATCH_QUERY_BATCH 64
 #define REMOTE_MAP_QUERY_BATCH 16
+#define REMOTE_ALLOC_QUERY_BATCH 16
 #define EVENT_READ_BATCH 16
 
 struct child_info {
@@ -112,6 +113,10 @@ struct pte_patch_query_buffer {
 
 struct remote_map_query_buffer {
 	struct lkmdbg_remote_map_entry *entries;
+};
+
+struct remote_alloc_query_buffer {
+	struct lkmdbg_remote_alloc_entry *entries;
 };
 
 enum {
@@ -910,6 +915,73 @@ static int query_remote_maps(int session_fd, uint64_t start_id,
 	return 0;
 }
 
+static int create_remote_alloc(int session_fd, uintptr_t remote_addr, size_t len,
+			       uint32_t prot,
+			       struct lkmdbg_remote_alloc_request *reply_out)
+{
+	struct lkmdbg_remote_alloc_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.remote_addr = remote_addr,
+		.length = len,
+		.prot = prot,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_ALLOC, &req) < 0) {
+		fprintf(stderr, "CREATE_REMOTE_ALLOC failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int remove_remote_alloc(
+	int session_fd, uint64_t alloc_id,
+	struct lkmdbg_remote_alloc_handle_request *reply_out)
+{
+	struct lkmdbg_remote_alloc_handle_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.alloc_id = alloc_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_REMOTE_ALLOC, &req) < 0) {
+		fprintf(stderr, "REMOVE_REMOTE_ALLOC failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int query_remote_allocs(
+	int session_fd, uint64_t start_id, struct remote_alloc_query_buffer *buf,
+	struct lkmdbg_remote_alloc_query_request *reply_out)
+{
+	struct lkmdbg_remote_alloc_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)buf->entries,
+		.max_entries = REMOTE_ALLOC_QUERY_BATCH,
+		.start_id = start_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_REMOTE_ALLOCS, &req) < 0) {
+		fprintf(stderr, "QUERY_REMOTE_ALLOCS failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
 static void *remote_map_wake_thread_main(void *arg)
 {
 	struct remote_map_wake_ctx *ctx = arg;
@@ -990,18 +1062,20 @@ static ssize_t write_full(int fd, const void *buf, size_t len)
 	return (ssize_t)done;
 }
 
-static int read_maps_line_for_addr(uintptr_t addr, char *buf, size_t buf_size)
+static int read_maps_line_for_pid_addr(pid_t pid, uintptr_t addr, char *buf,
+				       size_t buf_size)
 {
 	FILE *fp;
 	char line[512];
+	char path[64];
 
 	if (!buf || !buf_size)
 		return -1;
 
-	fp = fopen("/proc/self/maps", "re");
+	snprintf(path, sizeof(path), "/proc/%d/maps", pid);
+	fp = fopen(path, "re");
 	if (!fp) {
-		fprintf(stderr, "fopen(/proc/self/maps) failed: %s\n",
-			strerror(errno));
+		fprintf(stderr, "fopen(%s) failed: %s\n", path, strerror(errno));
 		return -1;
 	}
 
@@ -1020,9 +1094,13 @@ static int read_maps_line_for_addr(uintptr_t addr, char *buf, size_t buf_size)
 	}
 
 	fclose(fp);
-	fprintf(stderr, "address 0x%" PRIxPTR " not found in /proc/self/maps\n",
-		addr);
+	fprintf(stderr, "address 0x%" PRIxPTR " not found in %s\n", addr, path);
 	return -1;
+}
+
+static int read_maps_line_for_addr(uintptr_t addr, char *buf, size_t buf_size)
+{
+	return read_maps_line_for_pid_addr(getpid(), addr, buf, buf_size);
 }
 
 static int xfer_target_memory(int session_fd, struct lkmdbg_mem_op *ops,
@@ -2392,6 +2470,221 @@ out:
 	free(query_buf.entries);
 	free(expected_buf);
 	free(verify_buf);
+	return ret;
+}
+
+static int verify_remote_alloc(int session_fd, pid_t child,
+			       const struct child_info *info, int cmd_fd,
+			       int resp_fd)
+{
+	struct lkmdbg_remote_alloc_request reply;
+	struct lkmdbg_remote_alloc_handle_request remove_reply;
+	struct lkmdbg_remote_alloc_query_request query_reply;
+	struct remote_alloc_query_buffer query_buf = { 0 };
+	unsigned char *verify_buf = NULL;
+	unsigned char expected_buf[64];
+	char maps_before[512];
+	char maps_after[512];
+	uint32_t bytes_done = 0;
+	uintptr_t shell_addr;
+	size_t shell_offset;
+	size_t test_len;
+	int ret = -1;
+
+	memset(&reply, 0, sizeof(reply));
+	memset(&remove_reply, 0, sizeof(remove_reply));
+	memset(&query_reply, 0, sizeof(query_reply));
+
+	query_buf.entries =
+		calloc(REMOTE_ALLOC_QUERY_BATCH, sizeof(*query_buf.entries));
+	if (!query_buf.entries) {
+		fprintf(stderr, "remote alloc query allocation failed\n");
+		goto out;
+	}
+
+	test_len = info->page_size * 2U;
+	shell_offset = info->page_size * 8U;
+	if (shell_offset + test_len > info->large_len) {
+		fprintf(stderr, "remote alloc test range exceeds child buffer\n");
+		goto out;
+	}
+	shell_addr = info->large_addr + shell_offset;
+
+	verify_buf = malloc(test_len);
+	if (!verify_buf) {
+		fprintf(stderr, "remote alloc verification allocation failed\n");
+		goto out;
+	}
+
+	if (read_maps_line_for_pid_addr(child, shell_addr, maps_before,
+					sizeof(maps_before)) < 0)
+		goto out;
+
+	if (create_remote_alloc(session_fd, shell_addr, test_len,
+				LKMDBG_REMOTE_ALLOC_PROT_READ |
+					LKMDBG_REMOTE_ALLOC_PROT_WRITE,
+				&reply) < 0)
+		goto out;
+
+	if (!reply.alloc_id || reply.remote_addr != shell_addr ||
+	    reply.mapped_length != test_len ||
+	    reply.prot != (LKMDBG_REMOTE_ALLOC_PROT_READ |
+			   LKMDBG_REMOTE_ALLOC_PROT_WRITE)) {
+		fprintf(stderr,
+			"remote alloc reply mismatch id=%" PRIu64 " addr=0x%" PRIx64 " len=%" PRIu64 " prot=0x%x\n",
+			(uint64_t)reply.alloc_id, (uint64_t)reply.remote_addr,
+			(uint64_t)reply.mapped_length, reply.prot);
+		goto out;
+	}
+
+	if (read_maps_line_for_pid_addr(child, shell_addr, maps_after,
+					sizeof(maps_after)) < 0)
+		goto out;
+	if (strcmp(maps_before, maps_after) != 0) {
+		fprintf(stderr, "remote alloc changed target /proc/maps entry\n");
+		goto out;
+	}
+
+	memset(verify_buf, 0xA5, test_len);
+	if (read_target_memory(session_fd, shell_addr, verify_buf, test_len,
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != test_len) {
+		fprintf(stderr,
+			"remote alloc initial readback failed bytes_done=%u expected=%zu\n",
+			bytes_done, test_len);
+		goto out;
+	}
+	{
+		size_t i;
+
+		for (i = 0; i < test_len; i++) {
+			if (verify_buf[i] == 0)
+				continue;
+			fprintf(stderr, "remote alloc pages are not zero-filled\n");
+			goto out;
+		}
+	}
+
+	fill_pattern(expected_buf, sizeof(expected_buf), 77);
+	if (write_target_memory(session_fd, shell_addr + 128, expected_buf,
+				sizeof(expected_buf), &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(expected_buf)) {
+		fprintf(stderr,
+			"remote alloc kernel write failed bytes_done=%u expected=%zu\n",
+			bytes_done, sizeof(expected_buf));
+		goto out;
+	}
+
+	memset(verify_buf, 0, test_len);
+	if (child_read_remote_range(cmd_fd, resp_fd, shell_addr, verify_buf,
+				    test_len) < 0) {
+		fprintf(stderr, "remote alloc child readback failed\n");
+		goto out;
+	}
+	if (memcmp(verify_buf + 128, expected_buf, sizeof(expected_buf)) != 0) {
+		fprintf(stderr, "remote alloc child view mismatch after write\n");
+		goto out;
+	}
+
+	if (child_fill_remote_range(cmd_fd, resp_fd, shell_addr + 256, 64,
+				    0x6D) < 0) {
+		fprintf(stderr, "remote alloc child fill failed\n");
+		goto out;
+	}
+
+	memset(verify_buf, 0, test_len);
+	if (read_target_memory(session_fd, shell_addr, verify_buf, test_len,
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != test_len) {
+		fprintf(stderr,
+			"remote alloc post-fill readback failed bytes_done=%u expected=%zu\n",
+			bytes_done, test_len);
+		goto out;
+	}
+	{
+		size_t i;
+
+		for (i = 0; i < 64; i++) {
+			if (verify_buf[256 + i] == 0x6D)
+				continue;
+			fprintf(stderr, "remote alloc child fill did not stick\n");
+			goto out;
+		}
+	}
+
+	if (query_remote_allocs(session_fd, 0, &query_buf, &query_reply) < 0)
+		goto out;
+	if (query_reply.entries_filled != 1 || !query_reply.done ||
+	    query_reply.next_id != reply.alloc_id ||
+	    query_buf.entries[0].alloc_id != reply.alloc_id ||
+	    query_buf.entries[0].target_tgid != child ||
+	    query_buf.entries[0].remote_addr != shell_addr ||
+	    query_buf.entries[0].mapped_length != test_len ||
+	    query_buf.entries[0].prot != (LKMDBG_REMOTE_ALLOC_PROT_READ |
+					  LKMDBG_REMOTE_ALLOC_PROT_WRITE)) {
+		fprintf(stderr,
+			"remote alloc query mismatch filled=%u done=%u next=%" PRIu64 " entry_id=%" PRIu64 "\n",
+			query_reply.entries_filled, query_reply.done,
+			(uint64_t)query_reply.next_id,
+			query_reply.entries_filled ?
+				(uint64_t)query_buf.entries[0].alloc_id :
+				(uint64_t)0);
+		goto out;
+	}
+
+	if (remove_remote_alloc(session_fd, reply.alloc_id, &remove_reply) < 0)
+		goto out;
+	if (remove_reply.alloc_id != reply.alloc_id ||
+	    remove_reply.target_tgid != child ||
+	    remove_reply.remote_addr != shell_addr ||
+	    remove_reply.mapped_length != test_len ||
+	    remove_reply.prot != (LKMDBG_REMOTE_ALLOC_PROT_READ |
+				  LKMDBG_REMOTE_ALLOC_PROT_WRITE)) {
+		fprintf(stderr,
+			"remote alloc remove mismatch id=%" PRIu64 " tgid=%d addr=0x%" PRIx64 " len=%" PRIu64 " prot=0x%x\n",
+			(uint64_t)remove_reply.alloc_id, remove_reply.target_tgid,
+			(uint64_t)remove_reply.remote_addr,
+			(uint64_t)remove_reply.mapped_length, remove_reply.prot);
+		goto out;
+	}
+
+	if (read_maps_line_for_pid_addr(child, shell_addr, maps_after,
+					sizeof(maps_after)) < 0)
+		goto out;
+	if (strcmp(maps_before, maps_after) != 0) {
+		fprintf(stderr,
+			"remote alloc remove changed target /proc/maps entry\n");
+		goto out;
+	}
+
+	memset(verify_buf, 0, test_len);
+	if (child_read_remote_range(cmd_fd, resp_fd, shell_addr, verify_buf,
+				    test_len) < 0) {
+		fprintf(stderr, "remote alloc restore child read failed\n");
+		goto out;
+	}
+	if (verify_pattern_range(verify_buf, test_len, 1, shell_offset) != 0) {
+		fprintf(stderr, "remote alloc baseline restore mismatch\n");
+		goto out;
+	}
+
+	memset(query_buf.entries, 0,
+	       REMOTE_ALLOC_QUERY_BATCH * sizeof(*query_buf.entries));
+	if (query_remote_allocs(session_fd, 0, &query_buf, &query_reply) < 0)
+		goto out;
+	if (query_reply.entries_filled != 0 || !query_reply.done ||
+	    query_reply.next_id != 0) {
+		fprintf(stderr,
+			"remote alloc query not empty after remove filled=%u done=%u next=%" PRIu64 "\n",
+			query_reply.entries_filled, query_reply.done,
+			(uint64_t)query_reply.next_id);
+		goto out;
+	}
+
+	ret = 0;
+out:
+	free(verify_buf);
+	free(query_buf.entries);
 	return ret;
 }
 
@@ -4665,6 +4958,9 @@ static void usage(const char *prog)
 		"  %s ptset <pid> <remote_addr_hex> <ro|rw|rx|rwx|protnone|execonly|raw:<pte_hex>>\n"
 		"  %s ptdel <pid> <id>\n"
 		"  %s ptlist <pid>\n"
+		"  %s ralloc <pid> <remote_addr_hex> <length> <r|w|rw|x|rx|wx|rwx>\n"
+		"  %s radel <pid> <id>\n"
+		"  %s ralist <pid>\n"
 		"  %s physread <phys_addr_hex> <length>\n"
 		"  %s physwrite <phys_addr_hex> <ascii_data>\n"
 		"  %s physreadv <pid> <remote_addr_hex> <length>\n"
@@ -4672,7 +4968,7 @@ static void usage(const char *prog)
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog, prog, prog, prog, prog);
+		prog, prog, prog, prog, prog, prog, prog, prog);
 }
 
 static int run_selftest(const char *prog)
@@ -5052,6 +5348,17 @@ static int run_selftest(const char *prog)
 		return 1;
 	}
 
+	if (verify_remote_alloc(session_fd, child, &info, cmd_pipe[1],
+				resp_pipe[0]) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
 	if (verify_page_query(session_fd, &info) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
@@ -5364,6 +5671,9 @@ int main(int argc, char **argv)
 	uint64_t pte_patch_raw = 0;
 	uint32_t pte_patch_mode = 0;
 	uint32_t pte_patch_flags = 0;
+	uint64_t remote_alloc_id = 0;
+	size_t remote_alloc_len = 0;
+	uint32_t remote_alloc_prot = 0;
 	uint32_t continue_flags = 0;
 	unsigned int max_events = EVENT_READ_BATCH;
 
@@ -5392,6 +5702,7 @@ int main(int argc, char **argv)
 			    strcmp(argv[1], "write") == 0 ||
 			    strcmp(argv[1], "pages") == 0 ||
 			    strcmp(argv[1], "ptset") == 0 ||
+			    strcmp(argv[1], "ralloc") == 0 ||
 			    strcmp(argv[1], "physreadv") == 0 ||
 			    strcmp(argv[1], "physwritev") == 0;
 	if (needs_remote_addr) {
@@ -5597,6 +5908,40 @@ int main(int argc, char **argv)
 		pte_patch_id = strtoull(argv[3], &endp, 0);
 		if (*endp != '\0' || !pte_patch_id) {
 			fprintf(stderr, "invalid PTE patch id: %s\n", argv[3]);
+			return 1;
+		}
+	}
+
+	if (strcmp(argv[1], "ralloc") == 0) {
+		if (argc < 6) {
+			usage(argv[0]);
+			return 1;
+		}
+
+		remote_alloc_len = (size_t)strtoull(argv[4], &endp, 0);
+		if (*endp != '\0' || !remote_alloc_len) {
+			fprintf(stderr, "invalid remote alloc length: %s\n",
+				argv[4]);
+			return 1;
+		}
+
+		if (parse_hwpoint_type(argv[5], &remote_alloc_prot) < 0) {
+			fprintf(stderr, "invalid remote alloc prot: %s\n",
+				argv[5]);
+			return 1;
+		}
+	}
+
+	if (strcmp(argv[1], "radel") == 0) {
+		if (argc < 4) {
+			usage(argv[0]);
+			return 1;
+		}
+
+		remote_alloc_id = strtoull(argv[3], &endp, 0);
+		if (*endp != '\0' || !remote_alloc_id) {
+			fprintf(stderr, "invalid remote alloc id: %s\n",
+				argv[3]);
 			return 1;
 		}
 	}
@@ -5915,6 +6260,68 @@ int main(int argc, char **argv)
 		if (dump_target_pte_patches(session_fd) < 0) {
 			close(session_fd);
 			return 1;
+		}
+	} else if (strcmp(argv[1], "ralloc") == 0) {
+		struct lkmdbg_remote_alloc_request reply;
+
+		memset(&reply, 0, sizeof(reply));
+		if (create_remote_alloc(session_fd, remote_addr, remote_alloc_len,
+					remote_alloc_prot, &reply) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		printf("remote_alloc.id=%" PRIu64 "\n",
+		       (uint64_t)reply.alloc_id);
+		printf("remote_alloc.addr=0x%" PRIx64 "\n",
+		       (uint64_t)reply.remote_addr);
+		printf("remote_alloc.len=%" PRIu64 "\n",
+		       (uint64_t)reply.mapped_length);
+		printf("remote_alloc.prot=0x%x\n", reply.prot);
+	} else if (strcmp(argv[1], "radel") == 0) {
+		struct lkmdbg_remote_alloc_handle_request reply;
+
+		memset(&reply, 0, sizeof(reply));
+		if (remove_remote_alloc(session_fd, remote_alloc_id, &reply) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		printf("remote_alloc.id=%" PRIu64 "\n",
+		       (uint64_t)reply.alloc_id);
+		printf("remote_alloc.tgid=%d\n", reply.target_tgid);
+		printf("remote_alloc.addr=0x%" PRIx64 "\n",
+		       (uint64_t)reply.remote_addr);
+		printf("remote_alloc.len=%" PRIu64 "\n",
+		       (uint64_t)reply.mapped_length);
+		printf("remote_alloc.prot=0x%x\n", reply.prot);
+	} else if (strcmp(argv[1], "ralist") == 0) {
+		struct lkmdbg_remote_alloc_entry entries[16];
+		uint64_t cursor = 0;
+
+		for (;;) {
+			struct remote_alloc_query_buffer buf = {
+				.entries = entries,
+			};
+			struct lkmdbg_remote_alloc_query_request reply;
+			uint32_t i;
+
+			if (query_remote_allocs(session_fd, cursor, &buf, &reply) <
+			    0) {
+				close(session_fd);
+				return 1;
+			}
+
+			for (i = 0; i < reply.entries_filled; i++) {
+				printf("id=%" PRIu64 " tgid=%d addr=0x%" PRIx64 " len=%" PRIu64 " prot=0x%x flags=0x%x\n",
+				       (uint64_t)entries[i].alloc_id,
+				       entries[i].target_tgid,
+				       (uint64_t)entries[i].remote_addr,
+				       (uint64_t)entries[i].mapped_length,
+				       entries[i].prot, entries[i].flags);
+			}
+
+			if (reply.done)
+				break;
+			cursor = reply.next_id;
 		}
 	} else if (strcmp(argv[1], "physread") == 0) {
 		size_t len;

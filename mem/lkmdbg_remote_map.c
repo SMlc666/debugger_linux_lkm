@@ -486,27 +486,6 @@ static void lkmdbg_remote_map_put_pages(struct page **pages, u32 page_count,
 #endif
 }
 
-static pte_t lkmdbg_remote_map_build_alias_pte(struct page *page, pte_t template,
-					       u32 prot)
-{
-	pte_t pte;
-
-	pte = pfn_pte(page_to_pfn(page), pte_pgprot(template));
-#ifdef CONFIG_ARM64
-	pte = clear_pte_bit(pte, __pgprot(PTE_PROT_NONE));
-	pte = set_pte_bit(pte, __pgprot(PTE_VALID));
-	pte = lkmdbg_pte_set_user_read(
-		pte, !!(prot & LKMDBG_REMOTE_MAP_PROT_READ));
-	if (prot & LKMDBG_REMOTE_MAP_PROT_WRITE)
-		pte = lkmdbg_pte_make_writable(pte);
-	else
-		pte = pte_wrprotect(pte);
-	pte = lkmdbg_pte_set_exec(
-		pte, !!(prot & LKMDBG_REMOTE_MAP_PROT_EXEC));
-#endif
-	return pte;
-}
-
 static bool lkmdbg_remote_map_ranges_overlap(u64 start_a, u64 len_a, u64 start_b,
 					     u64 len_b)
 {
@@ -940,7 +919,7 @@ static int lkmdbg_remote_map_create_stealth_local(
 		if (ret)
 			break;
 		map->baseline_local_ptes[i] = baseline_pte;
-		alias_pte = lkmdbg_remote_map_build_alias_pte(
+		alias_pte = lkmdbg_pte_build_alias_pte(
 			map->source_pages[i], baseline_pte, req->prot);
 		ret = lkmdbg_pte_rewrite_locked(local_mm, addr, alias_pte, NULL,
 						NULL);

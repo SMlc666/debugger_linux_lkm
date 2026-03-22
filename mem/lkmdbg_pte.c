@@ -93,6 +93,24 @@ pte_t lkmdbg_pte_make_writable(pte_t pte)
 	return pte;
 }
 
+pte_t lkmdbg_pte_build_alias_pte(struct page *page, pte_t template, u32 prot)
+{
+	pte_t pte;
+
+	pte = pfn_pte(page_to_pfn(page), pte_pgprot(template));
+	pte = clear_pte_bit(pte, __pgprot(PTE_PROT_NONE));
+	pte = set_pte_bit(pte, __pgprot(PTE_VALID));
+	pte = lkmdbg_pte_set_user_read(
+		pte, !!(prot & LKMDBG_REMOTE_ALLOC_PROT_READ));
+	if (prot & LKMDBG_REMOTE_ALLOC_PROT_WRITE)
+		pte = lkmdbg_pte_make_writable(pte);
+	else
+		pte = pte_wrprotect(pte);
+	pte = lkmdbg_pte_set_exec(pte,
+				   !!(prot & LKMDBG_REMOTE_ALLOC_PROT_EXEC));
+	return pte;
+}
+
 static u64 lkmdbg_pte_compare_mask(void)
 {
 	u64 mask = ~0ULL;
@@ -335,6 +353,13 @@ pte_t lkmdbg_pte_make_writable(pte_t pte)
 	return pte;
 }
 
+pte_t lkmdbg_pte_build_alias_pte(struct page *page, pte_t template, u32 prot)
+{
+	(void)page;
+	(void)prot;
+	return template;
+}
+
 bool lkmdbg_pte_equivalent(pte_t current_pte, pte_t expected_pte)
 {
 	return pte_val(current_pte) == pte_val(expected_pte);
@@ -470,6 +495,31 @@ lkmdbg_find_pte_patch_page_locked(struct lkmdbg_session *session,
 	}
 
 	return NULL;
+}
+
+bool lkmdbg_pte_patch_has_overlap_locked(struct lkmdbg_session *session,
+					 unsigned long start,
+					 unsigned long length)
+{
+	struct lkmdbg_pte_patch *patch;
+	unsigned long end;
+
+	if (!session || !length)
+		return false;
+
+	end = start + length;
+	if (end < start)
+		return true;
+
+	list_for_each_entry(patch, &session->pte_patches, node) {
+		unsigned long patch_start = patch->page_addr;
+		unsigned long patch_end = patch_start + PAGE_SIZE;
+
+		if (start < patch_end && patch_start < end)
+			return true;
+	}
+
+	return false;
 }
 
 static void lkmdbg_pte_patch_store_current(struct lkmdbg_pte_patch *patch,
@@ -729,7 +779,9 @@ long lkmdbg_apply_pte_patch(struct lkmdbg_session *session, void __user *argp)
 		return -ENOMEM;
 
 	mutex_lock(&session->lock);
-	if (lkmdbg_find_pte_patch_page_locked(session, page_addr)) {
+	if (lkmdbg_find_pte_patch_page_locked(session, page_addr) ||
+	    lkmdbg_remote_alloc_has_overlap_locked(session, page_addr,
+						    PAGE_SIZE)) {
 		mutex_unlock(&session->lock);
 		kfree(patch);
 		return -EEXIST;

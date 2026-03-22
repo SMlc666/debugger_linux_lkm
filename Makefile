@@ -23,6 +23,7 @@ lkmdbg-mem-y := \
 	mem/lkmdbg_mem.o \
 	mem/lkmdbg_phys.o \
 	mem/lkmdbg_pte.o \
+	mem/lkmdbg_remote_alloc.o \
 	mem/lkmdbg_remote_map.o \
 	mem/lkmdbg_target.o \
 	mem/lkmdbg_target_vm.o \

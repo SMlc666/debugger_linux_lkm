@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 14
+#define LKMDBG_PROTO_VERSION 15
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -158,6 +158,10 @@
  * can restore the original PTEs during session teardown.
  */
 #define LKMDBG_REMOTE_MAP_FLAG_STEALTH_LOCAL 0x00000004U
+
+#define LKMDBG_REMOTE_ALLOC_PROT_READ 0x00000001U
+#define LKMDBG_REMOTE_ALLOC_PROT_WRITE 0x00000002U
+#define LKMDBG_REMOTE_ALLOC_PROT_EXEC 0x00000004U
 
 struct lkmdbg_open_session_request {
 	__u32 version;
@@ -555,6 +559,51 @@ struct lkmdbg_remote_map_query_request {
 	__u64 next_id;
 };
 
+struct lkmdbg_remote_alloc_request {
+	__u32 version;
+	__u32 size;
+	__u64 remote_addr;
+	__u64 length;
+	__u32 prot;
+	__u32 flags;
+	__u64 alloc_id;
+	__u64 mapped_length;
+};
+
+struct lkmdbg_remote_alloc_handle_request {
+	__u32 version;
+	__u32 size;
+	__u64 alloc_id;
+	__s32 target_tgid;
+	__u32 reserved0;
+	__u64 remote_addr;
+	__u64 mapped_length;
+	__u32 prot;
+	__u32 flags;
+};
+
+struct lkmdbg_remote_alloc_entry {
+	__u64 alloc_id;
+	__s32 target_tgid;
+	__u32 reserved0;
+	__u64 remote_addr;
+	__u64 mapped_length;
+	__u32 prot;
+	__u32 flags;
+};
+
+struct lkmdbg_remote_alloc_query_request {
+	__u32 version;
+	__u32 size;
+	__u64 entries_addr;
+	__u32 max_entries;
+	__u32 flags;
+	__u64 start_id;
+	__u32 entries_filled;
+	__u32 done;
+	__u64 next_id;
+};
+
 struct lkmdbg_event_record {
 	__u32 version;
 	__u32 type;
@@ -639,5 +688,11 @@ struct lkmdbg_signal_config_request {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x2A, struct lkmdbg_signal_config_request)
 #define LKMDBG_IOC_GET_SIGNAL_CONFIG \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x2B, struct lkmdbg_signal_config_request)
+#define LKMDBG_IOC_CREATE_REMOTE_ALLOC \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x2C, struct lkmdbg_remote_alloc_request)
+#define LKMDBG_IOC_REMOVE_REMOTE_ALLOC \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x2D, struct lkmdbg_remote_alloc_handle_request)
+#define LKMDBG_IOC_QUERY_REMOTE_ALLOCS \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x2E, struct lkmdbg_remote_alloc_query_request)
 
 #endif

@@ -169,6 +169,8 @@ struct lkmdbg_session {
 	u64 next_pte_patch_id;
 	struct list_head remote_maps;
 	u64 next_remote_map_id;
+	struct list_head remote_allocs;
+	u64 next_remote_alloc_id;
 	u64 signal_mask_words[2];
 	u32 signal_flags;
 	pid_t step_tgid;
@@ -260,6 +262,7 @@ pte_t lkmdbg_pte_set_user_read(pte_t pte, bool readable);
 pte_t lkmdbg_pte_make_exec_only(pte_t pte);
 pte_t lkmdbg_pte_make_protnone(pte_t pte);
 pte_t lkmdbg_pte_make_writable(pte_t pte);
+pte_t lkmdbg_pte_build_alias_pte(struct page *page, pte_t template, u32 prot);
 bool lkmdbg_pte_equivalent(pte_t current_pte, pte_t expected_pte);
 int lkmdbg_pte_lookup_locked(struct mm_struct *mm, unsigned long addr,
 			     pte_t **ptep_out, spinlock_t **ptl_out);
@@ -282,11 +285,24 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 long lkmdbg_remove_remote_map(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_query_remote_maps(struct lkmdbg_session *session, void __user *argp);
 void lkmdbg_remote_map_release_session(struct lkmdbg_session *session);
+long lkmdbg_create_remote_alloc(struct lkmdbg_session *session,
+				void __user *argp);
+long lkmdbg_remove_remote_alloc(struct lkmdbg_session *session,
+				void __user *argp);
+long lkmdbg_query_remote_allocs(struct lkmdbg_session *session,
+				void __user *argp);
+void lkmdbg_remote_alloc_release_session(struct lkmdbg_session *session);
+bool lkmdbg_remote_alloc_has_overlap_locked(struct lkmdbg_session *session,
+					    unsigned long start,
+					    unsigned long length);
 long lkmdbg_apply_pte_patch(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_remove_pte_patch(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_query_pte_patches(struct lkmdbg_session *session, void __user *argp);
 void lkmdbg_pte_patch_release(struct lkmdbg_session *session);
 int lkmdbg_pte_patch_on_target_change(struct lkmdbg_session *session);
+bool lkmdbg_pte_patch_has_overlap_locked(struct lkmdbg_session *session,
+					 unsigned long start,
+					 unsigned long length);
 long lkmdbg_query_threads(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_get_regs(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_set_regs(struct lkmdbg_session *session, void __user *argp);
