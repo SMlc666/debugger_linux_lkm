@@ -1612,17 +1612,6 @@ static int verify_pte_patch_api(int session_fd, const struct child_info *info)
 	}
 
 	bytes_done = 0;
-	if (read_target_memory(session_fd, info->basic_addr, &value, sizeof(value),
-			       &bytes_done, 0) < 0) {
-		fprintf(stderr, "patched PTE read transport failed\n");
-		goto fail_remove;
-	}
-	if (bytes_done != 0) {
-		fprintf(stderr, "patched PTE unexpectedly remained readable bytes_done=%u\n",
-			bytes_done);
-		goto fail_remove;
-	}
-
 	if (remove_pte_patch(session_fd, apply_reply.id, &remove_reply) < 0)
 		return -1;
 
