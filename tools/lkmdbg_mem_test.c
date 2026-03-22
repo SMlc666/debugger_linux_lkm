@@ -121,8 +121,8 @@ static int get_stop_state(int session_fd,
 static int child_query_nofault_residency(int cmd_fd, int resp_fd);
 static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   void *buf, size_t len);
-static int child_fill_remote_range(int cmd_fd, uintptr_t addr, size_t len,
-				   uint8_t value);
+static int child_fill_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
+				   size_t len, uint8_t value);
 
 static int open_session_fd(void)
 {
@@ -1591,7 +1591,7 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 		goto out;
 	}
 
-	if (child_fill_remote_range(cmd_fd,
+	if (child_fill_remote_range(cmd_fd, resp_fd,
 				    (uintptr_t)inject_reply.remote_addr + 64,
 				    64, 0xA5) < 0) {
 		fprintf(stderr, "remote inject child write-through failed\n");
@@ -2093,11 +2093,15 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 				return 2;
 			break;
 		case CHILD_OP_FILL_REMOTE:
+			resident = 0;
 			if (!cmd.addr || !cmd.length ||
 			    cmd.length > SELFTEST_LARGE_MAP_LEN)
 				return 2;
 			memset((void *)(uintptr_t)cmd.addr, (int)cmd.value,
 			       cmd.length);
+			if (write_full(resp_fd, &resident, sizeof(resident)) !=
+			    (ssize_t)sizeof(resident))
+				return 2;
 			break;
 		case CHILD_OP_SPAWN_THREAD:
 		{
@@ -2186,8 +2190,8 @@ static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 	return 0;
 }
 
-static int child_fill_remote_range(int cmd_fd, uintptr_t addr, size_t len,
-				   uint8_t value)
+static int child_fill_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
+				   size_t len, uint8_t value)
 {
 	struct child_cmd cmd = {
 		.op = CHILD_OP_FILL_REMOTE,
@@ -2195,12 +2199,22 @@ static int child_fill_remote_range(int cmd_fd, uintptr_t addr, size_t len,
 		.length = (uint32_t)len,
 		.value = value,
 	};
+	int ret;
 
 	if (!len || len > UINT32_MAX)
 		return -1;
 
 	if (write_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
 		fprintf(stderr, "failed to send child remote fill command\n");
+		return -1;
+	}
+
+	if (read_full(resp_fd, &ret, sizeof(ret)) != (ssize_t)sizeof(ret)) {
+		fprintf(stderr, "failed to read child remote fill reply\n");
+		return -1;
+	}
+	if (ret) {
+		fprintf(stderr, "child remote fill failed ret=%d\n", ret);
 		return -1;
 	}
 
