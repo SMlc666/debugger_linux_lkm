@@ -1444,11 +1444,19 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 			entry.dev_minor);
 		goto out;
 	}
-	if (!(entry.flags & LKMDBG_PAGE_FLAG_PT_PRESENT) ||
-	    entry.pt_level == LKMDBG_PAGE_LEVEL_NONE ||
-	    entry.phys_addr == 0 || entry.pt_entry_raw == 0) {
+	if (entry.flags & LKMDBG_PAGE_FLAG_PT_PRESENT) {
+		if (entry.pt_level == LKMDBG_PAGE_LEVEL_NONE ||
+		    entry.phys_addr == 0 || entry.pt_entry_raw == 0) {
+			fprintf(stderr,
+				"file page table mismatch level=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x\n",
+				entry.pt_level, (uint64_t)entry.phys_addr,
+				(uint64_t)entry.pt_entry_raw, entry.flags);
+			goto out;
+		}
+	} else if (entry.pt_level != LKMDBG_PAGE_LEVEL_NONE ||
+		   entry.phys_addr != 0 || entry.pt_entry_raw != 0) {
 		fprintf(stderr,
-			"file page table mismatch level=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x\n",
+			"file page table absence mismatch level=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x\n",
 			entry.pt_level, (uint64_t)entry.phys_addr,
 			(uint64_t)entry.pt_entry_raw, entry.flags);
 		goto out;
