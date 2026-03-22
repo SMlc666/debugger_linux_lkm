@@ -321,6 +321,18 @@ static int lkmdbg_validate_single_step_request(
 	return 0;
 }
 
+static int lkmdbg_validate_signal_config(
+	struct lkmdbg_signal_config_request *req)
+{
+	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
+		return -EINVAL;
+
+	if (req->flags & ~LKMDBG_SIGNAL_CONFIG_STOP)
+		return -EINVAL;
+
+	return 0;
+}
+
 static struct lkmdbg_hwpoint *
 lkmdbg_find_hwpoint_locked(struct lkmdbg_session *session, u64 id)
 {
@@ -1583,8 +1595,8 @@ static void lkmdbg_trace_signal_generate(void *data, int sig,
 	if (info && info != SEND_SIG_NOINFO && info != SEND_SIG_PRIV)
 		siginfo_code = (u64)(u32)info->si_code;
 
-	lkmdbg_session_broadcast_target_event(
-		task->tgid, LKMDBG_EVENT_TARGET_SIGNAL, sig, task->pid,
+	lkmdbg_session_broadcast_signal_event(
+		task->tgid, (u32)sig, task->pid,
 		group ? LKMDBG_SIGNAL_EVENT_GROUP : 0, siginfo_code, result);
 }
 
@@ -1945,6 +1957,50 @@ int lkmdbg_thread_ctrl_init(void)
 #endif
 
 	return lkmdbg_register_trace_hooks();
+}
+
+long lkmdbg_set_signal_config(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_signal_config_request req;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	if (lkmdbg_validate_signal_config(&req))
+		return -EINVAL;
+
+	mutex_lock(&session->lock);
+	session->signal_mask_words[0] = req.mask_words[0];
+	session->signal_mask_words[1] = req.mask_words[1];
+	session->signal_flags = req.flags;
+	mutex_unlock(&session->lock);
+
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
+}
+
+long lkmdbg_get_signal_config(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_signal_config_request req;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	if (req.version != LKMDBG_PROTO_VERSION || req.size != sizeof(req))
+		return -EINVAL;
+
+	mutex_lock(&session->lock);
+	req.mask_words[0] = session->signal_mask_words[0];
+	req.mask_words[1] = session->signal_mask_words[1];
+	req.flags = session->signal_flags;
+	mutex_unlock(&session->lock);
+
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
 }
 
 void lkmdbg_thread_ctrl_exit(void)

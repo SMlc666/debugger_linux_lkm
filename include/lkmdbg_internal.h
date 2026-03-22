@@ -168,6 +168,8 @@ struct lkmdbg_session {
 	u64 next_pte_patch_id;
 	struct list_head remote_maps;
 	u64 next_remote_map_id;
+	u64 signal_mask_words[2];
+	u32 signal_flags;
 	pid_t step_tgid;
 	pid_t step_tid;
 	bool step_armed;
@@ -231,6 +233,9 @@ void lkmdbg_session_broadcast_event(u32 type, u64 value0, u64 value1);
 void lkmdbg_session_broadcast_target_event(pid_t target_tgid, u32 type,
 					   u32 code, pid_t tid, u32 flags,
 					   u64 value0, u64 value1);
+void lkmdbg_session_broadcast_signal_event(pid_t target_tgid, u32 sig,
+					   pid_t tid, u32 flags,
+					   u64 siginfo_code, int result);
 int lkmdbg_get_target_mm(struct lkmdbg_session *session,
 			 struct mm_struct **mm_out);
 int lkmdbg_get_target_identity(struct lkmdbg_session *session, pid_t *tgid_out,
@@ -284,6 +289,8 @@ int lkmdbg_pte_patch_on_target_change(struct lkmdbg_session *session);
 long lkmdbg_query_threads(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_get_regs(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_set_regs(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_set_signal_config(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_get_signal_config(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_get_stop_state(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_continue_target(struct lkmdbg_session *session, void __user *argp);
 void lkmdbg_session_commit_stop(struct lkmdbg_session *session, u32 reason,

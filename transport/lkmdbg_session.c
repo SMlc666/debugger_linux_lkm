@@ -303,6 +303,74 @@ void lkmdbg_session_broadcast_target_event(pid_t target_tgid, u32 type,
 	spin_unlock_irqrestore(&lkmdbg_session_list_lock, irqflags);
 }
 
+static bool lkmdbg_session_signal_mask_matches(const struct lkmdbg_session *session,
+					       u32 sig)
+{
+	u64 word;
+	u32 index;
+
+	if (!sig)
+		return false;
+
+	index = (sig - 1U) / 64U;
+	if (index >= ARRAY_SIZE(session->signal_mask_words))
+		return false;
+
+	word = READ_ONCE(session->signal_mask_words[index]);
+	return !!(word & (1ULL << ((sig - 1U) % 64U)));
+}
+
+void lkmdbg_session_broadcast_signal_event(pid_t target_tgid, u32 sig,
+					   pid_t tid, u32 flags,
+					   u64 siginfo_code, int result)
+{
+	struct lkmdbg_session *session;
+	struct lkmdbg_session *stop_sessions[64];
+	u32 stop_count = 0;
+	unsigned long irqflags;
+
+	if (target_tgid <= 0 || !sig)
+		return;
+
+	spin_lock_irqsave(&lkmdbg_session_list_lock, irqflags);
+	list_for_each_entry(session, &lkmdbg_session_list, node) {
+		unsigned long session_irqflags;
+		pid_t session_tgid;
+		u32 signal_flags;
+
+		session_tgid = READ_ONCE(session->target_tgid);
+		if (session_tgid != target_tgid)
+			continue;
+
+		spin_lock_irqsave(&session->event_lock, session_irqflags);
+		lkmdbg_session_queue_event_locked(session, LKMDBG_EVENT_TARGET_SIGNAL,
+						  sig, target_tgid, tid, flags,
+						  siginfo_code, (u64)result);
+		spin_unlock_irqrestore(&session->event_lock, session_irqflags);
+		wake_up_interruptible(&session->readq);
+
+		signal_flags = READ_ONCE(session->signal_flags);
+		if (!(signal_flags & LKMDBG_SIGNAL_CONFIG_STOP) || result ||
+		    !lkmdbg_session_signal_mask_matches(session, sig))
+			continue;
+
+		atomic_inc(&session->async_refs);
+		if (stop_count < ARRAY_SIZE(stop_sessions))
+			stop_sessions[stop_count++] = session;
+		else
+			lkmdbg_session_async_put(session);
+	}
+	spin_unlock_irqrestore(&lkmdbg_session_list_lock, irqflags);
+
+	while (stop_count > 0) {
+		session = stop_sessions[--stop_count];
+		lkmdbg_session_request_async_stop(session, LKMDBG_STOP_REASON_SIGNAL,
+						  target_tgid, tid, flags, 0,
+						  (u64)sig, siginfo_code, NULL);
+		lkmdbg_session_async_put(session);
+	}
+}
+
 static int lkmdbg_session_copy_status_to_user(struct lkmdbg_session *session,
 					      void __user *argp)
 {
@@ -613,6 +681,10 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_get_regs(session, argp);
 	case LKMDBG_IOC_SET_REGS:
 		return lkmdbg_set_regs(session, argp);
+	case LKMDBG_IOC_SET_SIGNAL_CONFIG:
+		return lkmdbg_set_signal_config(session, argp);
+	case LKMDBG_IOC_GET_SIGNAL_CONFIG:
+		return lkmdbg_get_signal_config(session, argp);
 	case LKMDBG_IOC_GET_STOP_STATE:
 		return lkmdbg_get_stop_state(session, argp);
 	case LKMDBG_IOC_CONTINUE_TARGET:

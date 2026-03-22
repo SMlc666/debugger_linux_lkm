@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 13
+#define LKMDBG_PROTO_VERSION 14
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -33,11 +33,13 @@
 #define LKMDBG_TARGET_CLONE_PROCESS 2U
 
 #define LKMDBG_SIGNAL_EVENT_GROUP 0x00000001U
+#define LKMDBG_SIGNAL_CONFIG_STOP 0x00000001U
 
 #define LKMDBG_STOP_REASON_FREEZE 1U
 #define LKMDBG_STOP_REASON_BREAKPOINT 2U
 #define LKMDBG_STOP_REASON_WATCHPOINT 3U
 #define LKMDBG_STOP_REASON_SINGLE_STEP 4U
+#define LKMDBG_STOP_REASON_SIGNAL 5U
 
 #define LKMDBG_STOP_FLAG_ACTIVE 0x00000001U
 #define LKMDBG_STOP_FLAG_FROZEN 0x00000002U
@@ -568,6 +570,14 @@ struct lkmdbg_event_record {
 	__u64 value1;
 };
 
+struct lkmdbg_signal_config_request {
+	__u32 version;
+	__u32 size;
+	__u64 mask_words[2];
+	__u32 flags;
+	__u32 reserved0;
+};
+
 #define LKMDBG_IOC_OPEN_SESSION \
 	_IOW(LKMDBG_IOC_MAGIC, 0x01, struct lkmdbg_open_session_request)
 #define LKMDBG_IOC_GET_STATUS \
@@ -625,5 +635,9 @@ struct lkmdbg_event_record {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x28, struct lkmdbg_remote_map_handle_request)
 #define LKMDBG_IOC_QUERY_REMOTE_MAPS \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x29, struct lkmdbg_remote_map_query_request)
+#define LKMDBG_IOC_SET_SIGNAL_CONFIG \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x2A, struct lkmdbg_signal_config_request)
+#define LKMDBG_IOC_GET_SIGNAL_CONFIG \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x2B, struct lkmdbg_signal_config_request)
 
 #endif

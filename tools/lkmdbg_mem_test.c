@@ -128,6 +128,11 @@ enum {
 
 static int get_stop_state(int session_fd,
 			  struct lkmdbg_stop_query_request *reply_out);
+static int set_signal_config(int session_fd, const uint64_t mask_words[2],
+			     uint32_t flags,
+			     struct lkmdbg_signal_config_request *reply_out);
+static int get_signal_config(int session_fd,
+			     struct lkmdbg_signal_config_request *reply_out);
 static int child_query_nofault_residency(int cmd_fd, int resp_fd);
 static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   void *buf, size_t len);
@@ -622,6 +627,51 @@ static int get_stop_state(int session_fd,
 
 	if (ioctl(session_fd, LKMDBG_IOC_GET_STOP_STATE, &req) < 0) {
 		fprintf(stderr, "GET_STOP_STATE failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int set_signal_config(int session_fd, const uint64_t mask_words[2],
+			     uint32_t flags,
+			     struct lkmdbg_signal_config_request *reply_out)
+{
+	struct lkmdbg_signal_config_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.flags = flags,
+	};
+
+	if (mask_words) {
+		req.mask_words[0] = mask_words[0];
+		req.mask_words[1] = mask_words[1];
+	}
+
+	if (ioctl(session_fd, LKMDBG_IOC_SET_SIGNAL_CONFIG, &req) < 0) {
+		fprintf(stderr, "SET_SIGNAL_CONFIG failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int get_signal_config(int session_fd,
+			     struct lkmdbg_signal_config_request *reply_out)
+{
+	struct lkmdbg_signal_config_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_GET_SIGNAL_CONFIG, &req) < 0) {
+		fprintf(stderr, "GET_SIGNAL_CONFIG failed: %s\n",
+			strerror(errno));
 		return -1;
 	}
 
@@ -3938,15 +3988,22 @@ static int verify_runtime_events(int session_fd, int cmd_fd, pid_t child,
 	struct lkmdbg_hwpoint_request bp_req;
 	struct lkmdbg_hwpoint_request mmu_req;
 	struct lkmdbg_hwpoint_request wp_req;
+	struct lkmdbg_signal_config_request signal_cfg;
 	struct lkmdbg_event_record event;
 	struct lkmdbg_stop_query_request stop_req;
+	uint64_t signal_mask_words[2];
+	uint64_t signal_siginfo_code = 0;
+	uint32_t signal_event_flags = 0;
 	const int event_timeout_ms = 5000;
+	int signal_config_active = 0;
 	int ret;
 
 	memset(&bp_req, 0, sizeof(bp_req));
 	memset(&mmu_req, 0, sizeof(mmu_req));
 	memset(&wp_req, 0, sizeof(wp_req));
+	memset(&signal_cfg, 0, sizeof(signal_cfg));
 	memset(&stop_req, 0, sizeof(stop_req));
+	memset(signal_mask_words, 0, sizeof(signal_mask_words));
 	if (drain_session_events(session_fd) < 0)
 		return -1;
 
@@ -3968,19 +4025,121 @@ static int verify_runtime_events(int session_fd, int cmd_fd, pid_t child,
 		return -1;
 	}
 
+	signal_mask_words[(SIGUSR1 - 1) / 64] = 1ULL << ((SIGUSR1 - 1) % 64);
+	if (set_signal_config(session_fd, signal_mask_words,
+			      LKMDBG_SIGNAL_CONFIG_STOP, &signal_cfg) < 0)
+		return -1;
+	signal_config_active = 1;
+	if (signal_cfg.mask_words[0] != signal_mask_words[0] ||
+	    signal_cfg.mask_words[1] != signal_mask_words[1] ||
+	    signal_cfg.flags != LKMDBG_SIGNAL_CONFIG_STOP) {
+		fprintf(stderr,
+			"signal config set mismatch mask=%" PRIx64 ":%" PRIx64 " flags=0x%x\n",
+			(uint64_t)signal_cfg.mask_words[1],
+			(uint64_t)signal_cfg.mask_words[0], signal_cfg.flags);
+		goto signal_fail;
+	}
+	memset(&signal_cfg, 0, sizeof(signal_cfg));
+	if (get_signal_config(session_fd, &signal_cfg) < 0)
+		goto signal_fail;
+	if (signal_cfg.mask_words[0] != signal_mask_words[0] ||
+	    signal_cfg.mask_words[1] != signal_mask_words[1] ||
+	    signal_cfg.flags != LKMDBG_SIGNAL_CONFIG_STOP) {
+		fprintf(stderr,
+			"signal config get mismatch mask=%" PRIx64 ":%" PRIx64 " flags=0x%x\n",
+			(uint64_t)signal_cfg.mask_words[1],
+			(uint64_t)signal_cfg.mask_words[0], signal_cfg.flags);
+		goto signal_fail;
+	}
+
 	printf("selftest runtime: waiting for signal event\n");
 	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SIGNAL) < 0)
-		return -1;
+		goto signal_fail;
 	ret = wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_SIGNAL,
 				     SIGUSR1, event_timeout_ms, &event);
 	if (ret == -ETIMEDOUT) {
 		printf("selftest runtime: signal lifecycle event unavailable, continuing\n");
+		goto signal_clear;
 	} else if (ret < 0) {
-		return -1;
+		goto signal_fail;
 	} else if (event.tgid != child || event.tid != child) {
 		fprintf(stderr,
 			"signal event task mismatch tgid=%d tid=%d expected leader=%d\n",
 			event.tgid, event.tid, child);
+		goto signal_fail;
+	} else if (event.flags & ~LKMDBG_SIGNAL_EVENT_GROUP) {
+		fprintf(stderr, "signal event flags mismatch flags=0x%x\n",
+			event.flags);
+		goto signal_fail;
+	} else if ((int64_t)event.value1 != 0) {
+		fprintf(stderr, "signal event delivery result mismatch=%" PRId64 "\n",
+			(int64_t)event.value1);
+		goto signal_fail;
+	}
+	signal_event_flags = event.flags;
+	signal_siginfo_code = event.value0;
+
+	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+				   LKMDBG_STOP_REASON_SIGNAL,
+				   event_timeout_ms, &event) < 0) {
+		fprintf(stderr, "signal stop event missing\n");
+		goto signal_fail;
+	}
+	if (event.tgid != child || event.tid != child ||
+	    event.value0 != SIGUSR1 || event.value1 != signal_siginfo_code ||
+	    event.flags != signal_event_flags) {
+		if (event.value1 != signal_siginfo_code) {
+			fprintf(stderr,
+				"signal stop event mismatch tgid=%d tid=%d sig=0x%" PRIx64 " code=0x%" PRIx64 " flags=0x%x expected_flags=0x%x\n",
+				event.tgid, event.tid, (uint64_t)event.value0,
+				(uint64_t)event.value1, event.flags,
+				signal_event_flags);
+		} else {
+			fprintf(stderr,
+				"signal stop event mismatch tgid=%d tid=%d sig=0x%" PRIx64 " flags=0x%x expected_flags=0x%x\n",
+				event.tgid, event.tid, (uint64_t)event.value0,
+				event.flags, signal_event_flags);
+		}
+		goto signal_fail;
+	}
+	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_SIGNAL,
+			      &stop_req) < 0)
+		goto signal_fail;
+	if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
+	    stop_req.stop.tgid != child || stop_req.stop.tid != child ||
+	    stop_req.stop.value0 != SIGUSR1 ||
+	    stop_req.stop.value1 != signal_siginfo_code ||
+	    stop_req.stop.event_flags != signal_event_flags) {
+		fprintf(stderr,
+			"signal stop state mismatch flags=0x%x tgid=%d tid=%d sig=0x%" PRIx64 " code=0x%" PRIx64 " event_flags=0x%x\n",
+			stop_req.stop.flags, stop_req.stop.tgid, stop_req.stop.tid,
+			(uint64_t)stop_req.stop.value0,
+			(uint64_t)stop_req.stop.value1,
+			stop_req.stop.event_flags);
+		goto signal_fail;
+	}
+	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0)
+		goto signal_fail;
+
+signal_clear:
+	memset(signal_mask_words, 0, sizeof(signal_mask_words));
+	memset(&signal_cfg, 0, sizeof(signal_cfg));
+	if (signal_config_active) {
+		if (set_signal_config(session_fd, signal_mask_words, 0,
+				      &signal_cfg) < 0)
+			return -1;
+		signal_config_active = 0;
+	}
+
+	memset(&signal_cfg, 0, sizeof(signal_cfg));
+	if (get_signal_config(session_fd, &signal_cfg) < 0)
+		return -1;
+	if (signal_cfg.mask_words[0] || signal_cfg.mask_words[1] ||
+	    signal_cfg.flags) {
+		fprintf(stderr,
+			"signal config clear mismatch mask=%" PRIx64 ":%" PRIx64 " flags=0x%x\n",
+			(uint64_t)signal_cfg.mask_words[1],
+			(uint64_t)signal_cfg.mask_words[0], signal_cfg.flags);
 		return -1;
 	}
 
@@ -4388,6 +4547,13 @@ breakpoint_checks:
 
 	printf("selftest runtime events ok clone signal breakpoint mmu-breakpoint oneshot rearm watchpoint threshold actions\n");
 	return 0;
+
+signal_fail:
+	if (signal_config_active) {
+		memset(signal_mask_words, 0, sizeof(signal_mask_words));
+		set_signal_config(session_fd, signal_mask_words, 0, NULL);
+	}
+	return -1;
 }
 
 static int verify_single_step_event(int session_fd, const struct child_info *info)
