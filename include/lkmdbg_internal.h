@@ -6,6 +6,7 @@
 #include <linux/fs.h>
 #include <linux/kprobes.h>
 #include <linux/list.h>
+#include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/poll.h>
 #include <linux/spinlock.h>
@@ -13,10 +14,6 @@
 #include <linux/uaccess.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
-
-#ifdef CONFIG_ARM64
-#include <asm/pgtable.h>
-#endif
 
 #include "../hook/lkmdbg_hook_internal.h"
 #include "lkmdbg_ioctl.h"
@@ -250,7 +247,6 @@ int lkmdbg_target_vma_lookup_locked(struct mm_struct *mm, u64 addr, u64 length,
 				    struct vm_area_struct **vma_out);
 int lkmdbg_target_pt_lookup_locked(struct mm_struct *mm, unsigned long addr,
 				   struct lkmdbg_target_pt_info *info);
-#ifdef CONFIG_ARM64
 bool lkmdbg_pte_allows_access(pte_t pte, unsigned long vm_flags, u32 type);
 pte_t lkmdbg_pte_set_exec(pte_t pte, bool executable);
 pte_t lkmdbg_pte_set_user_read(pte_t pte, bool readable);
@@ -267,7 +263,6 @@ int lkmdbg_pte_read_locked(struct mm_struct *mm, unsigned long addr,
 			   pte_t *pte_out, unsigned long *vm_flags_out);
 int lkmdbg_pte_capture(struct mm_struct *mm, unsigned long addr,
 		       pte_t *pte_out, unsigned long *vm_flags_out);
-#endif
 long lkmdbg_mem_set_target(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_read(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_mem_write(struct lkmdbg_session *session, void __user *argp);

@@ -1900,6 +1900,7 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	uint32_t bytes_done = 0;
 	size_t test_len;
 	int local_fd = -1;
+	int stealth_fd = -1;
 	int ret = -1;
 	int restore_needed = 0;
 	int wake_thread_started = 0;
@@ -1963,8 +1964,21 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 		goto out;
 	}
 
-	stealth_view = mmap(NULL, test_len, PROT_READ | PROT_WRITE,
-			    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	stealth_fd = memfd_create("lkmdbg-rmap-stealth",
+				  MFD_CLOEXEC | MFD_ALLOW_SEALING |
+					  MFD_NOEXEC_SEAL);
+	if (stealth_fd < 0) {
+		fprintf(stderr, "stealth local memfd_create failed: %s\n",
+			strerror(errno));
+		goto out;
+	}
+	if (ftruncate(stealth_fd, (off_t)test_len) < 0) {
+		fprintf(stderr, "stealth local ftruncate failed: %s\n",
+			strerror(errno));
+		goto out;
+	}
+	stealth_view = mmap(NULL, test_len, PROT_READ | PROT_WRITE, MAP_SHARED,
+			    stealth_fd, 0);
 	if (stealth_view == MAP_FAILED) {
 		fprintf(stderr, "stealth local map mmap failed: %s\n",
 			strerror(errno));
@@ -2160,6 +2174,8 @@ out:
 		close(local_fd);
 	if (stealth_view != MAP_FAILED)
 		munmap(stealth_view, test_len);
+	if (stealth_fd >= 0)
+		close(stealth_fd);
 	if (view != MAP_FAILED)
 		munmap(view, reply.mapped_length);
 	if (reply.map_fd >= 0)

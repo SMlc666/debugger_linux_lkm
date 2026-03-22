@@ -372,7 +372,8 @@ static int lkmdbg_remote_map_validate_local_alias_range(
 		return ret;
 	}
 
-	if (vma->vm_file || (vm_flags & VM_SHARED) || !(vm_flags & VM_MAYREAD)) {
+	if (!vma->vm_file || !(vm_flags & VM_SHARED) ||
+	    !(vm_flags & VM_MAYSHARE)) {
 		mmap_read_unlock(mm);
 		return -EOPNOTSUPP;
 	}
@@ -381,6 +382,25 @@ static int lkmdbg_remote_map_validate_local_alias_range(
 		*vm_flags_out = vm_flags;
 	mmap_read_unlock(mm);
 	return 0;
+}
+
+static void lkmdbg_remote_map_adjust_mm_rss(struct mm_struct *mm,
+					    struct page *from_page,
+					    struct page *to_page)
+{
+	int from_counter;
+	int to_counter;
+
+	if (!mm || !from_page || !to_page)
+		return;
+
+	from_counter = mm_counter(from_page);
+	to_counter = mm_counter(to_page);
+	if (from_counter == to_counter)
+		return;
+
+	add_mm_counter(mm, from_counter, -1);
+	add_mm_counter(mm, to_counter, 1);
 }
 
 static int lkmdbg_remote_map_prepare_local_file(struct mm_struct *mm,
@@ -558,10 +578,16 @@ static void lkmdbg_remote_map_restore_stealth(struct lkmdbg_remote_stealth_map *
 	if (!lkmdbg_remote_map_get_mm_by_tgid(map->owner_tgid, &mm)) {
 		mmap_write_lock(mm);
 		for (i = 0; i < map->page_count; i++) {
-			lkmdbg_pte_rewrite_locked(
-				mm, (unsigned long)map->local_addr +
-					    (i * PAGE_SIZE),
-				map->baseline_local_ptes[i], NULL, NULL);
+			unsigned long addr =
+				(unsigned long)map->local_addr +
+				(i * PAGE_SIZE);
+
+			if (!lkmdbg_pte_rewrite_locked(
+				    mm, addr, map->baseline_local_ptes[i], NULL,
+				    NULL))
+				lkmdbg_remote_map_adjust_mm_rss(
+					mm, map->source_pages[i],
+					map->local_pages[i]);
 		}
 		mmap_write_unlock(mm);
 		mmput(mm);
@@ -878,14 +904,20 @@ static int lkmdbg_remote_map_create_stealth_local(
 						NULL);
 		if (ret)
 			break;
+		lkmdbg_remote_map_adjust_mm_rss(local_mm, map->local_pages[i],
+						map->source_pages[i]);
 	}
 	if (ret) {
 		while (i > 0) {
 			unsigned long addr = (unsigned long)req->local_addr +
 					      ((i - 1) * PAGE_SIZE);
-			lkmdbg_pte_rewrite_locked(local_mm, addr,
-						  map->baseline_local_ptes[i - 1],
-						  NULL, NULL);
+			if (!lkmdbg_pte_rewrite_locked(
+				    local_mm, addr,
+				    map->baseline_local_ptes[i - 1], NULL,
+				    NULL))
+				lkmdbg_remote_map_adjust_mm_rss(
+					local_mm, map->source_pages[i - 1],
+					map->local_pages[i - 1]);
 			i--;
 		}
 	}
