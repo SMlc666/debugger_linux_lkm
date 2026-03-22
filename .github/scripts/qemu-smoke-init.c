@@ -385,6 +385,8 @@ int main(void)
 	qemu_expect_status_u64_at_least("proc_open_successes=", 1);
 	qemu_run_tool(open_session_argv);
 	qemu_run_tool_capture(stealth_report_argv, report_buf, sizeof(report_buf));
+	printf("%s", report_buf);
+	fflush(stdout);
 	qemu_check(strstr(report_buf, "report.stealth.flags=0x1(debugfs)") != NULL,
 		   "missing_report_stealth_flags");
 	qemu_check(strstr(report_buf, "report.exposure.proc_modules=visible") != NULL,
