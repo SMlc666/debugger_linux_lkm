@@ -8,6 +8,7 @@
 #include <linux/mman.h>
 #include <linux/mmap_lock.h>
 #include <linux/module.h>
+#include <linux/percpu_counter.h>
 #include <linux/pid.h>
 #include <linux/refcount.h>
 #include <linux/sched/mm.h>
@@ -394,13 +395,24 @@ static void lkmdbg_remote_map_adjust_mm_rss(struct mm_struct *mm,
 	if (!mm || !from_page || !to_page)
 		return;
 
-	from_counter = mm_counter(from_page);
-	to_counter = mm_counter(to_page);
+	if (PageAnon(from_page))
+		from_counter = MM_ANONPAGES;
+	else if (PageSwapBacked(from_page))
+		from_counter = MM_SHMEMPAGES;
+	else
+		from_counter = MM_FILEPAGES;
+
+	if (PageAnon(to_page))
+		to_counter = MM_ANONPAGES;
+	else if (PageSwapBacked(to_page))
+		to_counter = MM_SHMEMPAGES;
+	else
+		to_counter = MM_FILEPAGES;
 	if (from_counter == to_counter)
 		return;
 
-	add_mm_counter(mm, from_counter, -1);
-	add_mm_counter(mm, to_counter, 1);
+	percpu_counter_add(&mm->rss_stat[from_counter], -1);
+	percpu_counter_add(&mm->rss_stat[to_counter], 1);
 }
 
 static int lkmdbg_remote_map_prepare_local_file(struct mm_struct *mm,
