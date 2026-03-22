@@ -25,6 +25,7 @@
 #define MODULE_PATH "/lkmdbg.ko"
 #define MODULE_NAME "lkmdbg"
 #define OPEN_SESSION_TOOL "/lkmdbg_open_session"
+#define STEALTH_CTL_TOOL "/lkmdbg_stealth_ctl"
 #define MEM_TEST_TOOL "/lkmdbg_mem_test"
 #define MMU_TEST_TOOL "/lkmdbg_mmu_test"
 #define WATCHPOINT_CTRL_TOOL "/qemu_watchpoint_control"
@@ -173,6 +174,48 @@ static int qemu_run_tool_status(char *const argv[])
 	return WEXITSTATUS(status);
 }
 
+static void qemu_run_tool_capture(char *const argv[], char *buf, size_t buf_size)
+{
+	pid_t pid;
+	int pipefd[2];
+	int status;
+	ssize_t nr;
+
+	qemu_check(buf && buf_size > 0, "tool_capture_invalid_buffer");
+
+	if (pipe(pipefd) != 0)
+		qemu_fail("pipe_%s errno=%d", argv[0], errno);
+
+	pid = fork();
+	if (pid < 0)
+		qemu_fail("fork_%s errno=%d", argv[0], errno);
+
+	if (pid == 0) {
+		close(pipefd[0]);
+		if (dup2(pipefd[1], STDOUT_FILENO) < 0)
+			_exit(127);
+		close(pipefd[1]);
+		execv(argv[0], argv);
+		_exit(127);
+	}
+
+	close(pipefd[1]);
+	nr = read(pipefd[0], buf, buf_size - 1);
+	if (nr < 0) {
+		close(pipefd[0]);
+		qemu_fail("read_tool_%s errno=%d", argv[0], errno);
+	}
+	buf[nr] = '\0';
+	close(pipefd[0]);
+
+	if (waitpid(pid, &status, 0) < 0)
+		qemu_fail("waitpid_%s errno=%d", argv[0], errno);
+
+	qemu_check(WIFEXITED(status), "tool_signal_%s status=%d", argv[0], status);
+	qemu_check(WEXITSTATUS(status) == 0, "tool_exit_%s status=%d", argv[0],
+		   WEXITSTATUS(status));
+}
+
 static int qemu_open_session(void)
 {
 	struct lkmdbg_open_session_request req = {
@@ -286,9 +329,11 @@ int main(void)
 		{ "hook_selftest_mode=6", "hook_selftest_actual=", true, 3 },
 	};
 	char version_buf[4096];
+	char report_buf[4096];
 	size_t i;
 	unsigned int iter;
 	char *const open_session_argv[] = { OPEN_SESSION_TOOL, NULL };
+	char *const stealth_report_argv[] = { STEALTH_CTL_TOOL, "report", NULL };
 	char *const mem_test_argv[] = { MEM_TEST_TOOL, "selftest", NULL };
 	char *const mmu_test_argv[] = { MMU_TEST_TOOL, "selftest", NULL };
 	char *const watchpoint_ctrl_argv[] = { WATCHPOINT_CTRL_TOOL, NULL };
@@ -339,6 +384,15 @@ int main(void)
 	qemu_expect_status_line("proc_version_hook_active=1\n");
 	qemu_expect_status_u64_at_least("proc_open_successes=", 1);
 	qemu_run_tool(open_session_argv);
+	qemu_run_tool_capture(stealth_report_argv, report_buf, sizeof(report_buf));
+	qemu_check(strstr(report_buf, "report.stealth.flags=0x1(debugfs)") != NULL,
+		   "missing_report_stealth_flags");
+	qemu_check(strstr(report_buf, "report.exposure.proc_modules=visible") != NULL,
+		   "missing_report_proc_modules");
+	qemu_check(strstr(report_buf, "report.exposure.sysfs_module=visible") != NULL,
+		   "missing_report_sysfs_module");
+	qemu_check(strstr(report_buf, "report.exposure.debugfs_dir=visible") != NULL,
+		   "missing_report_debugfs_dir");
 	qemu_run_tool(mem_test_argv);
 	qemu_run_tool(mmu_test_argv);
 	printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
