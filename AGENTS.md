@@ -18,6 +18,7 @@ The current design is intentionally conservative:
 - Build against a specific tree with `make KDIR=/path/to/kernel/build`.
 - Build user-space helpers with:
   - `cc -O2 -Wall -Wextra -o tools/lkmdbg_open_session tools/lkmdbg_open_session.c`
+  - `cc -O2 -Wall -Wextra -o tools/lkmdbg_stealth_ctl tools/lkmdbg_stealth_ctl.c`
   - `cc -O2 -Wall -Wextra -pthread -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c`
 
 ## Editing Guidelines

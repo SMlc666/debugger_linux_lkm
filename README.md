@@ -5,7 +5,7 @@ Minimal out-of-tree kernel module scaffold for early arm64 Android GKI debugger 
 This repository intentionally starts with a small smoke-test module and a safe-first hidden transport scaffold:
 
 - loads and unloads cleanly
-- exports a `debugfs` status file at `/sys/kernel/debug/lkmdbg/status`
+- can optionally export a `debugfs` status file at `/sys/kernel/debug/lkmdbg/status`
 - can optionally inline-hook `/proc/version` open as a narrow session bootstrap
 - provides a stable place to add probe, breakpoint, and event plumbing next
 - on load, best-effort disables the kprobe blacklist and patches common CFI
@@ -53,13 +53,14 @@ Build the user-space bootstrap test tool:
 
 ```bash
 cc -O2 -Wall -Wextra -o tools/lkmdbg_open_session tools/lkmdbg_open_session.c
+cc -O2 -Wall -Wextra -o tools/lkmdbg_stealth_ctl tools/lkmdbg_stealth_ctl.c
 cc -O2 -Wall -Wextra -pthread -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c
 ```
 
 Load and inspect:
 
 ```bash
-sudo insmod lkmdbg.ko
+sudo insmod lkmdbg.ko enable_debugfs=1
 sudo cat /sys/kernel/debug/lkmdbg/status
 sudo rmmod lkmdbg
 ```
@@ -67,14 +68,14 @@ sudo rmmod lkmdbg
 Enable the hidden `/proc/version` ioctl transport:
 
 ```bash
-sudo insmod lkmdbg.ko hook_proc_version=1
+sudo insmod lkmdbg.ko hook_proc_version=1 enable_debugfs=1
 sudo cat /sys/kernel/debug/lkmdbg/status
 ```
 
 Run the module-local inline hook smoke test on load:
 
 ```bash
-sudo insmod lkmdbg.ko hook_selftest_mode=1
+sudo insmod lkmdbg.ko hook_selftest_mode=1 enable_debugfs=1
 sudo cat /sys/kernel/debug/lkmdbg/status
 ```
 
@@ -106,6 +107,24 @@ The hidden ioctl protocol now uses a bootstrap-plus-session model:
 - that ioctl returns an anonymous session fd created with `anon_inode_getfd()`
 - follow-up control ioctls run on the session fd instead of `/proc/version`
 - the session fd now supports `read()` and `poll()` for queued events
+- stealth control also lives on the session fd; `/proc/version` remains bootstrap-only
+
+Current stealth controls are intentionally narrow:
+
+- `debugfs` visibility can be toggled on or off at runtime
+- module-list hide only removes `lkmdbg` from `/proc/modules` and `lsmod`
+- sysfs/kobject visibility is not hidden yet
+- module-list hide is only accepted when the `/proc/version` hook is active, so there is still a restore path
+
+Example stealth flow:
+
+```bash
+sudo insmod lkmdbg.ko hook_proc_version=1
+cc -O2 -Wall -Wextra -o tools/lkmdbg_stealth_ctl tools/lkmdbg_stealth_ctl.c
+sudo ./tools/lkmdbg_stealth_ctl show
+sudo ./tools/lkmdbg_stealth_ctl hide
+sudo ./tools/lkmdbg_stealth_ctl restore
+```
 
 The current session ioctls include:
 

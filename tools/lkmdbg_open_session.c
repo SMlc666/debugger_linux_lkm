@@ -13,8 +13,46 @@
 
 #define TARGET_PATH "/proc/version"
 
+static void append_flag_name(char *buf, size_t buf_size, const char *name)
+{
+	size_t len;
+
+	if (!buf_size)
+		return;
+
+	len = strlen(buf);
+	if (len >= buf_size - 1)
+		return;
+
+	if (len) {
+		snprintf(buf + len, buf_size - len, ",%s", name);
+		return;
+	}
+
+	snprintf(buf, buf_size, "%s", name);
+}
+
+static const char *describe_stealth_flags(uint32_t flags, char *buf,
+					  size_t buf_size)
+{
+	if (!buf_size)
+		return "";
+
+	buf[0] = '\0';
+	if (flags & LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE)
+		append_flag_name(buf, buf_size, "debugfs");
+	if (flags & LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN)
+		append_flag_name(buf, buf_size, "modulehide");
+	if (!buf[0])
+		snprintf(buf, buf_size, "none");
+	return buf;
+}
+
 static void print_status(const struct lkmdbg_status_reply *reply)
 {
+	char stealth_flags_buf[48];
+	char stealth_supported_buf[48];
+
 	printf("version=%u\n", reply->version);
 	printf("size=%u\n", reply->size);
 	printf("hook_requested=%u\n", reply->hook_requested);
@@ -44,8 +82,14 @@ static void print_status(const struct lkmdbg_status_reply *reply)
 	printf("stop_flags=0x%x\n", reply->stop_flags);
 	printf("stop_tgid=%d\n", reply->stop_tgid);
 	printf("stop_tid=%d\n", reply->stop_tid);
-	printf("stealth_flags=0x%x\n", reply->stealth_flags);
-	printf("stealth_supported_flags=0x%x\n", reply->stealth_supported_flags);
+	printf("stealth_flags=0x%x(%s)\n", reply->stealth_flags,
+	       describe_stealth_flags(reply->stealth_flags, stealth_flags_buf,
+				      sizeof(stealth_flags_buf)));
+	printf("stealth_supported_flags=0x%x(%s)\n",
+	       reply->stealth_supported_flags,
+	       describe_stealth_flags(reply->stealth_supported_flags,
+				      stealth_supported_buf,
+				      sizeof(stealth_supported_buf)));
 }
 
 static void print_event(const struct lkmdbg_event_record *event)
