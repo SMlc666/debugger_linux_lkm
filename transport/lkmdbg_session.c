@@ -458,6 +458,7 @@ static int lkmdbg_session_release(struct inode *inode, struct file *file)
 	flush_work(&session->stop_work);
 
 	lkmdbg_pte_patch_release(session);
+	lkmdbg_remote_map_release_session(session);
 	lkmdbg_thread_ctrl_release(session);
 	lkmdbg_session_freeze_release(session);
 	wait_event(session->async_waitq, atomic_read(&session->async_refs) == 0);
@@ -674,6 +675,7 @@ int lkmdbg_open_session(void __user *argp)
 	INIT_LIST_HEAD(&session->node);
 	INIT_LIST_HEAD(&session->hwpoints);
 	INIT_LIST_HEAD(&session->pte_patches);
+	INIT_LIST_HEAD(&session->remote_maps);
 	INIT_WORK(&session->stop_work, lkmdbg_session_stop_workfn);
 	atomic_set(&session->async_refs, 0);
 	session->owner_tgid = current->tgid;

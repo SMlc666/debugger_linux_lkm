@@ -24,7 +24,8 @@
 	 LKMDBG_REMOTE_MAP_PROT_EXEC)
 #define LKMDBG_REMOTE_MAP_VALID_FLAGS                                        \
 	(LKMDBG_REMOTE_MAP_FLAG_LOCAL_TO_TARGET |                           \
-	 LKMDBG_REMOTE_MAP_FLAG_FIXED_TARGET)
+	 LKMDBG_REMOTE_MAP_FLAG_FIXED_TARGET |                             \
+	 LKMDBG_REMOTE_MAP_FLAG_STEALTH_LOCAL)
 #define LKMDBG_REMOTE_MAP_DEFAULT_TIMEOUT_MS 1000U
 #define LKMDBG_TASK_WORK_NOTIFY_RESUME 1U
 
@@ -56,6 +57,22 @@ struct lkmdbg_remote_map {
 	struct page **pages;
 };
 
+struct lkmdbg_remote_stealth_map {
+	struct list_head node;
+	pid_t owner_tgid;
+	pid_t source_tgid;
+	u64 remote_addr;
+	u64 local_addr;
+	u64 mapped_length;
+	u64 source_vm_flags_raw;
+	u64 local_vm_flags_raw;
+	u32 prot;
+	u32 page_count;
+	struct page **source_pages;
+	struct page **local_pages;
+	pte_t *baseline_local_ptes;
+};
+
 struct lkmdbg_remote_map_install {
 	struct callback_head work;
 	struct completion done;
@@ -77,6 +94,12 @@ static void lkmdbg_remote_map_install_task_work(struct callback_head *work);
 static bool lkmdbg_remote_map_is_local_to_target(const struct lkmdbg_remote_map_request *req)
 {
 	return !!(req->flags & LKMDBG_REMOTE_MAP_FLAG_LOCAL_TO_TARGET);
+}
+
+static bool lkmdbg_remote_map_is_stealth_local(
+	const struct lkmdbg_remote_map_request *req)
+{
+	return !!(req->flags & LKMDBG_REMOTE_MAP_FLAG_STEALTH_LOCAL);
 }
 
 /*
@@ -130,6 +153,8 @@ static int lkmdbg_remote_map_validate_addr_range(u64 addr, u64 length,
 static int lkmdbg_validate_remote_map_req(struct lkmdbg_remote_map_request *req)
 {
 	int ret;
+	bool local_to_target;
+	bool stealth_local;
 
 	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
 		return -EINVAL;
@@ -146,7 +171,12 @@ static int lkmdbg_validate_remote_map_req(struct lkmdbg_remote_map_request *req)
 	if (req->length > LKMDBG_REMOTE_MAP_MAX_BYTES)
 		return -E2BIG;
 
-	if (lkmdbg_remote_map_is_local_to_target(req)) {
+	local_to_target = lkmdbg_remote_map_is_local_to_target(req);
+	stealth_local = lkmdbg_remote_map_is_stealth_local(req);
+	if (local_to_target && stealth_local)
+		return -EINVAL;
+
+	if (local_to_target) {
 		ret = lkmdbg_remote_map_validate_addr_range(req->local_addr,
 							    req->length, true);
 		if (ret)
@@ -159,6 +189,20 @@ static int lkmdbg_validate_remote_map_req(struct lkmdbg_remote_map_request *req)
 		}
 		if ((req->flags & LKMDBG_REMOTE_MAP_FLAG_FIXED_TARGET) &&
 		    !req->remote_addr)
+			return -EINVAL;
+		return 0;
+	}
+
+	if (stealth_local) {
+		ret = lkmdbg_remote_map_validate_addr_range(req->remote_addr,
+							    req->length, true);
+		if (ret)
+			return ret;
+		ret = lkmdbg_remote_map_validate_addr_range(req->local_addr,
+							    req->length, true);
+		if (ret)
+			return ret;
+		if (req->timeout_ms)
 			return -EINVAL;
 		return 0;
 	}
@@ -306,6 +350,39 @@ static int lkmdbg_remote_map_validate_range(struct mm_struct *mm, u64 remote_add
 	return ret;
 }
 
+static int lkmdbg_remote_map_validate_local_alias_range(
+	struct mm_struct *mm, u64 local_addr, u64 length, u32 prot,
+	u64 *vm_flags_out)
+{
+	struct vm_area_struct *vma;
+	u64 vm_flags;
+	int ret;
+
+	mmap_read_lock(mm);
+	ret = lkmdbg_target_vma_lookup_locked(mm, local_addr, length, &vma);
+	if (ret) {
+		mmap_read_unlock(mm);
+		return ret;
+	}
+
+	vm_flags = (u64)vma->vm_flags;
+	ret = lkmdbg_remote_map_vma_perms_ok(vma, prot);
+	if (ret) {
+		mmap_read_unlock(mm);
+		return ret;
+	}
+
+	if (vma->vm_file || (vm_flags & VM_SHARED) || !(vm_flags & VM_MAYREAD)) {
+		mmap_read_unlock(mm);
+		return -EOPNOTSUPP;
+	}
+
+	if (vm_flags_out)
+		*vm_flags_out = vm_flags;
+	mmap_read_unlock(mm);
+	return 0;
+}
+
 static int lkmdbg_remote_map_prepare_local_file(struct mm_struct *mm,
 						u64 local_addr, u64 length,
 						u32 prot, u64 *vm_flags_out,
@@ -377,6 +454,126 @@ static long lkmdbg_remote_map_pin_pages(struct mm_struct *mm,
 		mmap_read_unlock(mm);
 
 	return ret;
+}
+
+static void lkmdbg_remote_map_put_pages(struct page **pages, u32 page_count,
+					bool dirty)
+{
+	u32 i;
+
+	if (!pages)
+		return;
+
+#ifdef FOLL_PIN
+	if (dirty)
+		unpin_user_pages_dirty_lock(pages, page_count, true);
+	else
+		unpin_user_pages(pages, page_count);
+
+	for (i = 0; i < page_count; i++)
+		pages[i] = NULL;
+#else
+	for (i = 0; i < page_count; i++) {
+		if (!pages[i])
+			continue;
+		if (dirty)
+			set_page_dirty_lock(pages[i]);
+		put_page(pages[i]);
+		pages[i] = NULL;
+	}
+#endif
+}
+
+static pte_t lkmdbg_remote_map_build_alias_pte(struct page *page, pte_t template,
+					       u32 prot)
+{
+	pte_t pte;
+
+	pte = pfn_pte(page_to_pfn(page), pte_pgprot(template));
+#ifdef CONFIG_ARM64
+	pte = clear_pte_bit(pte, __pgprot(PTE_PROT_NONE));
+	pte = set_pte_bit(pte, __pgprot(PTE_VALID));
+	pte = lkmdbg_pte_set_user_read(
+		pte, !!(prot & LKMDBG_REMOTE_MAP_PROT_READ));
+	if (prot & LKMDBG_REMOTE_MAP_PROT_WRITE)
+		pte = lkmdbg_pte_make_writable(pte);
+	else
+		pte = pte_wrprotect(pte);
+	pte = lkmdbg_pte_set_exec(
+		pte, !!(prot & LKMDBG_REMOTE_MAP_PROT_EXEC));
+#endif
+	return pte;
+}
+
+static bool lkmdbg_remote_map_ranges_overlap(u64 start_a, u64 len_a, u64 start_b,
+					     u64 len_b)
+{
+	u64 end_a = start_a + len_a;
+	u64 end_b = start_b + len_b;
+
+	return start_a < end_b && start_b < end_a;
+}
+
+static int lkmdbg_remote_map_check_stealth_overlap(struct lkmdbg_session *session,
+						   u64 local_addr, u64 length)
+{
+	struct lkmdbg_remote_stealth_map *map;
+
+	list_for_each_entry(map, &session->remote_maps, node) {
+		if (lkmdbg_remote_map_ranges_overlap(local_addr, length,
+						     map->local_addr,
+						     map->mapped_length))
+			return -EEXIST;
+	}
+
+	return 0;
+}
+
+static int lkmdbg_remote_map_get_mm_by_tgid(pid_t tgid, struct mm_struct **mm_out)
+{
+	struct task_struct *task;
+	struct mm_struct *mm;
+
+	task = get_pid_task(find_vpid(tgid), PIDTYPE_TGID);
+	if (!task)
+		return -ESRCH;
+
+	mm = get_task_mm(task);
+	put_task_struct(task);
+	if (!mm)
+		return -ESRCH;
+
+	*mm_out = mm;
+	return 0;
+}
+
+static void lkmdbg_remote_map_restore_stealth(struct lkmdbg_remote_stealth_map *map)
+{
+	struct mm_struct *mm = NULL;
+	u32 i;
+
+	if (!map)
+		return;
+
+	if (!lkmdbg_remote_map_get_mm_by_tgid(map->owner_tgid, &mm)) {
+		mmap_write_lock(mm);
+		for (i = 0; i < map->page_count; i++) {
+			lkmdbg_pte_rewrite_locked(
+				mm, (unsigned long)map->local_addr +
+					    (i * PAGE_SIZE),
+				map->baseline_local_ptes[i], NULL, NULL);
+		}
+		mmap_write_unlock(mm);
+		mmput(mm);
+	}
+
+	lkmdbg_remote_map_put_pages(map->source_pages, map->page_count,
+				    !!(map->prot & LKMDBG_REMOTE_MAP_PROT_WRITE));
+	lkmdbg_remote_map_put_pages(map->local_pages, map->page_count, false);
+	kfree(map->baseline_local_ptes);
+	kfree(map->source_pages);
+	kfree(map->local_pages);
+	kfree(map);
 }
 
 static void lkmdbg_remote_map_release_pages(struct lkmdbg_remote_map *map)
@@ -567,6 +764,194 @@ static int lkmdbg_remote_map_prepare_fd(struct lkmdbg_remote_map *map,
 	return fd;
 }
 
+static int lkmdbg_remote_map_create_stealth_local(
+	struct lkmdbg_session *session, struct lkmdbg_remote_map_request *req,
+	void __user *argp)
+{
+	struct lkmdbg_remote_stealth_map *map = NULL;
+	struct mm_struct *source_mm = NULL;
+	struct mm_struct *local_mm = NULL;
+	unsigned int source_gup_flags = 0;
+	u64 source_vm_flags_raw = 0;
+	u64 local_vm_flags_raw = 0;
+	u64 mapped_length;
+	u32 page_count;
+	long pinned;
+	u32 i;
+	int ret;
+
+	ret = lkmdbg_get_target_mm(session, &source_mm);
+	if (ret)
+		return ret;
+
+	ret = lkmdbg_remote_map_validate_range(source_mm, req->remote_addr,
+					       req->length, req->prot,
+					       &source_vm_flags_raw);
+	if (ret)
+		goto out_source_mm;
+
+	local_mm = get_task_mm(current);
+	if (!local_mm) {
+		ret = -ESRCH;
+		goto out_source_mm;
+	}
+
+	ret = lkmdbg_remote_map_validate_local_alias_range(
+		local_mm, req->local_addr, req->length, req->prot,
+		&local_vm_flags_raw);
+	if (ret)
+		goto out_local_mm;
+
+	mapped_length = PAGE_ALIGN(req->length);
+	page_count = mapped_length >> PAGE_SHIFT;
+	req->mapped_length = mapped_length;
+	req->map_fd = -1;
+
+	mutex_lock(&session->lock);
+	ret = lkmdbg_remote_map_check_stealth_overlap(session, req->local_addr,
+						      mapped_length);
+	mutex_unlock(&session->lock);
+	if (ret)
+		goto out_local_mm;
+
+	map = kzalloc(sizeof(*map), GFP_KERNEL);
+	if (!map) {
+		ret = -ENOMEM;
+		goto out_local_mm;
+	}
+	INIT_LIST_HEAD(&map->node);
+
+	map->source_pages = kcalloc(page_count, sizeof(*map->source_pages),
+				    GFP_KERNEL);
+	map->local_pages = kcalloc(page_count, sizeof(*map->local_pages),
+				   GFP_KERNEL);
+	map->baseline_local_ptes =
+		kcalloc(page_count, sizeof(*map->baseline_local_ptes), GFP_KERNEL);
+	if (!map->source_pages || !map->local_pages || !map->baseline_local_ptes) {
+		ret = -ENOMEM;
+		goto out_map;
+	}
+
+	if (req->prot & LKMDBG_REMOTE_MAP_PROT_WRITE)
+		source_gup_flags |= FOLL_WRITE;
+
+	pinned = lkmdbg_remote_map_pin_pages(source_mm,
+					     (unsigned long)req->remote_addr,
+					     page_count, source_gup_flags,
+					     map->source_pages);
+	if (pinned < 0) {
+		ret = (int)pinned;
+		goto out_map;
+	}
+	if ((u32)pinned != page_count) {
+		ret = -EFAULT;
+		goto out_map;
+	}
+
+	pinned = lkmdbg_remote_map_pin_pages(local_mm,
+					     (unsigned long)req->local_addr,
+					     page_count, 0, map->local_pages);
+	if (pinned < 0) {
+		ret = (int)pinned;
+		goto out_map;
+	}
+	if ((u32)pinned != page_count) {
+		ret = -EFAULT;
+		goto out_map;
+	}
+
+	mmap_write_lock(local_mm);
+	for (i = 0; i < page_count; i++) {
+		unsigned long addr = (unsigned long)req->local_addr +
+				      (i * PAGE_SIZE);
+		pte_t baseline_pte;
+		pte_t alias_pte;
+
+		ret = lkmdbg_pte_read_locked(local_mm, addr, &baseline_pte,
+					     NULL);
+		if (ret)
+			break;
+		map->baseline_local_ptes[i] = baseline_pte;
+		alias_pte = lkmdbg_remote_map_build_alias_pte(
+			map->source_pages[i], baseline_pte, req->prot);
+		ret = lkmdbg_pte_rewrite_locked(local_mm, addr, alias_pte, NULL,
+						NULL);
+		if (ret)
+			break;
+	}
+	if (ret) {
+		while (i > 0) {
+			unsigned long addr = (unsigned long)req->local_addr +
+					      ((i - 1) * PAGE_SIZE);
+			lkmdbg_pte_rewrite_locked(local_mm, addr,
+						  map->baseline_local_ptes[i - 1],
+						  NULL, NULL);
+			i--;
+		}
+	}
+	mmap_write_unlock(local_mm);
+	if (ret)
+		goto out_map;
+
+	map->owner_tgid = current->tgid;
+	if (lkmdbg_get_target_identity(session, &map->source_tgid, NULL))
+		map->source_tgid = 0;
+	map->remote_addr = req->remote_addr;
+	map->local_addr = req->local_addr;
+	map->mapped_length = mapped_length;
+	map->source_vm_flags_raw = source_vm_flags_raw;
+	map->local_vm_flags_raw = local_vm_flags_raw;
+	map->prot = req->prot;
+	map->page_count = page_count;
+
+	mutex_lock(&session->lock);
+	ret = lkmdbg_remote_map_check_stealth_overlap(session, req->local_addr,
+						      mapped_length);
+	if (!ret)
+		list_add_tail(&map->node, &session->remote_maps);
+	mutex_unlock(&session->lock);
+	if (ret)
+		goto out_map_restore;
+
+	mmput(local_mm);
+	local_mm = NULL;
+	mmput(source_mm);
+	source_mm = NULL;
+	if (copy_to_user(argp, req, sizeof(*req))) {
+		mutex_lock(&session->lock);
+		if (!list_empty(&map->node))
+			list_del_init(&map->node);
+		mutex_unlock(&session->lock);
+		lkmdbg_remote_map_restore_stealth(map);
+		return -EFAULT;
+	}
+	return 0;
+
+out_map_restore:
+	if (local_mm)
+		mmput(local_mm);
+	if (source_mm)
+		mmput(source_mm);
+	lkmdbg_remote_map_restore_stealth(map);
+	return ret;
+out_map:
+	lkmdbg_remote_map_put_pages(map ? map->source_pages : NULL, page_count,
+				    !!(req->prot & LKMDBG_REMOTE_MAP_PROT_WRITE));
+	lkmdbg_remote_map_put_pages(map ? map->local_pages : NULL, page_count,
+				    false);
+	kfree(map ? map->baseline_local_ptes : NULL);
+	kfree(map ? map->source_pages : NULL);
+	kfree(map ? map->local_pages : NULL);
+	kfree(map);
+out_local_mm:
+	if (local_mm)
+		mmput(local_mm);
+out_source_mm:
+	if (source_mm)
+		mmput(source_mm);
+	return ret;
+}
+
 long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 {
 	struct lkmdbg_remote_map_request req;
@@ -582,6 +967,7 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 	long pinned;
 	struct file *map_file = NULL;
 	bool local_to_target;
+	bool stealth_local;
 	long install_addr = 0;
 	int map_fd = -1;
 	int ret;
@@ -594,6 +980,10 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 		return ret;
 
 	local_to_target = lkmdbg_remote_map_is_local_to_target(&req);
+	stealth_local = lkmdbg_remote_map_is_stealth_local(&req);
+	if (stealth_local)
+		return lkmdbg_remote_map_create_stealth_local(session, &req,
+							      argp);
 	source_addr = local_to_target ? req.local_addr : req.remote_addr;
 	if (local_to_target) {
 		mm = get_task_mm(current);
@@ -716,4 +1106,26 @@ out_map:
 out_mm:
 	mmput(mm);
 	return ret;
+}
+
+void lkmdbg_remote_map_release_session(struct lkmdbg_session *session)
+{
+	struct lkmdbg_remote_stealth_map *map;
+	struct lkmdbg_remote_stealth_map *tmp;
+	LIST_HEAD(release_list);
+
+	if (!session)
+		return;
+
+	mutex_lock(&session->lock);
+	list_for_each_entry_safe(map, tmp, &session->remote_maps, node) {
+		list_del_init(&map->node);
+		list_add_tail(&map->node, &release_list);
+	}
+	mutex_unlock(&session->lock);
+
+	list_for_each_entry_safe(map, tmp, &release_list, node) {
+		list_del_init(&map->node);
+		lkmdbg_remote_map_restore_stealth(map);
+	}
 }

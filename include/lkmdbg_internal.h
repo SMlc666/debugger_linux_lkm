@@ -169,6 +169,7 @@ struct lkmdbg_session {
 	u64 next_hwpoint_id;
 	struct list_head pte_patches;
 	u64 next_pte_patch_id;
+	struct list_head remote_maps;
 	pid_t step_tgid;
 	pid_t step_tid;
 	bool step_armed;
@@ -276,6 +277,7 @@ long lkmdbg_page_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_image_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp);
+void lkmdbg_remote_map_release_session(struct lkmdbg_session *session);
 long lkmdbg_apply_pte_patch(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_remove_pte_patch(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_query_pte_patches(struct lkmdbg_session *session, void __user *argp);

@@ -892,6 +892,41 @@ static ssize_t write_full(int fd, const void *buf, size_t len)
 	return (ssize_t)done;
 }
 
+static int read_maps_line_for_addr(uintptr_t addr, char *buf, size_t buf_size)
+{
+	FILE *fp;
+	char line[512];
+
+	if (!buf || !buf_size)
+		return -1;
+
+	fp = fopen("/proc/self/maps", "re");
+	if (!fp) {
+		fprintf(stderr, "fopen(/proc/self/maps) failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	while (fgets(line, sizeof(line), fp)) {
+		unsigned long long start = 0;
+		unsigned long long end = 0;
+
+		if (sscanf(line, "%llx-%llx", &start, &end) != 2)
+			continue;
+		if (addr < (uintptr_t)start || addr >= (uintptr_t)end)
+			continue;
+
+		snprintf(buf, buf_size, "%s", line);
+		fclose(fp);
+		return 0;
+	}
+
+	fclose(fp);
+	fprintf(stderr, "address 0x%" PRIxPTR " not found in /proc/self/maps\n",
+		addr);
+	return -1;
+}
+
 static int xfer_target_memory(int session_fd, struct lkmdbg_mem_op *ops,
 			      uint32_t op_count, int write,
 			      struct lkmdbg_mem_request *reply_out, int verbose)
@@ -1851,13 +1886,17 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	struct lkmdbg_remote_map_request reply;
 	struct lkmdbg_remote_map_request ro_reply;
 	struct lkmdbg_remote_map_request inject_reply;
+	struct lkmdbg_remote_map_request stealth_reply;
 	unsigned char *view = MAP_FAILED;
 	unsigned char *ro_view = MAP_FAILED;
 	unsigned char *local_map = MAP_FAILED;
+	unsigned char *stealth_view = MAP_FAILED;
 	unsigned char *verify_buf = NULL;
 	unsigned char *expected_buf = NULL;
 	struct remote_map_wake_ctx wake_ctx;
 	pthread_t wake_thread;
+	char maps_before[512];
+	char maps_after[512];
 	uint32_t bytes_done = 0;
 	size_t test_len;
 	int local_fd = -1;
@@ -1871,6 +1910,8 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	ro_reply.map_fd = -1;
 	memset(&inject_reply, 0, sizeof(inject_reply));
 	inject_reply.map_fd = -1;
+	memset(&stealth_reply, 0, sizeof(stealth_reply));
+	stealth_reply.map_fd = -1;
 
 	test_len = info->page_size * 2U;
 	if (test_len > info->large_len)
@@ -1919,6 +1960,72 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 
 	if (memcmp(verify_buf + 128, expected_buf, 64) != 0) {
 		fprintf(stderr, "remote map write-through verification failed\n");
+		goto out;
+	}
+
+	stealth_view = mmap(NULL, test_len, PROT_READ | PROT_WRITE,
+			    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (stealth_view == MAP_FAILED) {
+		fprintf(stderr, "stealth local map mmap failed: %s\n",
+			strerror(errno));
+		goto out;
+	}
+	memset(stealth_view, 0x3C, test_len);
+	if (read_maps_line_for_addr((uintptr_t)stealth_view, maps_before,
+				    sizeof(maps_before)) < 0)
+		goto out;
+
+	if (create_remote_map(session_fd, info->large_addr,
+			      (uintptr_t)stealth_view, test_len,
+			      LKMDBG_REMOTE_MAP_PROT_READ |
+				      LKMDBG_REMOTE_MAP_PROT_WRITE,
+			      LKMDBG_REMOTE_MAP_FLAG_STEALTH_LOCAL,
+			      &stealth_reply) < 0)
+		goto out;
+
+	if (stealth_reply.map_fd != -1 ||
+	    stealth_reply.mapped_length != reply.mapped_length) {
+		fprintf(stderr,
+			"stealth remote map reply mismatch len=%" PRIu64 " fd=%d\n",
+			(uint64_t)stealth_reply.mapped_length, stealth_reply.map_fd);
+		goto out;
+	}
+
+	if (read_maps_line_for_addr((uintptr_t)stealth_view, maps_after,
+				    sizeof(maps_after)) < 0)
+		goto out;
+	if (strcmp(maps_before, maps_after) != 0) {
+		fprintf(stderr, "stealth remote map changed /proc/self/maps entry\n");
+		goto out;
+	}
+
+	memset(verify_buf, 0, test_len);
+	if (read_target_memory(session_fd, info->large_addr, verify_buf, test_len,
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != test_len) {
+		fprintf(stderr,
+			"stealth remote map target snapshot failed bytes_done=%u expected=%zu\n",
+			bytes_done, test_len);
+		goto out;
+	}
+	if (memcmp(stealth_view, verify_buf, test_len) != 0) {
+		fprintf(stderr, "stealth remote map initial view mismatch\n");
+		goto out;
+	}
+
+	fill_pattern(expected_buf, 64, 41);
+	memcpy(stealth_view + 256, expected_buf, 64);
+	memset(verify_buf, 0, test_len);
+	if (read_target_memory(session_fd, info->large_addr, verify_buf, test_len,
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != test_len) {
+		fprintf(stderr,
+			"stealth remote map target readback failed bytes_done=%u expected=%zu\n",
+			bytes_done, test_len);
+		goto out;
+	}
+	if (memcmp(verify_buf + 256, expected_buf, 64) != 0) {
+		fprintf(stderr, "stealth remote map write-through failed\n");
 		goto out;
 	}
 
@@ -2028,9 +2135,10 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 		goto out;
 	}
 
-	printf("selftest remote map ok export_len=%" PRIu64 " fd=%d inject_addr=0x%" PRIx64 "\n",
+	printf("selftest remote map ok export_len=%" PRIu64 " fd=%d inject_addr=0x%" PRIx64 " stealth_len=%" PRIu64 "\n",
 	       (uint64_t)reply.mapped_length, reply.map_fd,
-	       (uint64_t)inject_reply.remote_addr);
+	       (uint64_t)inject_reply.remote_addr,
+	       (uint64_t)stealth_reply.mapped_length);
 	ret = 0;
 
 out:
@@ -2050,6 +2158,8 @@ out:
 		munmap(local_map, info->page_size);
 	if (local_fd >= 0)
 		close(local_fd);
+	if (stealth_view != MAP_FAILED)
+		munmap(stealth_view, test_len);
 	if (view != MAP_FAILED)
 		munmap(view, reply.mapped_length);
 	if (reply.map_fd >= 0)
