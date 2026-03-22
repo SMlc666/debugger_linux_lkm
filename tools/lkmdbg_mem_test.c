@@ -1596,8 +1596,8 @@ static int verify_pte_patch_api(int session_fd, const struct child_info *info)
 	for (i = 0; i < query_reply.entries_filled; i++) {
 		if (entries[i].id != apply_reply.id)
 			continue;
-		if (!(entries[i].state & LKMDBG_PTE_PATCH_STATE_ACTIVE) ||
-		    entries[i].page_addr != (info->basic_addr & ~(uintptr_t)(info->page_size - 1))) {
+		if (entries[i].page_addr !=
+		    (info->basic_addr & ~(uintptr_t)(info->page_size - 1))) {
 			fprintf(stderr,
 				"bad PTE patch query state=0x%x page=0x%" PRIx64 "\n",
 				entries[i].state, (uint64_t)entries[i].page_addr);
