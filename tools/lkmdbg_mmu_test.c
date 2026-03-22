@@ -923,6 +923,23 @@ static int validate_external_hwpoint_state(int session_fd, uint64_t id,
 	return 0;
 }
 
+static int query_external_hwpoint_state(int session_fd, uint64_t id,
+					const char *label, uint32_t *state_out)
+{
+	struct lkmdbg_hwpoint_entry entry;
+
+	if (query_hwpoint_entry(session_fd, id, &entry) < 0)
+		return -1;
+	if (entry.state & LKMDBG_HWPOINT_STATE_LOST) {
+		fprintf(stderr, "%s lost hwpoint state=0x%x\n", label,
+			entry.state);
+		return -1;
+	}
+	if (state_out)
+		*state_out = entry.state;
+	return 0;
+}
+
 static int run_external_op(int session_fd, int cmd_fd, int reply_fd, pid_t pid,
 			   const struct child_info *info,
 			   enum external_op_kind kind, int *resident_out,
@@ -1480,10 +1497,13 @@ static int test_external_ops_repeat(int session_fd, int cmd_fd, int reply_fd,
 	struct lkmdbg_hwpoint_request req;
 	unsigned int active_count = 0;
 	unsigned int mutated_count = 0;
+	unsigned int idle_count = 0;
 	unsigned int round;
 	unsigned int op_index;
 	int first_mutated_round = -1;
+	int first_idle_round = -1;
 	const char *first_mutated_op = NULL;
+	const char *first_idle_op = NULL;
 	uint32_t state = 0;
 
 	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
@@ -1505,10 +1525,10 @@ static int test_external_ops_repeat(int session_fd, int cmd_fd, int reply_fd,
 					round + 1, external_op_name(ops[op_index]));
 				goto fail;
 			}
-			if (validate_external_hwpoint_state(session_fd, req.id,
-						    external_op_name(
-							    ops[op_index]),
-						    &state) < 0)
+			if (query_external_hwpoint_state(session_fd, req.id,
+							 external_op_name(
+								 ops[op_index]),
+							 &state) < 0)
 				goto fail;
 			if (state & LKMDBG_HWPOINT_STATE_ACTIVE)
 				active_count++;
@@ -1520,16 +1540,26 @@ static int test_external_ops_repeat(int session_fd, int cmd_fd, int reply_fd,
 						external_op_name(ops[op_index]);
 				}
 			}
+			if (state == 0) {
+				idle_count++;
+				if (first_idle_round < 0) {
+					first_idle_round = (int)round + 1;
+					first_idle_op =
+						external_op_name(ops[op_index]);
+				}
+			}
 		}
 	}
 
 	if (remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
-	printf("mmu test: external repeat ok rounds=%u active_checks=%u mutated_checks=%u first_mutated_round=%d first_mutated_op=%s final_state=0x%x\n",
-	       EXTERNAL_REPEAT_ROUNDS, active_count, mutated_count,
+	printf("mmu test: external repeat ok rounds=%u active_checks=%u mutated_checks=%u idle_checks=%u first_mutated_round=%d first_mutated_op=%s first_idle_round=%d first_idle_op=%s final_state=0x%x\n",
+	       EXTERNAL_REPEAT_ROUNDS, active_count, mutated_count, idle_count,
 	       first_mutated_round,
-	       first_mutated_op ? first_mutated_op : "none", state);
+	       first_mutated_op ? first_mutated_op : "none",
+	       first_idle_round, first_idle_op ? first_idle_op : "none",
+	       state);
 	return 0;
 
 fail:
