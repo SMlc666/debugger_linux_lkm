@@ -599,6 +599,8 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_create_remote_map(session, argp);
 	case LKMDBG_IOC_REMOVE_REMOTE_MAP:
 		return lkmdbg_remove_remote_map(session, argp);
+	case LKMDBG_IOC_QUERY_REMOTE_MAPS:
+		return lkmdbg_query_remote_maps(session, argp);
 	case LKMDBG_IOC_APPLY_PTE_PATCH:
 		return lkmdbg_apply_pte_patch(session, argp);
 	case LKMDBG_IOC_REMOVE_PTE_PATCH:

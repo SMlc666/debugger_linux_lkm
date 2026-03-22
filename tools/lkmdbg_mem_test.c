@@ -37,6 +37,7 @@
 #define THREAD_QUERY_BATCH 64
 #define PAGE_QUERY_BATCH 64
 #define PTE_PATCH_QUERY_BATCH 64
+#define REMOTE_MAP_QUERY_BATCH 16
 #define EVENT_READ_BATCH 16
 
 struct child_info {
@@ -107,6 +108,10 @@ struct page_query_buffer {
 
 struct pte_patch_query_buffer {
 	struct lkmdbg_pte_patch_entry *entries;
+};
+
+struct remote_map_query_buffer {
+	struct lkmdbg_remote_map_entry *entries;
 };
 
 enum {
@@ -823,6 +828,29 @@ static int remove_remote_map(int session_fd, uint64_t map_id,
 
 	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_REMOTE_MAP, &req) < 0) {
 		fprintf(stderr, "REMOVE_REMOTE_MAP failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int query_remote_maps(int session_fd, uint64_t start_id,
+			     struct remote_map_query_buffer *buf,
+			     struct lkmdbg_remote_map_query_request *reply_out)
+{
+	struct lkmdbg_remote_map_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)buf->entries,
+		.max_entries = REMOTE_MAP_QUERY_BATCH,
+		.start_id = start_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_REMOTE_MAPS, &req) < 0) {
+		fprintf(stderr, "QUERY_REMOTE_MAPS failed: %s\n",
 			strerror(errno));
 		return -1;
 	}
@@ -1908,12 +1936,14 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	struct lkmdbg_remote_map_request inject_reply;
 	struct lkmdbg_remote_map_request stealth_reply;
 	struct lkmdbg_remote_map_handle_request remove_reply;
+	struct lkmdbg_remote_map_query_request query_reply;
 	unsigned char *view = MAP_FAILED;
 	unsigned char *ro_view = MAP_FAILED;
 	unsigned char *local_map = MAP_FAILED;
 	unsigned char *stealth_view = MAP_FAILED;
 	unsigned char *verify_buf = NULL;
 	unsigned char *expected_buf = NULL;
+	struct remote_map_query_buffer query_buf = { 0 };
 	struct remote_map_wake_ctx wake_ctx;
 	pthread_t wake_thread;
 	char maps_before[512];
@@ -1937,6 +1967,14 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	memset(&stealth_reply, 0, sizeof(stealth_reply));
 	stealth_reply.map_fd = -1;
 	memset(&remove_reply, 0, sizeof(remove_reply));
+	memset(&query_reply, 0, sizeof(query_reply));
+
+	query_buf.entries =
+		calloc(REMOTE_MAP_QUERY_BATCH, sizeof(*query_buf.entries));
+	if (!query_buf.entries) {
+		fprintf(stderr, "remote map query allocation failed\n");
+		goto out;
+	}
 
 	test_len = info->page_size * 2U;
 	if (test_len > info->large_len)
@@ -2070,6 +2108,27 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 		goto out;
 	}
 
+	if (query_remote_maps(session_fd, 0, &query_buf, &query_reply) < 0)
+		goto out;
+	if (query_reply.entries_filled != 1 || !query_reply.done ||
+	    query_reply.next_id != stealth_reply.map_id ||
+	    query_buf.entries[0].map_id != stealth_reply.map_id ||
+	    query_buf.entries[0].local_addr != (uintptr_t)stealth_view ||
+	    query_buf.entries[0].remote_addr != info->large_addr ||
+	    query_buf.entries[0].mapped_length != stealth_reply.mapped_length ||
+	    query_buf.entries[0].prot != (LKMDBG_REMOTE_MAP_PROT_READ |
+					  LKMDBG_REMOTE_MAP_PROT_WRITE) ||
+	    query_buf.entries[0].flags != LKMDBG_REMOTE_MAP_FLAG_STEALTH_LOCAL) {
+		fprintf(stderr,
+			"stealth remote map query mismatch filled=%u done=%u next=%" PRIu64 " entry_id=%" PRIu64 "\n",
+			query_reply.entries_filled, query_reply.done,
+			(uint64_t)query_reply.next_id,
+			query_reply.entries_filled ?
+				(uint64_t)query_buf.entries[0].map_id :
+				(uint64_t)0);
+		goto out;
+	}
+
 	if (stealth_restore_needed) {
 		size_t i;
 
@@ -2122,6 +2181,18 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	if (stealth_view[0] != 0x3C || stealth_view[test_len - 1] != 0x3C) {
 		fprintf(stderr,
 			"stealth remote map local view did not restore baseline bytes\n");
+		goto out;
+	}
+	memset(query_buf.entries, 0,
+	       REMOTE_MAP_QUERY_BATCH * sizeof(*query_buf.entries));
+	if (query_remote_maps(session_fd, 0, &query_buf, &query_reply) < 0)
+		goto out;
+	if (query_reply.entries_filled != 0 || !query_reply.done ||
+	    query_reply.next_id != 0) {
+		fprintf(stderr,
+			"stealth remote map query not empty after remove filled=%u done=%u next=%" PRIu64 "\n",
+			query_reply.entries_filled, query_reply.done,
+			(uint64_t)query_reply.next_id);
 		goto out;
 	}
 
@@ -2268,6 +2339,7 @@ out:
 		munmap(view, reply.mapped_length);
 	if (reply.map_fd >= 0)
 		close(reply.map_fd);
+	free(query_buf.entries);
 	free(expected_buf);
 	free(verify_buf);
 	return ret;

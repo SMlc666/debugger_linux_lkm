@@ -274,6 +274,7 @@ long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_image_query(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_remove_remote_map(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_query_remote_maps(struct lkmdbg_session *session, void __user *argp);
 void lkmdbg_remote_map_release_session(struct lkmdbg_session *session);
 long lkmdbg_apply_pte_patch(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_remove_pte_patch(struct lkmdbg_session *session, void __user *argp);

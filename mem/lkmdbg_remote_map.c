@@ -567,6 +567,32 @@ static int lkmdbg_remote_map_remove_locked(
 	return -ENOENT;
 }
 
+static int lkmdbg_validate_remote_map_query(
+	const struct lkmdbg_remote_map_query_request *req)
+{
+	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
+		return -EINVAL;
+	if (!req->max_entries || !req->entries_addr)
+		return -EINVAL;
+	if (req->flags)
+		return -EINVAL;
+
+	return 0;
+}
+
+static void lkmdbg_remote_map_fill_entry(
+	struct lkmdbg_remote_map_entry *entry,
+	const struct lkmdbg_remote_stealth_map *map)
+{
+	memset(entry, 0, sizeof(*entry));
+	entry->map_id = map->map_id;
+	entry->remote_addr = map->remote_addr;
+	entry->local_addr = map->local_addr;
+	entry->mapped_length = map->mapped_length;
+	entry->prot = map->prot;
+	entry->flags = LKMDBG_REMOTE_MAP_FLAG_STEALTH_LOCAL;
+}
+
 static int lkmdbg_remote_map_get_mm_by_tgid(pid_t tgid, struct mm_struct **mm_out)
 {
 	struct task_struct *task;
@@ -1174,6 +1200,61 @@ long lkmdbg_remove_remote_map(struct lkmdbg_session *session, void __user *argp)
 
 	lkmdbg_remote_map_fill_handle(map, &req);
 	lkmdbg_remote_map_restore_stealth(map);
+
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
+}
+
+long lkmdbg_query_remote_maps(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_remote_map_query_request req;
+	struct lkmdbg_remote_map_entry *entries;
+	struct lkmdbg_remote_stealth_map *map;
+	u32 filled = 0;
+	bool started;
+	int ret;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	ret = lkmdbg_validate_remote_map_query(&req);
+	if (ret)
+		return ret;
+
+	entries = kcalloc(req.max_entries, sizeof(*entries), GFP_KERNEL);
+	if (!entries)
+		return -ENOMEM;
+
+	started = req.start_id == 0;
+	req.done = 1;
+	req.next_id = req.start_id;
+	mutex_lock(&session->lock);
+	list_for_each_entry(map, &session->remote_maps, node) {
+		if (!started) {
+			if (map->map_id <= req.start_id)
+				continue;
+			started = true;
+		}
+		if (filled == req.max_entries) {
+			req.done = 0;
+			break;
+		}
+
+		lkmdbg_remote_map_fill_entry(&entries[filled], map);
+		req.next_id = map->map_id;
+		filled++;
+	}
+	req.entries_filled = filled;
+	mutex_unlock(&session->lock);
+
+	if (copy_to_user((void __user *)(uintptr_t)req.entries_addr, entries,
+			 filled * sizeof(*entries))) {
+		kfree(entries);
+		return -EFAULT;
+	}
+	kfree(entries);
 
 	if (copy_to_user(argp, &req, sizeof(req)))
 		return -EFAULT;

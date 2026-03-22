@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 12
+#define LKMDBG_PROTO_VERSION 13
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -532,6 +532,27 @@ struct lkmdbg_remote_map_handle_request {
 	__u32 flags;
 };
 
+struct lkmdbg_remote_map_entry {
+	__u64 map_id;
+	__u64 remote_addr;
+	__u64 local_addr;
+	__u64 mapped_length;
+	__u32 prot;
+	__u32 flags;
+};
+
+struct lkmdbg_remote_map_query_request {
+	__u32 version;
+	__u32 size;
+	__u64 entries_addr;
+	__u32 max_entries;
+	__u32 flags;
+	__u64 start_id;
+	__u32 entries_filled;
+	__u32 done;
+	__u64 next_id;
+};
+
 struct lkmdbg_event_record {
 	__u32 version;
 	__u32 type;
@@ -602,5 +623,7 @@ struct lkmdbg_event_record {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x27, struct lkmdbg_phys_request)
 #define LKMDBG_IOC_REMOVE_REMOTE_MAP \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x28, struct lkmdbg_remote_map_handle_request)
+#define LKMDBG_IOC_QUERY_REMOTE_MAPS \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x29, struct lkmdbg_remote_map_query_request)
 
 #endif
