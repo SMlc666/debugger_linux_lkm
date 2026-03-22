@@ -15,6 +15,7 @@
 #include <linux/string.h>
 #include <linux/tracepoint.h>
 #include <linux/uaccess.h>
+#include <linux/uio.h>
 
 #ifdef CONFIG_ARM64
 #include <asm/esr.h>
@@ -54,6 +55,7 @@ struct lkmdbg_hwpoint {
 	atomic64_t hits;
 	refcount_t refs;
 	bool armed;
+	bool mmu_disturbed;
 	bool rearm_step_armed;
 	atomic_t stop_latched;
 };
@@ -102,6 +104,28 @@ static int (*lkmdbg_do_page_fault_orig)(unsigned long far, unsigned long esr,
 					struct pt_regs *regs);
 static atomic_t lkmdbg_do_page_fault_inflight = ATOMIC_INIT(0);
 static DECLARE_WAIT_QUEUE_HEAD(lkmdbg_do_page_fault_waitq);
+static struct lkmdbg_inline_hook *lkmdbg_process_vm_write_hook;
+static struct lkmdbg_hook_registry_entry *lkmdbg_process_vm_write_registry;
+static ssize_t (*lkmdbg_process_vm_rw_orig)(pid_t pid,
+					    const struct iovec __user *lvec,
+					    unsigned long liovcnt,
+					    const struct iovec __user *rvec,
+					    unsigned long riovcnt,
+					    unsigned long flags,
+					    int vm_write);
+static ssize_t (*lkmdbg_do_sys_process_vm_writev_orig)(
+	pid_t pid, const struct iovec __user *lvec, unsigned long liovcnt,
+	const struct iovec __user *rvec, unsigned long riovcnt,
+	unsigned long flags);
+static atomic_t lkmdbg_process_vm_write_inflight = ATOMIC_INIT(0);
+static DECLARE_WAIT_QUEUE_HEAD(lkmdbg_process_vm_write_waitq);
+enum lkmdbg_process_vm_write_hook_kind {
+	LKMDBG_PROCESS_VM_WRITE_HOOK_NONE = 0,
+	LKMDBG_PROCESS_VM_WRITE_HOOK_PROCESS_VM_RW,
+	LKMDBG_PROCESS_VM_WRITE_HOOK_DO_SYS,
+};
+static enum lkmdbg_process_vm_write_hook_kind
+	lkmdbg_process_vm_write_hook_kind;
 #endif
 
 #ifdef CONFIG_ARM64
@@ -676,6 +700,14 @@ static void lkmdbg_mmu_mark_state(struct lkmdbg_hwpoint *entry, u32 set_bits,
 	WRITE_ONCE(entry->mmu_state, state);
 }
 
+static void lkmdbg_mmu_mark_disturbed(struct lkmdbg_hwpoint *entry)
+{
+	if (!entry)
+		return;
+
+	WRITE_ONCE(entry->mmu_disturbed, true);
+}
+
 static struct mm_struct *lkmdbg_mmu_get_mm_by_tgid(pid_t tgid)
 {
 	struct task_struct *task;
@@ -710,18 +742,20 @@ static int lkmdbg_mmu_refresh_entry_state(struct lkmdbg_hwpoint *entry)
 
 	ret = lkmdbg_mmu_capture_pte(mm, entry->page_addr, &current_pte,
 				     &vm_flags);
-	mmput(mm);
 	if (ret) {
 		entry->armed = false;
 		lkmdbg_mmu_mark_state(entry, LKMDBG_HWPOINT_STATE_LOST,
 				      LKMDBG_HWPOINT_STATE_MUTATED);
+		mmput(mm);
 		return ret;
 	}
 
 	if (vm_flags != entry->mmu_baseline_vm_flags) {
 		entry->armed = false;
+		lkmdbg_mmu_mark_disturbed(entry);
 		lkmdbg_mmu_mark_state(entry, LKMDBG_HWPOINT_STATE_MUTATED,
 				      LKMDBG_HWPOINT_STATE_LOST);
+		mmput(mm);
 		return -ESTALE;
 	}
 
@@ -729,26 +763,52 @@ static int lkmdbg_mmu_refresh_entry_state(struct lkmdbg_hwpoint *entry)
 		if (!lkmdbg_mmu_pte_equivalent(current_pte,
 					       __pte(entry->mmu_expected_pte))) {
 			entry->armed = false;
+			lkmdbg_mmu_mark_disturbed(entry);
+			if (!atomic_read(&entry->stop_latched) &&
+			    lkmdbg_mmu_pte_equivalent(
+				    current_pte,
+				    __pte(entry->mmu_baseline_pte)) &&
+			    !lkmdbg_mmu_apply_trap(mm, entry)) {
+				entry->armed = true;
+				lkmdbg_mmu_mark_state(entry, 0,
+						      LKMDBG_HWPOINT_STATE_LOST);
+				mmput(mm);
+				return 0;
+			}
 			lkmdbg_mmu_mark_state(entry, LKMDBG_HWPOINT_STATE_MUTATED,
 					      LKMDBG_HWPOINT_STATE_LOST);
+			mmput(mm);
 			return -ESTALE;
 		}
 		lkmdbg_mmu_mark_state(entry, 0,
 				      LKMDBG_HWPOINT_STATE_LOST |
 					      LKMDBG_HWPOINT_STATE_MUTATED);
+		mmput(mm);
 		return 0;
 	}
 
 	if (!lkmdbg_mmu_pte_equivalent(current_pte,
 				       __pte(entry->mmu_baseline_pte))) {
+		lkmdbg_mmu_mark_disturbed(entry);
 		lkmdbg_mmu_mark_state(entry, LKMDBG_HWPOINT_STATE_MUTATED,
 				      LKMDBG_HWPOINT_STATE_LOST);
+		mmput(mm);
 		return -ESTALE;
+	}
+
+	if (READ_ONCE(entry->mmu_disturbed) &&
+	    !atomic_read(&entry->stop_latched) &&
+	    !lkmdbg_mmu_apply_trap(mm, entry)) {
+		entry->armed = true;
+		lkmdbg_mmu_mark_state(entry, 0, LKMDBG_HWPOINT_STATE_LOST);
+		mmput(mm);
+		return 0;
 	}
 
 	lkmdbg_mmu_mark_state(entry, 0,
 			      LKMDBG_HWPOINT_STATE_LOST |
 				      LKMDBG_HWPOINT_STATE_MUTATED);
+	mmput(mm);
 	return 0;
 }
 
@@ -784,6 +844,188 @@ static int lkmdbg_mmu_install_page_fault_hook(void)
 						orig_fn, 0);
 	pr_info("lkmdbg: runtime hook active target=do_page_fault origin=%px trampoline=%px\n",
 		target, orig_fn);
+	return 0;
+}
+
+static bool lkmdbg_mmu_iov_overlaps_page(const struct iovec __user *rvec,
+					 unsigned long riovcnt,
+					 ssize_t bytes_done,
+					 unsigned long page_addr)
+{
+	ssize_t remaining = bytes_done;
+	unsigned long i;
+	u64 page_end = (u64)page_addr + PAGE_SIZE;
+
+	for (i = 0; i < riovcnt && remaining > 0; i++) {
+		struct iovec iov;
+		u64 start;
+		u64 len;
+		u64 end;
+
+		if (copy_from_user(&iov, &rvec[i], sizeof(iov)))
+			return false;
+		if (!iov.iov_len)
+			continue;
+
+		start = (u64)(unsigned long)iov.iov_base;
+		len = min_t(u64, (u64)iov.iov_len, (u64)remaining);
+		end = start + len;
+		if (end < start)
+			end = ~0ULL;
+		if (start < page_end && end > (u64)page_addr)
+			return true;
+
+		remaining -= (ssize_t)len;
+	}
+
+	return false;
+}
+
+static size_t lkmdbg_mmu_collect_tgid_entries(
+	pid_t tgid, struct lkmdbg_hwpoint **entries, size_t max_entries)
+{
+	struct lkmdbg_hwpoint *entry;
+	unsigned long irqflags;
+	size_t count = 0;
+
+	spin_lock_irqsave(&lkmdbg_mmu_hwpoint_lock, irqflags);
+	list_for_each_entry(entry, &lkmdbg_mmu_hwpoint_list, mmu_node) {
+		if (entry->tgid != tgid)
+			continue;
+		if (count == max_entries)
+			break;
+		lkmdbg_hwpoint_get(entry);
+		entries[count++] = entry;
+	}
+	spin_unlock_irqrestore(&lkmdbg_mmu_hwpoint_lock, irqflags);
+
+	return count;
+}
+
+static void lkmdbg_mmu_recover_after_process_vm_write(
+	pid_t tgid, const struct iovec __user *rvec, unsigned long riovcnt,
+	ssize_t bytes_done)
+{
+	struct lkmdbg_hwpoint *entries[LKMDBG_HWPOINT_MAX_ENTRIES];
+	size_t count;
+	size_t i;
+
+	if (bytes_done <= 0 || !rvec || !riovcnt)
+		return;
+
+	count = lkmdbg_mmu_collect_tgid_entries(tgid, entries,
+						ARRAY_SIZE(entries));
+	for (i = 0; i < count; i++) {
+		struct lkmdbg_hwpoint *entry = entries[i];
+
+		if (!lkmdbg_mmu_iov_overlaps_page(rvec, riovcnt, bytes_done,
+						  entry->page_addr)) {
+			lkmdbg_hwpoint_put(entry);
+			continue;
+		}
+
+		lkmdbg_mmu_mark_disturbed(entry);
+		lkmdbg_mmu_refresh_entry_state(entry);
+		lkmdbg_hwpoint_put(entry);
+	}
+}
+
+static ssize_t lkmdbg_process_vm_rw_replacement(pid_t pid,
+						const struct iovec __user *lvec,
+						unsigned long liovcnt,
+						const struct iovec __user *rvec,
+						unsigned long riovcnt,
+						unsigned long flags, int vm_write)
+{
+	ssize_t ret;
+
+	atomic_inc(&lkmdbg_process_vm_write_inflight);
+	ret = lkmdbg_process_vm_rw_orig ?
+		      lkmdbg_process_vm_rw_orig(pid, lvec, liovcnt, rvec,
+						riovcnt, flags, vm_write) :
+		      -ENOENT;
+	if (vm_write && ret > 0)
+		lkmdbg_mmu_recover_after_process_vm_write(pid, rvec, riovcnt,
+							  ret);
+	if (atomic_dec_and_test(&lkmdbg_process_vm_write_inflight))
+		wake_up_all(&lkmdbg_process_vm_write_waitq);
+	return ret;
+}
+
+static ssize_t lkmdbg_do_sys_process_vm_writev_replacement(
+	pid_t pid, const struct iovec __user *lvec, unsigned long liovcnt,
+	const struct iovec __user *rvec, unsigned long riovcnt,
+	unsigned long flags)
+{
+	ssize_t ret;
+
+	atomic_inc(&lkmdbg_process_vm_write_inflight);
+	ret = lkmdbg_do_sys_process_vm_writev_orig ?
+		      lkmdbg_do_sys_process_vm_writev_orig(pid, lvec, liovcnt,
+							   rvec, riovcnt,
+							   flags) :
+		      -ENOENT;
+	if (ret > 0)
+		lkmdbg_mmu_recover_after_process_vm_write(pid, rvec, riovcnt,
+							  ret);
+	if (atomic_dec_and_test(&lkmdbg_process_vm_write_inflight))
+		wake_up_all(&lkmdbg_process_vm_write_waitq);
+	return ret;
+}
+
+static int lkmdbg_mmu_install_process_vm_write_hook(void)
+{
+	void *target;
+	void *orig_fn = NULL;
+	void *replacement;
+	const char *name;
+	int ret;
+
+	if (lkmdbg_process_vm_write_hook)
+		return 0;
+
+	if (lkmdbg_symbols.process_vm_rw_sym) {
+		target = (void *)lkmdbg_symbols.process_vm_rw_sym;
+		replacement = lkmdbg_process_vm_rw_replacement;
+		name = "process_vm_rw";
+		lkmdbg_process_vm_write_hook_kind =
+			LKMDBG_PROCESS_VM_WRITE_HOOK_PROCESS_VM_RW;
+	} else if (lkmdbg_symbols.do_sys_process_vm_writev_sym) {
+		target = (void *)lkmdbg_symbols.do_sys_process_vm_writev_sym;
+		replacement = lkmdbg_do_sys_process_vm_writev_replacement;
+		name = "__do_sys_process_vm_writev";
+		lkmdbg_process_vm_write_hook_kind =
+			LKMDBG_PROCESS_VM_WRITE_HOOK_DO_SYS;
+	} else {
+		return -ENOENT;
+	}
+
+	lkmdbg_process_vm_write_registry =
+		lkmdbg_hook_registry_register(name, target, replacement);
+	if (!lkmdbg_process_vm_write_registry)
+		return -ENOMEM;
+
+	ret = lkmdbg_hook_install(target, replacement,
+				  &lkmdbg_process_vm_write_hook, &orig_fn);
+	if (ret) {
+		lkmdbg_hook_registry_unregister(lkmdbg_process_vm_write_registry,
+						ret);
+		lkmdbg_process_vm_write_registry = NULL;
+		lkmdbg_process_vm_write_hook_kind =
+			LKMDBG_PROCESS_VM_WRITE_HOOK_NONE;
+		return ret;
+	}
+
+	if (lkmdbg_process_vm_write_hook_kind ==
+	    LKMDBG_PROCESS_VM_WRITE_HOOK_PROCESS_VM_RW)
+		lkmdbg_process_vm_rw_orig = orig_fn;
+	else
+		lkmdbg_do_sys_process_vm_writev_orig = orig_fn;
+
+	lkmdbg_hook_registry_mark_installed(lkmdbg_process_vm_write_registry,
+					    target, orig_fn, 0);
+	pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
+		name, orig_fn, target);
 	return 0;
 }
 
@@ -836,8 +1078,11 @@ static void lkmdbg_hwpoint_fill_entry(struct lkmdbg_hwpoint_entry *dst,
 	dst->state = src->armed ? LKMDBG_HWPOINT_STATE_ACTIVE : 0;
 	if (atomic_read(&src->stop_latched))
 		dst->state |= LKMDBG_HWPOINT_STATE_LATCHED;
-	if (lkmdbg_hwpoint_is_mmu(src))
+	if (lkmdbg_hwpoint_is_mmu(src)) {
 		dst->state |= READ_ONCE(src->mmu_state);
+		if (READ_ONCE(src->mmu_disturbed))
+			dst->state |= LKMDBG_HWPOINT_STATE_MUTATED;
+	}
 }
 
 static void lkmdbg_hwpoint_disable_stop_mode(struct lkmdbg_hwpoint *entry)
@@ -873,6 +1118,10 @@ static int lkmdbg_register_mmu_hwpoint(struct lkmdbg_session *session,
 	if (ret)
 		return ret;
 
+	ret = lkmdbg_mmu_install_process_vm_write_hook();
+	if (ret && ret != -ENOENT)
+		return ret;
+
 	ret = lkmdbg_get_target_thread(session, req->tid, &task);
 	if (ret)
 		return ret;
@@ -902,6 +1151,7 @@ static int lkmdbg_register_mmu_hwpoint(struct lkmdbg_session *session,
 	entry->mmu_baseline_pte = 0;
 	entry->mmu_expected_pte = 0;
 	entry->mmu_baseline_vm_flags = 0;
+	entry->mmu_disturbed = false;
 	atomic64_set(&entry->hits, 0);
 	refcount_set(&entry->refs, 1);
 	atomic_set(&entry->stop_latched, 0);
@@ -1663,6 +1913,26 @@ void lkmdbg_thread_ctrl_exit(void)
 		lkmdbg_do_page_fault_registry = NULL;
 	}
 	lkmdbg_do_page_fault_orig = NULL;
+
+	if (lkmdbg_process_vm_write_hook) {
+		if (!lkmdbg_hook_deactivate(lkmdbg_process_vm_write_hook))
+			wait_event_timeout(
+				lkmdbg_process_vm_write_waitq,
+				atomic_read(&lkmdbg_process_vm_write_inflight) ==
+					0,
+				msecs_to_jiffies(1000));
+		lkmdbg_hook_destroy(lkmdbg_process_vm_write_hook);
+		lkmdbg_process_vm_write_hook = NULL;
+	}
+	if (lkmdbg_process_vm_write_registry) {
+		lkmdbg_hook_registry_unregister(
+			lkmdbg_process_vm_write_registry, 0);
+		lkmdbg_process_vm_write_registry = NULL;
+	}
+	lkmdbg_process_vm_rw_orig = NULL;
+	lkmdbg_do_sys_process_vm_writev_orig = NULL;
+	lkmdbg_process_vm_write_hook_kind =
+		LKMDBG_PROCESS_VM_WRITE_HOOK_NONE;
 #endif
 }
 

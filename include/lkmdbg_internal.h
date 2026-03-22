@@ -111,6 +111,8 @@ struct lkmdbg_symbols {
 	unsigned long tracepoint_probe_unregister_sym;
 	unsigned long perf_event_disable_local_sym;
 	unsigned long do_page_fault_sym;
+	unsigned long process_vm_rw_sym;
+	unsigned long do_sys_process_vm_writev_sym;
 };
 
 int lkmdbg_disable_kprobe_blacklist(void);
