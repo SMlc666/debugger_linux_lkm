@@ -64,6 +64,9 @@ struct child_info {
 struct child_cmd {
 	uint32_t op;
 	uint32_t reserved;
+	uint64_t addr;
+	uint32_t length;
+	uint32_t value;
 };
 
 struct worker_ctx {
@@ -109,11 +112,17 @@ enum {
 	CHILD_OP_TRIGGER_SIGNAL = 5,
 	CHILD_OP_SPAWN_THREAD = 6,
 	CHILD_OP_TRIGGER_WATCH_MMU = 7,
+	CHILD_OP_READ_REMOTE = 8,
+	CHILD_OP_FILL_REMOTE = 9,
 };
 
 static int get_stop_state(int session_fd,
 			  struct lkmdbg_stop_query_request *reply_out);
 static int child_query_nofault_residency(int cmd_fd, int resp_fd);
+static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
+				   void *buf, size_t len);
+static int child_fill_remote_range(int cmd_fd, uintptr_t addr, size_t len,
+				   uint8_t value);
 
 static int open_session_fd(void)
 {
@@ -1560,26 +1569,22 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	}
 
 	memset(verify_buf, 0, info->page_size);
-	if (read_target_memory(session_fd, inject_reply.remote_addr, verify_buf,
-			       info->page_size, &bytes_done, 0) < 0 ||
-	    bytes_done != info->page_size ||
+	if (child_read_remote_range(cmd_fd, resp_fd,
+				    (uintptr_t)inject_reply.remote_addr,
+				    verify_buf, info->page_size) < 0 ||
 	    memcmp(verify_buf, local_map, info->page_size) != 0) {
-		fprintf(stderr,
-			"remote inject readback mismatch bytes_done=%u\n",
-			bytes_done);
+		fprintf(stderr, "remote inject child readback mismatch\n");
 		goto out;
 	}
 
-	fill_pattern(expected_buf, 64, 47);
-	if (write_target_memory(session_fd, inject_reply.remote_addr + 64,
-				expected_buf, 64, &bytes_done, 0) < 0 ||
-	    bytes_done != 64) {
-		fprintf(stderr,
-			"remote inject write-through failed bytes_done=%u\n",
-			bytes_done);
+	if (child_fill_remote_range(cmd_fd,
+				    (uintptr_t)inject_reply.remote_addr + 64,
+				    64, 0xA5) < 0) {
+		fprintf(stderr, "remote inject child write-through failed\n");
 		goto out;
 	}
 
+	memset(expected_buf, 0xA5, 64);
 	if (memcmp(local_map + 64, expected_buf, 64) != 0) {
 		fprintf(stderr, "remote inject local page did not reflect target write\n");
 		goto out;
@@ -2063,6 +2068,21 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 			if (kill(getpid(), SIGUSR1) < 0)
 				return 2;
 			break;
+		case CHILD_OP_READ_REMOTE:
+			if (!cmd.addr || !cmd.length ||
+			    cmd.length > SELFTEST_LARGE_MAP_LEN)
+				return 2;
+			if (write_full(resp_fd, (void *)(uintptr_t)cmd.addr,
+				       cmd.length) != (ssize_t)cmd.length)
+				return 2;
+			break;
+		case CHILD_OP_FILL_REMOTE:
+			if (!cmd.addr || !cmd.length ||
+			    cmd.length > SELFTEST_LARGE_MAP_LEN)
+				return 2;
+			memset((void *)(uintptr_t)cmd.addr, (int)cmd.value,
+			       cmd.length);
+			break;
 		case CHILD_OP_SPAWN_THREAD:
 		{
 			pthread_t temp_thread;
@@ -2119,6 +2139,52 @@ static int send_child_command(int cmd_fd, uint32_t op)
 
 	if (write_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
 		fprintf(stderr, "failed to send child command op=%u\n", op);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
+				   void *buf, size_t len)
+{
+	struct child_cmd cmd = {
+		.op = CHILD_OP_READ_REMOTE,
+		.addr = addr,
+		.length = (uint32_t)len,
+	};
+
+	if (!buf || !len || len > UINT32_MAX)
+		return -1;
+
+	if (write_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
+		fprintf(stderr, "failed to send child remote read command\n");
+		return -1;
+	}
+
+	if (read_full(resp_fd, buf, len) != (ssize_t)len) {
+		fprintf(stderr, "failed to read child remote read reply\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int child_fill_remote_range(int cmd_fd, uintptr_t addr, size_t len,
+				   uint8_t value)
+{
+	struct child_cmd cmd = {
+		.op = CHILD_OP_FILL_REMOTE,
+		.addr = addr,
+		.length = (uint32_t)len,
+		.value = value,
+	};
+
+	if (!len || len > UINT32_MAX)
+		return -1;
+
+	if (write_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
+		fprintf(stderr, "failed to send child remote fill command\n");
 		return -1;
 	}
 
