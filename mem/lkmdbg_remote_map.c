@@ -8,7 +8,6 @@
 #include <linux/mman.h>
 #include <linux/mmap_lock.h>
 #include <linux/module.h>
-#include <linux/pfn_t.h>
 #include <linux/pid.h>
 #include <linux/refcount.h>
 #include <linux/sched/mm.h>
@@ -75,7 +74,6 @@ struct lkmdbg_remote_map_install {
 
 static void lkmdbg_remote_map_put(struct lkmdbg_remote_map *map);
 static void lkmdbg_remote_map_install_task_work(struct callback_head *work);
-static vm_fault_t lkmdbg_remote_map_vma_fault(struct vm_fault *vmf);
 
 static bool lkmdbg_remote_map_is_local_to_target(const struct lkmdbg_remote_map_request *req)
 {
@@ -417,37 +415,7 @@ static void lkmdbg_remote_map_vma_close(struct vm_area_struct *vma)
 static const struct vm_operations_struct lkmdbg_remote_map_vm_ops = {
 	.open = lkmdbg_remote_map_vma_open,
 	.close = lkmdbg_remote_map_vma_close,
-	.fault = lkmdbg_remote_map_vma_fault,
 };
-
-static vm_fault_t lkmdbg_remote_map_vma_fault(struct vm_fault *vmf)
-{
-	struct vm_area_struct *vma = vmf->vma;
-	struct lkmdbg_remote_map *map = vma->vm_private_data;
-	unsigned long addr;
-	unsigned long page_index;
-	struct page *page;
-
-	if (!map)
-		return VM_FAULT_SIGBUS;
-
-	if (!(map->flags & LKMDBG_REMOTE_MAP_FLAG_LOCAL_TO_TARGET))
-		return VM_FAULT_SIGBUS;
-
-	addr = vmf->address & PAGE_MASK;
-	page_index = vma->vm_pgoff + ((addr - vma->vm_start) >> PAGE_SHIFT);
-	if (page_index >= map->page_count)
-		return VM_FAULT_SIGBUS;
-
-	page = map->pages[page_index];
-	if (!page || !page_count(page))
-		return VM_FAULT_SIGBUS;
-
-	if (map->prot & LKMDBG_REMOTE_MAP_PROT_WRITE)
-		return vmf_insert_mixed_mkwrite(vma, addr, page_to_pfn_t(page));
-
-	return vmf_insert_mixed(vma, addr, page_to_pfn_t(page));
-}
 
 static int lkmdbg_remote_map_mmap(struct file *file, struct vm_area_struct *vma)
 {
@@ -500,28 +468,25 @@ static int lkmdbg_remote_map_mmap(struct file *file, struct vm_area_struct *vma)
 	if (deny_may_flags)
 		lkmdbg_remote_map_vm_flags_clear(vma, deny_may_flags);
 
+	addr = vma->vm_start;
+	for (i = 0; i < map_pages; i++) {
+		if (insert_pages) {
+			ret = vm_insert_page(vma, addr + (i * PAGE_SIZE),
+					     map->pages[offset_pages + i]);
+		} else {
+			ret = remap_pfn_range(
+				vma, addr + (i * PAGE_SIZE),
+				page_to_pfn(map->pages[offset_pages + i]),
+				PAGE_SIZE, vma->vm_page_prot);
+		}
+		if (ret)
+			return ret;
+	}
+
 	vma->vm_ops = &lkmdbg_remote_map_vm_ops;
 	vma->vm_private_data = map;
 	lkmdbg_remote_map_get(map);
-	if (insert_pages)
-		return 0;
-
-	addr = vma->vm_start;
-	for (i = 0; i < map_pages; i++) {
-		ret = remap_pfn_range(vma, addr + (i * PAGE_SIZE),
-				      page_to_pfn(map->pages[offset_pages + i]),
-				      PAGE_SIZE, vma->vm_page_prot);
-		if (ret)
-			goto out_unmap_ref;
-	}
-
 	return 0;
-
-out_unmap_ref:
-	vma->vm_private_data = NULL;
-	vma->vm_ops = NULL;
-	lkmdbg_remote_map_put(map);
-	return ret;
 }
 
 static int lkmdbg_remote_map_release(struct inode *inode, struct file *file)
@@ -660,6 +625,16 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 	if ((u32)pinned != page_count) {
 		ret = -EFAULT;
 		goto out_map;
+	}
+	if (local_to_target) {
+		u32 i;
+
+		for (i = 0; i < page_count; i++) {
+			if (PageAnon(map->pages[i])) {
+				ret = -EOPNOTSUPP;
+				goto out_map;
+			}
+		}
 	}
 
 	req.mapped_length = mapped_length;

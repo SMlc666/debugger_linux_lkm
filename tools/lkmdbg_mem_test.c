@@ -1436,6 +1436,7 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 	pthread_t wake_thread;
 	uint32_t bytes_done = 0;
 	size_t test_len;
+	int local_fd = -1;
 	int ret = -1;
 	int restore_needed = 0;
 	int wake_thread_started = 0;
@@ -1519,8 +1520,21 @@ static int verify_remote_map(int session_fd, const struct child_info *info,
 		goto out;
 	}
 
+	local_fd = memfd_create("lkmdbg-rmap-local",
+				MFD_CLOEXEC | MFD_ALLOW_SEALING |
+					MFD_NOEXEC_SEAL);
+	if (local_fd < 0) {
+		fprintf(stderr, "remote inject memfd_create failed: %s\n",
+			strerror(errno));
+		goto out;
+	}
+	if (ftruncate(local_fd, (off_t)info->page_size) < 0) {
+		fprintf(stderr, "remote inject ftruncate failed: %s\n",
+			strerror(errno));
+		goto out;
+	}
 	local_map = mmap(NULL, info->page_size, PROT_READ | PROT_WRITE,
-			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+			 MAP_SHARED, local_fd, 0);
 	if (local_map == MAP_FAILED) {
 		fprintf(stderr, "remote inject local mmap failed: %s\n",
 			strerror(errno));
@@ -1610,6 +1624,8 @@ out:
 		close(ro_reply.map_fd);
 	if (local_map != MAP_FAILED)
 		munmap(local_map, info->page_size);
+	if (local_fd >= 0)
+		close(local_fd);
 	if (view != MAP_FAILED)
 		munmap(view, reply.mapped_length);
 	if (reply.map_fd >= 0)
