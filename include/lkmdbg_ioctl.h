@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 7
+#define LKMDBG_PROTO_VERSION 8
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -126,6 +126,9 @@
 #define LKMDBG_REMOTE_MAP_PROT_READ 0x00000001U
 #define LKMDBG_REMOTE_MAP_PROT_WRITE 0x00000002U
 #define LKMDBG_REMOTE_MAP_PROT_EXEC 0x00000004U
+
+#define LKMDBG_REMOTE_MAP_FLAG_LOCAL_TO_TARGET 0x00000001U
+#define LKMDBG_REMOTE_MAP_FLAG_FIXED_TARGET 0x00000002U
 
 struct lkmdbg_open_session_request {
 	__u32 version;
@@ -409,12 +412,15 @@ struct lkmdbg_remote_map_request {
 	__u32 version;
 	__u32 size;
 	__u64 remote_addr;
+	__u64 local_addr;
 	__u64 length;
 	__u32 prot;
 	__u32 flags;
+	__u32 timeout_ms;
+	__u32 reserved0;
 	__u64 mapped_length;
 	__s32 map_fd;
-	__u32 reserved0;
+	__u32 reserved1;
 };
 
 struct lkmdbg_event_record {

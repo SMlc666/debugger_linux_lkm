@@ -81,6 +81,12 @@ struct freeze_child_ctx {
 	unsigned int thread_index;
 };
 
+struct remote_map_wake_ctx {
+	int cmd_fd;
+	int resp_fd;
+	int ret;
+};
+
 struct vma_query_buffer {
 	struct lkmdbg_vma_entry *entries;
 	char *names;
@@ -107,6 +113,7 @@ enum {
 
 static int get_stop_state(int session_fd,
 			  struct lkmdbg_stop_query_request *reply_out);
+static int child_query_nofault_residency(int cmd_fd, int resp_fd);
 
 static int open_session_fd(void)
 {
@@ -693,16 +700,19 @@ static int query_target_pages(int session_fd, uint64_t start_addr,
 	return 0;
 }
 
-static int create_remote_map(int session_fd, uintptr_t remote_addr, size_t len,
-			     uint32_t prot,
+static int create_remote_map(int session_fd, uintptr_t remote_addr,
+			     uintptr_t local_addr, size_t len, uint32_t prot,
+			     uint32_t flags,
 			     struct lkmdbg_remote_map_request *reply_out)
 {
 	struct lkmdbg_remote_map_request req = {
 		.version = LKMDBG_PROTO_VERSION,
 		.size = sizeof(req),
 		.remote_addr = remote_addr,
+		.local_addr = local_addr,
 		.length = len,
 		.prot = prot,
+		.flags = flags,
 	};
 
 	if (ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_MAP, &req) < 0) {
@@ -714,6 +724,15 @@ static int create_remote_map(int session_fd, uintptr_t remote_addr, size_t len,
 	if (reply_out)
 		*reply_out = req;
 	return 0;
+}
+
+static void *remote_map_wake_thread_main(void *arg)
+{
+	struct remote_map_wake_ctx *ctx = arg;
+
+	usleep(50000);
+	ctx->ret = child_query_nofault_residency(ctx->cmd_fd, ctx->resp_fd);
+	return NULL;
 }
 
 static unsigned char pattern_byte(size_t index, unsigned int seed)
@@ -1393,31 +1412,40 @@ out:
 	return ret;
 }
 
-static int verify_remote_map(int session_fd, const struct child_info *info)
+static int verify_remote_map(int session_fd, const struct child_info *info,
+			     int cmd_fd, int resp_fd)
 {
 	struct lkmdbg_remote_map_request reply;
 	struct lkmdbg_remote_map_request ro_reply;
+	struct lkmdbg_remote_map_request inject_reply;
 	unsigned char *view = MAP_FAILED;
 	unsigned char *ro_view = MAP_FAILED;
+	unsigned char *local_map = MAP_FAILED;
 	unsigned char *verify_buf = NULL;
 	unsigned char *expected_buf = NULL;
+	struct remote_map_wake_ctx wake_ctx;
+	pthread_t wake_thread;
 	uint32_t bytes_done = 0;
 	size_t test_len;
 	int ret = -1;
 	int restore_needed = 0;
+	int wake_thread_started = 0;
 
 	memset(&reply, 0, sizeof(reply));
 	reply.map_fd = -1;
 	memset(&ro_reply, 0, sizeof(ro_reply));
 	ro_reply.map_fd = -1;
+	memset(&inject_reply, 0, sizeof(inject_reply));
+	inject_reply.map_fd = -1;
 
 	test_len = info->page_size * 2U;
 	if (test_len > info->large_len)
 		test_len = info->large_len;
 
-	if (create_remote_map(session_fd, info->large_addr, test_len,
+	if (create_remote_map(session_fd, info->large_addr, 0, test_len,
 			      LKMDBG_REMOTE_MAP_PROT_READ |
 				      LKMDBG_REMOTE_MAP_PROT_WRITE,
+			      0,
 			      &reply) < 0)
 		return -1;
 
@@ -1460,8 +1488,9 @@ static int verify_remote_map(int session_fd, const struct child_info *info)
 		goto out;
 	}
 
-	if (create_remote_map(session_fd, info->large_addr, test_len,
-			      LKMDBG_REMOTE_MAP_PROT_READ, &ro_reply) < 0)
+	if (create_remote_map(session_fd, info->large_addr, 0, test_len,
+			      LKMDBG_REMOTE_MAP_PROT_READ, 0,
+			      &ro_reply) < 0)
 		goto out;
 
 	ro_view = mmap(NULL, ro_reply.mapped_length, PROT_READ, MAP_SHARED,
@@ -1481,11 +1510,89 @@ static int verify_remote_map(int session_fd, const struct child_info *info)
 		goto out;
 	}
 
-	printf("selftest remote map ok length=%" PRIu64 " fd=%d\n",
-	       (uint64_t)reply.mapped_length, reply.map_fd);
+	local_map = mmap(NULL, info->page_size, PROT_READ | PROT_WRITE,
+			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (local_map == MAP_FAILED) {
+		fprintf(stderr, "remote inject local mmap failed: %s\n",
+			strerror(errno));
+		goto out;
+	}
+	fill_pattern(local_map, info->page_size, 31);
+
+	memset(&wake_ctx, 0, sizeof(wake_ctx));
+	wake_ctx.cmd_fd = cmd_fd;
+	wake_ctx.resp_fd = resp_fd;
+	wake_ctx.ret = -1;
+	if (pthread_create(&wake_thread, NULL, remote_map_wake_thread_main,
+			   &wake_ctx) != 0) {
+		fprintf(stderr, "remote inject wake thread create failed\n");
+		goto out;
+	}
+	wake_thread_started = 1;
+
+	if (create_remote_map(session_fd, 0, (uintptr_t)local_map,
+			      info->page_size,
+			      LKMDBG_REMOTE_MAP_PROT_READ |
+				      LKMDBG_REMOTE_MAP_PROT_WRITE,
+			      LKMDBG_REMOTE_MAP_FLAG_LOCAL_TO_TARGET,
+			      &inject_reply) < 0)
+		goto out;
+
+	if (pthread_join(wake_thread, NULL) != 0) {
+		fprintf(stderr, "remote inject wake thread join failed\n");
+		wake_thread_started = 0;
+		goto out;
+	}
+	wake_thread_started = 0;
+	if (wake_ctx.ret < 0) {
+		fprintf(stderr, "remote inject wake helper failed\n");
+		goto out;
+	}
+
+	if (inject_reply.map_fd != -1 || !inject_reply.remote_addr ||
+	    inject_reply.mapped_length != info->page_size) {
+		fprintf(stderr,
+			"remote inject reply mismatch addr=0x%" PRIx64 " len=%" PRIu64 " fd=%d\n",
+			(uint64_t)inject_reply.remote_addr,
+			(uint64_t)inject_reply.mapped_length,
+			inject_reply.map_fd);
+		goto out;
+	}
+
+	memset(verify_buf, 0, info->page_size);
+	if (read_target_memory(session_fd, inject_reply.remote_addr, verify_buf,
+			       info->page_size, &bytes_done, 0) < 0 ||
+	    bytes_done != info->page_size ||
+	    memcmp(verify_buf, local_map, info->page_size) != 0) {
+		fprintf(stderr,
+			"remote inject readback mismatch bytes_done=%u\n",
+			bytes_done);
+		goto out;
+	}
+
+	fill_pattern(expected_buf, 64, 47);
+	if (write_target_memory(session_fd, inject_reply.remote_addr + 64,
+				expected_buf, 64, &bytes_done, 0) < 0 ||
+	    bytes_done != 64) {
+		fprintf(stderr,
+			"remote inject write-through failed bytes_done=%u\n",
+			bytes_done);
+		goto out;
+	}
+
+	if (memcmp(local_map + 64, expected_buf, 64) != 0) {
+		fprintf(stderr, "remote inject local page did not reflect target write\n");
+		goto out;
+	}
+
+	printf("selftest remote map ok export_len=%" PRIu64 " fd=%d inject_addr=0x%" PRIx64 "\n",
+	       (uint64_t)reply.mapped_length, reply.map_fd,
+	       (uint64_t)inject_reply.remote_addr);
 	ret = 0;
 
 out:
+	if (wake_thread_started)
+		pthread_join(wake_thread, NULL);
 	if (restore_needed && view != MAP_FAILED) {
 		size_t i;
 
@@ -1496,6 +1603,8 @@ out:
 		munmap(ro_view, ro_reply.mapped_length);
 	if (ro_reply.map_fd >= 0)
 		close(ro_reply.map_fd);
+	if (local_map != MAP_FAILED)
+		munmap(local_map, info->page_size);
 	if (view != MAP_FAILED)
 		munmap(view, reply.mapped_length);
 	if (reply.map_fd >= 0)
@@ -3778,7 +3887,7 @@ static int run_selftest(const char *prog)
 
 	printf("selftest force-read and force-write on protected present pages ok\n");
 
-	if (verify_remote_map(session_fd, &info) < 0) {
+	if (verify_remote_map(session_fd, &info, cmd_pipe[1], resp_pipe[0]) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
 		close(cmd_pipe[1]);

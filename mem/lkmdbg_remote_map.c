@@ -1,6 +1,8 @@
 #include <linux/anon_inodes.h>
+#include <linux/completion.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/mman.h>
@@ -10,6 +12,7 @@
 #include <linux/refcount.h>
 #include <linux/sched/mm.h>
 #include <linux/slab.h>
+#include <linux/task_work.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
 
@@ -19,12 +22,27 @@
 #define LKMDBG_REMOTE_MAP_VALID_PROT                                         \
 	(LKMDBG_REMOTE_MAP_PROT_READ | LKMDBG_REMOTE_MAP_PROT_WRITE |        \
 	 LKMDBG_REMOTE_MAP_PROT_EXEC)
+#define LKMDBG_REMOTE_MAP_VALID_FLAGS                                        \
+	(LKMDBG_REMOTE_MAP_FLAG_LOCAL_TO_TARGET |                           \
+	 LKMDBG_REMOTE_MAP_FLAG_FIXED_TARGET)
+#define LKMDBG_REMOTE_MAP_DEFAULT_TIMEOUT_MS 1000U
+#define LKMDBG_TASK_WORK_NOTIFY_RESUME 1U
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
 #define LKMDBG_REMOTE_GUP_HAS_LOCKED_ONLY 1
 #else
 #define LKMDBG_REMOTE_GUP_HAS_LOCKED_ONLY 0
 #endif
+
+typedef int (*lkmdbg_task_work_add_fn)(struct task_struct *task,
+				       struct callback_head *work,
+				       unsigned int notify);
+typedef unsigned long (*lkmdbg_vm_mmap_fn)(struct file *file,
+					   unsigned long addr,
+					   unsigned long len,
+					   unsigned long prot,
+					   unsigned long flag,
+					   unsigned long offset);
 
 struct lkmdbg_remote_map {
 	refcount_t refs;
@@ -38,7 +56,27 @@ struct lkmdbg_remote_map {
 	struct page **pages;
 };
 
+struct lkmdbg_remote_map_install {
+	struct callback_head work;
+	struct completion done;
+	struct task_struct *task;
+	struct file *file;
+	unsigned long addr_hint;
+	unsigned long mapped_length;
+	unsigned long prot;
+	unsigned long flags;
+	long result;
+	bool callback_entered;
+	bool completed;
+};
+
 static void lkmdbg_remote_map_put(struct lkmdbg_remote_map *map);
+static void lkmdbg_remote_map_install_task_work(struct callback_head *work);
+
+static bool lkmdbg_remote_map_is_local_to_target(const struct lkmdbg_remote_map_request *req)
+{
+	return !!(req->flags & LKMDBG_REMOTE_MAP_FLAG_LOCAL_TO_TARGET);
+}
 
 /*
  * Only bookkeeping/policy bits are touched here, so vm_page_prot does not
@@ -67,37 +105,163 @@ static bool lkmdbg_remote_map_req_wants_write(const struct lkmdbg_remote_map_req
 	return !!(req->prot & LKMDBG_REMOTE_MAP_PROT_WRITE);
 }
 
-static int
-lkmdbg_validate_remote_map_req(struct lkmdbg_remote_map_request *req)
+static int lkmdbg_remote_map_validate_addr_range(u64 addr, u64 length,
+						 bool require_nonzero)
 {
+	if ((!addr && require_nonzero) || !length)
+		return -EINVAL;
+
+	if (addr >= (u64)TASK_SIZE_MAX)
+		return -EINVAL;
+
+	if (addr & ~PAGE_MASK)
+		return -EINVAL;
+
+	if (addr + length < addr)
+		return -EINVAL;
+
+	if (addr + length > (u64)TASK_SIZE_MAX)
+		return -EINVAL;
+
+	return 0;
+}
+
+static int lkmdbg_validate_remote_map_req(struct lkmdbg_remote_map_request *req)
+{
+	int ret;
+
 	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
 		return -EINVAL;
 
-	if (!req->remote_addr || !req->length)
-		return -EINVAL;
-
-	if (req->flags)
+	if (req->flags & ~LKMDBG_REMOTE_MAP_VALID_FLAGS)
 		return -EINVAL;
 
 	if (!req->prot || (req->prot & ~LKMDBG_REMOTE_MAP_VALID_PROT))
 		return -EINVAL;
 
-	if (req->remote_addr >= (u64)TASK_SIZE_MAX)
-		return -EINVAL;
-
-	if (req->remote_addr & ~PAGE_MASK)
-		return -EINVAL;
-
-	if (req->remote_addr + req->length < req->remote_addr)
-		return -EINVAL;
-
-	if (req->remote_addr + req->length > (u64)TASK_SIZE_MAX)
+	if (!req->length)
 		return -EINVAL;
 
 	if (req->length > LKMDBG_REMOTE_MAP_MAX_BYTES)
 		return -E2BIG;
 
-	return 0;
+	if (lkmdbg_remote_map_is_local_to_target(req)) {
+		ret = lkmdbg_remote_map_validate_addr_range(req->local_addr,
+							    req->length, true);
+		if (ret)
+			return ret;
+		if (req->remote_addr) {
+			ret = lkmdbg_remote_map_validate_addr_range(
+				req->remote_addr, req->length, false);
+			if (ret)
+				return ret;
+		}
+		if ((req->flags & LKMDBG_REMOTE_MAP_FLAG_FIXED_TARGET) &&
+		    !req->remote_addr)
+			return -EINVAL;
+		return 0;
+	}
+
+	if (req->flags || req->local_addr || req->timeout_ms)
+		return -EINVAL;
+
+	return lkmdbg_remote_map_validate_addr_range(req->remote_addr,
+						     req->length, true);
+}
+
+static int lkmdbg_task_work_add_resume(struct task_struct *task,
+				       struct callback_head *work)
+{
+	lkmdbg_task_work_add_fn fn;
+
+	if (!lkmdbg_symbols.task_work_add_sym)
+		return -EOPNOTSUPP;
+
+	fn = (lkmdbg_task_work_add_fn)lkmdbg_symbols.task_work_add_sym;
+	return fn(task, work, LKMDBG_TASK_WORK_NOTIFY_RESUME);
+}
+
+static lkmdbg_vm_mmap_fn lkmdbg_remote_map_vm_mmap_resolve(void)
+{
+	static lkmdbg_vm_mmap_fn fn;
+
+	if (!fn && lkmdbg_symbols.kallsyms_lookup_name) {
+		unsigned long addr;
+
+		addr = lkmdbg_symbols.kallsyms_lookup_name("vm_mmap");
+		if (addr)
+			fn = (lkmdbg_vm_mmap_fn)addr;
+	}
+
+	return fn;
+}
+
+static void lkmdbg_remote_map_install_task_work(struct callback_head *work)
+{
+	struct lkmdbg_remote_map_install *install =
+		container_of(work, struct lkmdbg_remote_map_install, work);
+	lkmdbg_vm_mmap_fn vm_mmap_fn;
+
+	install->callback_entered = true;
+	vm_mmap_fn = lkmdbg_remote_map_vm_mmap_resolve();
+	if (!vm_mmap_fn) {
+		install->result = -EOPNOTSUPP;
+		goto out;
+	}
+
+	if (current->flags & PF_EXITING) {
+		install->result = -ESRCH;
+		goto out;
+	}
+
+	install->result = (long)vm_mmap_fn(install->file, install->addr_hint,
+					   install->mapped_length,
+					   install->prot, install->flags, 0);
+out:
+	install->completed = true;
+	complete(&install->done);
+}
+
+static long lkmdbg_remote_map_install_into_target(struct task_struct *task,
+						  struct file *file,
+						  u64 addr_hint,
+						  u64 mapped_length,
+						  u32 prot, u32 flags)
+{
+	struct lkmdbg_remote_map_install install;
+	unsigned long map_flags = MAP_SHARED;
+	long ret;
+
+	if (!task || !file || !mapped_length)
+		return -EINVAL;
+
+	if (flags & LKMDBG_REMOTE_MAP_FLAG_FIXED_TARGET)
+		map_flags |= MAP_FIXED_NOREPLACE;
+
+	init_completion(&install.done);
+	init_task_work(&install.work, lkmdbg_remote_map_install_task_work);
+	install.task = task;
+	install.file = file;
+	install.addr_hint = (unsigned long)addr_hint;
+	install.mapped_length = (unsigned long)mapped_length;
+	install.prot = 0;
+	install.flags = map_flags;
+	install.result = -EINPROGRESS;
+	install.callback_entered = false;
+	install.completed = false;
+	if (prot & LKMDBG_REMOTE_MAP_PROT_READ)
+		install.prot |= PROT_READ;
+	if (prot & LKMDBG_REMOTE_MAP_PROT_WRITE)
+		install.prot |= PROT_WRITE;
+	if (prot & LKMDBG_REMOTE_MAP_PROT_EXEC)
+		install.prot |= PROT_EXEC;
+
+	ret = lkmdbg_task_work_add_resume(task, &install.work);
+	if (ret)
+		return ret;
+
+	wait_for_completion(&install.done);
+	return install.result;
 }
 
 static int lkmdbg_remote_map_vma_perms_ok(struct vm_area_struct *vma, u32 prot)
@@ -312,24 +476,37 @@ static const struct file_operations lkmdbg_remote_map_fops = {
 	.llseek = no_llseek,
 };
 
-static int lkmdbg_remote_map_prepare_fd(struct lkmdbg_remote_map *map,
-					struct file **file_out)
+static int lkmdbg_remote_map_prepare_file(struct lkmdbg_remote_map *map,
+					  struct file **file_out)
 {
 	struct file *file;
-	int fd;
 
 	file = anon_inode_getfile("lkmdbg-rmap", &lkmdbg_remote_map_fops, map,
 				  O_RDWR | O_CLOEXEC);
 	if (IS_ERR(file))
 		return PTR_ERR(file);
 
+	*file_out = file;
+	return 0;
+}
+
+static int lkmdbg_remote_map_prepare_fd(struct lkmdbg_remote_map *map,
+					struct file **file_out)
+{
+	int fd;
+	int ret;
+
+	ret = lkmdbg_remote_map_prepare_file(map, file_out);
+	if (ret)
+		return ret;
+
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0) {
-		fput(file);
+		fput(*file_out);
+		*file_out = NULL;
 		return fd;
 	}
 
-	*file_out = file;
 	return fd;
 }
 
@@ -337,14 +514,18 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 {
 	struct lkmdbg_remote_map_request req;
 	struct lkmdbg_remote_map *map = NULL;
+	struct task_struct *task = NULL;
 	struct mm_struct *mm = NULL;
 	u64 vm_flags_raw = 0;
+	u64 source_addr;
 	u64 mapped_length;
 	u32 page_count;
 	unsigned int gup_flags = 0;
 	long pinned;
 	struct file *map_file = NULL;
-	int map_fd;
+	bool local_to_target;
+	long install_addr = 0;
+	int map_fd = -1;
 	int ret;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
@@ -354,14 +535,28 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 	if (ret)
 		return ret;
 
-	ret = lkmdbg_get_target_mm(session, &mm);
-	if (ret)
-		return ret;
+	local_to_target = lkmdbg_remote_map_is_local_to_target(&req);
+	source_addr = local_to_target ? req.local_addr : req.remote_addr;
+	if (local_to_target) {
+		mm = get_task_mm(current);
+		if (!mm)
+			return -ESRCH;
+		ret = lkmdbg_remote_map_validate_range(mm, req.local_addr,
+						       req.length, req.prot,
+						       &vm_flags_raw);
+		if (ret)
+			goto out_mm;
+	} else {
+		ret = lkmdbg_get_target_mm(session, &mm);
+		if (ret)
+			return ret;
 
-	ret = lkmdbg_remote_map_validate_range(mm, req.remote_addr, req.length,
-					       req.prot, &vm_flags_raw);
-	if (ret)
-		goto out_mm;
+		ret = lkmdbg_remote_map_validate_range(mm, req.remote_addr,
+						       req.length, req.prot,
+						       &vm_flags_raw);
+		if (ret)
+			goto out_mm;
+	}
 
 	mapped_length = PAGE_ALIGN(req.length);
 	page_count = mapped_length >> PAGE_SHIFT;
@@ -379,9 +574,10 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 	}
 
 	map->source_tgid = current->tgid;
-	if (lkmdbg_get_target_identity(session, &map->source_tgid, NULL))
+	if (!local_to_target &&
+	    lkmdbg_get_target_identity(session, &map->source_tgid, NULL))
 		map->source_tgid = 0;
-	map->remote_addr = req.remote_addr;
+	map->remote_addr = source_addr;
 	map->mapped_length = mapped_length;
 	map->vm_flags_raw = vm_flags_raw;
 	map->prot = req.prot;
@@ -392,7 +588,7 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 	if (lkmdbg_remote_map_req_wants_write(&req))
 		gup_flags |= FOLL_WRITE;
 
-	pinned = lkmdbg_remote_map_pin_pages(mm, (unsigned long)req.remote_addr,
+	pinned = lkmdbg_remote_map_pin_pages(mm, (unsigned long)source_addr,
 					     page_count, gup_flags, map->pages);
 	if (pinned < 0) {
 		ret = (int)pinned;
@@ -403,16 +599,49 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 		goto out_map;
 	}
 
+	req.mapped_length = mapped_length;
+	req.local_addr = source_addr;
+
+	if (local_to_target) {
+		ret = lkmdbg_remote_map_prepare_file(map, &map_file);
+		if (ret)
+			goto out_map;
+
+		ret = lkmdbg_get_target_thread(session, 0, &task);
+		if (ret)
+			goto out_file;
+
+		install_addr = lkmdbg_remote_map_install_into_target(
+			task, map_file, req.remote_addr, mapped_length,
+			req.prot, req.flags);
+		put_task_struct(task);
+		task = NULL;
+		if (install_addr < 0) {
+			ret = (int)install_addr;
+			goto out_file;
+		}
+
+		req.remote_addr = (u64)install_addr;
+		req.map_fd = -1;
+		if (copy_to_user(argp, &req, sizeof(req))) {
+			fput(map_file);
+			mmput(mm);
+			return -EFAULT;
+		}
+
+		fput(map_file);
+		mmput(mm);
+		return 0;
+	}
+
 	map_fd = lkmdbg_remote_map_prepare_fd(map, &map_file);
 	if (map_fd < 0) {
 		ret = map_fd;
 		goto out_map;
 	}
 
-	req.mapped_length = mapped_length;
 	req.map_fd = map_fd;
 	req.remote_addr = map->remote_addr;
-
 	if (copy_to_user(argp, &req, sizeof(req))) {
 		put_unused_fd(map_fd);
 		fput(map_file);
@@ -424,6 +653,11 @@ long lkmdbg_create_remote_map(struct lkmdbg_session *session, void __user *argp)
 	mmput(mm);
 	return 0;
 
+out_file:
+	if (task)
+		put_task_struct(task);
+	if (map_file)
+		fput(map_file);
 out_map:
 	lkmdbg_remote_map_put(map);
 out_mm:
