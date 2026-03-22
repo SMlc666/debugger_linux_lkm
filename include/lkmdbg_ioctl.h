@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 10
+#define LKMDBG_PROTO_VERSION 11
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -232,6 +232,8 @@ struct lkmdbg_phys_request {
 	__u32 reserved0;
 	__u64 bytes_done;
 };
+
+#define LKMDBG_PHYS_OP_FLAG_TARGET_VADDR 0x00000001U
 
 struct lkmdbg_vma_entry {
 	__u64 start_addr;

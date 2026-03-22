@@ -958,12 +958,13 @@ static int write_target_memory_flags(int session_fd, uintptr_t remote_addr,
 				     const void *buf, size_t len,
 				     uint32_t op_flags,
 				     uint32_t *bytes_done_out, int verbose);
-static int read_physical_memory(int session_fd, uint64_t phys_addr, void *buf,
-				size_t len, uint32_t *bytes_done_out,
-				int verbose);
-static int write_physical_memory(int session_fd, uint64_t phys_addr,
-				 const void *buf, size_t len,
-				 uint32_t *bytes_done_out, int verbose);
+static int read_physical_memory_flags(int session_fd, uint64_t phys_addr,
+				      void *buf, size_t len, uint32_t op_flags,
+				      uint32_t *bytes_done_out, int verbose);
+static int write_physical_memory_flags(int session_fd, uint64_t phys_addr,
+				       const void *buf, size_t len,
+				       uint32_t op_flags,
+				       uint32_t *bytes_done_out, int verbose);
 
 static int read_target_memory(int session_fd, uintptr_t remote_addr, void *buf,
 			      size_t len, uint32_t *bytes_done_out,
@@ -1060,10 +1061,19 @@ static int read_physical_memory(int session_fd, uint64_t phys_addr, void *buf,
 				size_t len, uint32_t *bytes_done_out,
 				int verbose)
 {
+	return read_physical_memory_flags(session_fd, phys_addr, buf, len, 0,
+					  bytes_done_out, verbose);
+}
+
+static int read_physical_memory_flags(int session_fd, uint64_t phys_addr,
+				      void *buf, size_t len, uint32_t op_flags,
+				      uint32_t *bytes_done_out, int verbose)
+{
 	struct lkmdbg_phys_op op = {
 		.phys_addr = phys_addr,
 		.local_addr = (uintptr_t)buf,
 		.length = len,
+		.flags = op_flags,
 	};
 	struct lkmdbg_phys_request req;
 
@@ -1080,10 +1090,20 @@ static int write_physical_memory(int session_fd, uint64_t phys_addr,
 				 const void *buf, size_t len,
 				 uint32_t *bytes_done_out, int verbose)
 {
+	return write_physical_memory_flags(session_fd, phys_addr, buf, len, 0,
+					   bytes_done_out, verbose);
+}
+
+static int write_physical_memory_flags(int session_fd, uint64_t phys_addr,
+				       const void *buf, size_t len,
+				       uint32_t op_flags,
+				       uint32_t *bytes_done_out, int verbose)
+{
 	struct lkmdbg_phys_op op = {
 		.phys_addr = phys_addr,
 		.local_addr = (uintptr_t)buf,
 		.length = len,
+		.flags = op_flags,
 	};
 	struct lkmdbg_phys_request req;
 
@@ -1716,6 +1736,7 @@ static int verify_physical_memory_api(int session_fd, const struct child_info *i
 	struct lkmdbg_page_entry entry;
 	uint32_t bytes_done = 0;
 	uint8_t virt_before;
+	uint8_t via_vaddr;
 	uint8_t phys_before;
 	uint8_t phys_after;
 	uint8_t phys_new;
@@ -1763,15 +1784,32 @@ static int verify_physical_memory_api(int session_fd, const struct child_info *i
 		goto out;
 	}
 
+	bytes_done = 0;
+	if (read_physical_memory_flags(session_fd, info->basic_addr, &via_vaddr,
+				       sizeof(via_vaddr),
+				       LKMDBG_PHYS_OP_FLAG_TARGET_VADDR,
+				       &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(via_vaddr)) {
+		fprintf(stderr,
+			"target-vaddr physical read failed bytes_done=%u\n",
+			bytes_done);
+		goto out;
+	}
+	if (via_vaddr != virt_before) {
+		fprintf(stderr,
+			"target-vaddr physical mismatch got=0x%02x expected=0x%02x\n",
+			via_vaddr, virt_before);
+		goto out;
+	}
+
 	phys_new = (uint8_t)(phys_before ^ 0x5aU);
 	bytes_done = 0;
-	if (write_physical_memory(session_fd,
-				  entry.phys_addr +
-					  (info->basic_addr & (info->page_size - 1)),
-				  &phys_new, sizeof(phys_new), &bytes_done, 0) <
-		    0 ||
+	if (write_physical_memory_flags(session_fd, info->basic_addr, &phys_new,
+					sizeof(phys_new),
+					LKMDBG_PHYS_OP_FLAG_TARGET_VADDR,
+					&bytes_done, 0) < 0 ||
 	    bytes_done != sizeof(phys_new)) {
-		fprintf(stderr, "physical write failed bytes_done=%u\n",
+		fprintf(stderr, "target-vaddr physical write failed bytes_done=%u\n",
 			bytes_done);
 		goto out;
 	}
@@ -1798,10 +1836,10 @@ static int verify_physical_memory_api(int session_fd, const struct child_info *i
 
 restore:
 	bytes_done = 0;
-	write_physical_memory(session_fd,
-			      entry.phys_addr +
-				      (info->basic_addr & (info->page_size - 1)),
-			      &phys_before, sizeof(phys_before), &bytes_done, 0);
+	write_physical_memory_flags(session_fd, info->basic_addr, &phys_before,
+				    sizeof(phys_before),
+				    LKMDBG_PHYS_OP_FLAG_TARGET_VADDR,
+				    &bytes_done, 0);
 out:
 	free(buf.entries);
 	return ret;
@@ -4177,10 +4215,12 @@ static void usage(const char *prog)
 		"  %s ptlist <pid>\n"
 		"  %s physread <phys_addr_hex> <length>\n"
 		"  %s physwrite <phys_addr_hex> <ascii_data>\n"
+		"  %s physreadv <pid> <remote_addr_hex> <length>\n"
+		"  %s physwritev <pid> <remote_addr_hex> <ascii_data>\n"
 		"  %s write <pid> <remote_addr_hex> <ascii_data>\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog, prog, prog);
+		prog, prog, prog, prog, prog);
 }
 
 static int run_selftest(const char *prog)
@@ -4899,7 +4939,9 @@ int main(int argc, char **argv)
 	needs_remote_addr = strcmp(argv[1], "read") == 0 ||
 			    strcmp(argv[1], "write") == 0 ||
 			    strcmp(argv[1], "pages") == 0 ||
-			    strcmp(argv[1], "ptset") == 0;
+			    strcmp(argv[1], "ptset") == 0 ||
+			    strcmp(argv[1], "physreadv") == 0 ||
+			    strcmp(argv[1], "physwritev") == 0;
 	if (needs_remote_addr) {
 		if (argc < 5) {
 			usage(argv[0]);
@@ -5474,6 +5516,64 @@ int main(int argc, char **argv)
 		if (bytes_done != len) {
 			fprintf(stderr,
 				"short physical write bytes_done=%u expected=%zu\n",
+				bytes_done, len);
+			close(session_fd);
+			return 1;
+		}
+	} else if (strcmp(argv[1], "physreadv") == 0) {
+		size_t len;
+		unsigned char *buf;
+		size_t i;
+		uint32_t bytes_done = 0;
+
+		len = (size_t)strtoul(argv[4], &endp, 0);
+		if (*endp != '\0' || len == 0) {
+			fprintf(stderr, "invalid length: %s\n", argv[4]);
+			close(session_fd);
+			return 1;
+		}
+
+		buf = calloc(1, len);
+		if (!buf) {
+			fprintf(stderr, "calloc failed\n");
+			close(session_fd);
+			return 1;
+		}
+
+		if (read_physical_memory_flags(session_fd, remote_addr, buf, len,
+					       LKMDBG_PHYS_OP_FLAG_TARGET_VADDR,
+					       &bytes_done, 1) < 0) {
+			free(buf);
+			close(session_fd);
+			return 1;
+		}
+		if (bytes_done != len) {
+			fprintf(stderr,
+				"short translated physical read bytes_done=%u expected=%zu\n",
+				bytes_done, len);
+			free(buf);
+			close(session_fd);
+			return 1;
+		}
+
+		for (i = 0; i < len; i++)
+			printf("%02x", buf[i]);
+		printf("\n");
+		free(buf);
+	} else if (strcmp(argv[1], "physwritev") == 0) {
+		const char *data = argv[4];
+		size_t len = strlen(data);
+		uint32_t bytes_done = 0;
+
+		if (write_physical_memory_flags(session_fd, remote_addr, data, len,
+						LKMDBG_PHYS_OP_FLAG_TARGET_VADDR,
+						&bytes_done, 1) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		if (bytes_done != len) {
+			fprintf(stderr,
+				"short translated physical write bytes_done=%u expected=%zu\n",
 				bytes_done, len);
 			close(session_fd);
 			return 1;

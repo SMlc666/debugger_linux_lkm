@@ -1,6 +1,7 @@
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
+#include <linux/mmap_lock.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
@@ -22,8 +23,15 @@ static int lkmdbg_validate_phys_op(const struct lkmdbg_phys_op *op)
 	if (op->phys_addr + op->length < op->phys_addr)
 		return -EINVAL;
 
-	if (op->flags)
+	if (op->flags & ~LKMDBG_PHYS_OP_FLAG_TARGET_VADDR)
 		return -EINVAL;
+
+	if (op->flags & LKMDBG_PHYS_OP_FLAG_TARGET_VADDR) {
+		if (op->phys_addr >= (u64)TASK_SIZE_MAX)
+			return -EINVAL;
+		if (op->phys_addr + op->length > (u64)TASK_SIZE_MAX)
+			return -EINVAL;
+	}
 
 	return 0;
 }
@@ -157,8 +165,58 @@ static long lkmdbg_phys_xfer_window(phys_addr_t phys_addr, u64 local_addr,
 	return (long)total_done;
 }
 
+static long lkmdbg_phys_xfer_target_vaddr(struct mm_struct *mm, u64 remote_addr,
+					  u64 local_addr, size_t length,
+					  bool write)
+{
+	size_t total_done = 0;
+
+	while (total_done < length) {
+		struct lkmdbg_target_pt_info pt_info;
+		unsigned long addr;
+		u64 leaf_size;
+		u64 leaf_offset;
+		size_t chunk_len;
+		phys_addr_t phys_addr;
+		long copied;
+		int ret;
+
+		addr = (unsigned long)(remote_addr + total_done);
+
+		mmap_read_lock(mm);
+		ret = lkmdbg_target_pt_lookup_locked(mm, addr, &pt_info);
+		mmap_read_unlock(mm);
+		if (ret)
+			return ret;
+
+		if (!(pt_info.flags & LKMDBG_TARGET_PT_FLAG_PRESENT) ||
+		    !pt_info.page_shift)
+			break;
+
+		leaf_size = 1ULL << pt_info.page_shift;
+		leaf_offset = addr & (leaf_size - 1);
+		phys_addr = (phys_addr_t)pt_info.phys_addr;
+		if (!(pt_info.flags & LKMDBG_TARGET_PT_FLAG_HUGE))
+			phys_addr += leaf_offset;
+
+		chunk_len = min_t(size_t, length - total_done,
+				  (size_t)(leaf_size - leaf_offset));
+		copied = lkmdbg_phys_xfer_window(phys_addr,
+						 local_addr + total_done,
+						 chunk_len, write);
+		if (copied < 0)
+			return copied;
+
+		total_done += copied;
+		if ((size_t)copied != chunk_len)
+			break;
+	}
+
+	return (long)total_done;
+}
+
 static long lkmdbg_phys_xfer_ops(struct lkmdbg_phys_op *ops, u32 op_count,
-				 bool write)
+				 struct mm_struct *target_mm, bool write)
 {
 	u64 batch_total = 0;
 	u64 transferred = 0;
@@ -180,9 +238,17 @@ static long lkmdbg_phys_xfer_ops(struct lkmdbg_phys_op *ops, u32 op_count,
 	for (i = 0; i < op_count; i++) {
 		long copied;
 
-		copied = lkmdbg_phys_xfer_window((phys_addr_t)ops[i].phys_addr,
-						 ops[i].local_addr,
-						 ops[i].length, write);
+		if (ops[i].flags & LKMDBG_PHYS_OP_FLAG_TARGET_VADDR) {
+			if (!target_mm)
+				return -ENODEV;
+			copied = lkmdbg_phys_xfer_target_vaddr(
+				target_mm, ops[i].phys_addr, ops[i].local_addr,
+				ops[i].length, write);
+		} else {
+			copied = lkmdbg_phys_xfer_window(
+				(phys_addr_t)ops[i].phys_addr, ops[i].local_addr,
+				ops[i].length, write);
+		}
 		if (copied < 0)
 			return copied;
 
@@ -209,13 +275,17 @@ static long lkmdbg_phys_copy_reply(void __user *argp,
 	return ret;
 }
 
-static long lkmdbg_phys_xfer(void __user *argp, bool write)
+static long lkmdbg_phys_xfer(struct lkmdbg_session *session, void __user *argp,
+			     bool write)
 {
 	struct lkmdbg_phys_request req;
 	struct lkmdbg_phys_op *ops;
+	struct mm_struct *target_mm = NULL;
 	size_t ops_bytes;
 	u64 total_bytes = 0;
 	u32 processed = 0;
+	bool needs_target_mm = false;
+	u32 i;
 	long ret;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
@@ -235,7 +305,22 @@ static long lkmdbg_phys_xfer(void __user *argp, bool write)
 		return -EFAULT;
 	}
 
-	ret = lkmdbg_phys_xfer_ops(ops, req.op_count, write);
+	for (i = 0; i < req.op_count; i++) {
+		if (ops[i].flags & LKMDBG_PHYS_OP_FLAG_TARGET_VADDR) {
+			needs_target_mm = true;
+			break;
+		}
+	}
+
+	if (needs_target_mm) {
+		ret = lkmdbg_get_target_mm(session, &target_mm);
+		if (ret) {
+			kfree(ops);
+			return ret;
+		}
+	}
+
+	ret = lkmdbg_phys_xfer_ops(ops, req.op_count, target_mm, write);
 	lkmdbg_phys_accumulate_progress(ops, req.op_count, &processed,
 					&total_bytes);
 	req.ops_done = processed;
@@ -244,18 +329,18 @@ static long lkmdbg_phys_xfer(void __user *argp, bool write)
 		ret = 0;
 	ret = lkmdbg_phys_copy_reply(argp, &req, ops, ops_bytes, ret);
 
+	if (target_mm)
+		mmput(target_mm);
 	kfree(ops);
 	return ret;
 }
 
 long lkmdbg_phys_read(struct lkmdbg_session *session, void __user *argp)
 {
-	(void)session;
-	return lkmdbg_phys_xfer(argp, false);
+	return lkmdbg_phys_xfer(session, argp, false);
 }
 
 long lkmdbg_phys_write(struct lkmdbg_session *session, void __user *argp)
 {
-	(void)session;
-	return lkmdbg_phys_xfer(argp, true);
+	return lkmdbg_phys_xfer(session, argp, true);
 }
