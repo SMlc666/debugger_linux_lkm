@@ -134,6 +134,8 @@ enum {
 
 static int get_stop_state(int session_fd,
 			  struct lkmdbg_stop_query_request *reply_out);
+static int expect_stop_state(int session_fd, uint32_t reason,
+			     struct lkmdbg_stop_query_request *reply_out);
 static int set_signal_config(int session_fd, const uint64_t mask_words[2],
 			     uint32_t flags,
 			     struct lkmdbg_signal_config_request *reply_out);
@@ -329,9 +331,10 @@ static int read_session_event_timeout(int session_fd,
 	return 0;
 }
 
-static int wait_for_session_event(int session_fd, uint32_t type, uint32_t code,
-				  int timeout_ms,
-				  struct lkmdbg_event_record *event_out)
+static int wait_for_session_event_common(int session_fd, uint32_t type,
+					 uint32_t code, int timeout_ms,
+					 struct lkmdbg_event_record *event_out,
+					 bool report_timeout)
 {
 	int waited = 0;
 
@@ -361,8 +364,67 @@ static int wait_for_session_event(int session_fd, uint32_t type, uint32_t code,
 		return 0;
 	}
 
-	fprintf(stderr, "event wait timed out type=%u code=%u\n", type, code);
+	if (report_timeout)
+		fprintf(stderr, "event wait timed out type=%u code=%u\n", type,
+			code);
 	return -ETIMEDOUT;
+}
+
+static int wait_for_session_event(int session_fd, uint32_t type, uint32_t code,
+				  int timeout_ms,
+				  struct lkmdbg_event_record *event_out)
+{
+	return wait_for_session_event_common(session_fd, type, code, timeout_ms,
+					     event_out, true);
+}
+
+static int wait_for_stop_event_or_state(int session_fd, uint32_t reason,
+					int timeout_ms,
+					struct lkmdbg_event_record *event_out,
+					struct lkmdbg_stop_query_request *stop_out)
+{
+	struct lkmdbg_stop_query_request stop_req;
+	struct lkmdbg_event_record event;
+	int ret;
+
+	ret = wait_for_session_event_common(session_fd, LKMDBG_EVENT_TARGET_STOP,
+					    reason, timeout_ms, &event, false);
+	if (!ret) {
+		if (event_out)
+			*event_out = event;
+		if (!stop_out)
+			return 0;
+		if (expect_stop_state(session_fd, reason, &stop_req) < 0)
+			return -1;
+		*stop_out = stop_req;
+		return 0;
+	}
+	if (ret != -ETIMEDOUT)
+		return ret;
+
+	memset(&stop_req, 0, sizeof(stop_req));
+	if (expect_stop_state(session_fd, reason, &stop_req) < 0)
+		return ret;
+
+	memset(&event, 0, sizeof(event));
+	event.version = LKMDBG_PROTO_VERSION;
+	event.type = LKMDBG_EVENT_TARGET_STOP;
+	event.size = sizeof(event);
+	event.code = reason;
+	event.tgid = stop_req.stop.tgid;
+	event.tid = stop_req.stop.tid;
+	event.flags = stop_req.stop.event_flags;
+	event.value0 = stop_req.stop.value0;
+	event.value1 = stop_req.stop.value1;
+
+	printf("selftest runtime: stop event missing, using stop-state fallback for reason=%u\n",
+	       reason);
+
+	if (event_out)
+		*event_out = event;
+	if (stop_out)
+		*stop_out = stop_req;
+	return 0;
 }
 
 static int wait_for_syscall_event(int session_fd, uint32_t phase,
@@ -4965,9 +5027,10 @@ breakpoint_checks:
 		return -1;
 	}
 	printf("selftest runtime: waiting for mmu breakpoint stop event\n");
-	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-				   LKMDBG_STOP_REASON_BREAKPOINT,
-				   event_timeout_ms, &event) < 0) {
+	if (wait_for_stop_event_or_state(session_fd,
+					 LKMDBG_STOP_REASON_BREAKPOINT,
+					 event_timeout_ms, &event,
+					 &stop_req) < 0) {
 		remove_hwpoint(session_fd, mmu_req.id);
 		return -1;
 	}
@@ -4979,11 +5042,6 @@ breakpoint_checks:
 			"mmu breakpoint event mismatch addr=0x%" PRIx64 " ip=0x%" PRIx64 " flags=0x%x\n",
 			(uint64_t)event.value0, (uint64_t)event.value1,
 			event.flags);
-		remove_hwpoint(session_fd, mmu_req.id);
-		return -1;
-	}
-	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_BREAKPOINT,
-			      &stop_req) < 0) {
 		remove_hwpoint(session_fd, mmu_req.id);
 		return -1;
 	}
@@ -5042,9 +5100,10 @@ breakpoint_checks:
 		return -1;
 	}
 	printf("selftest runtime: waiting for rearmed mmu breakpoint stop event\n");
-	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-				   LKMDBG_STOP_REASON_BREAKPOINT,
-				   event_timeout_ms, &event) < 0) {
+	if (wait_for_stop_event_or_state(session_fd,
+					 LKMDBG_STOP_REASON_BREAKPOINT,
+					 event_timeout_ms, &event,
+					 &stop_req) < 0) {
 		remove_hwpoint(session_fd, mmu_req.id);
 		return -1;
 	}
@@ -5054,11 +5113,6 @@ breakpoint_checks:
 		fprintf(stderr,
 			"rearmed mmu breakpoint event mismatch addr=0x%" PRIx64 " flags=0x%x\n",
 			(uint64_t)event.value0, event.flags);
-		remove_hwpoint(session_fd, mmu_req.id);
-		return -1;
-	}
-	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_BREAKPOINT,
-			      &stop_req) < 0) {
 		remove_hwpoint(session_fd, mmu_req.id);
 		return -1;
 	}

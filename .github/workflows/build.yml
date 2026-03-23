@@ -38,16 +38,19 @@ jobs:
             artifact_name: lkmdbg-android14-6.1
             out_dir: out/android14-6.1
             ccache_suffix: android14-6.1
+            disable_btf: false
           - label: android15-6.6
             kernel_branch: android15-6.6
             artifact_name: lkmdbg-android15-6.6
             out_dir: out/android15-6.6
             ccache_suffix: android15-6.6
+            disable_btf: false
           - label: android16-6.12
             kernel_branch: android16-6.12
             artifact_name: lkmdbg-android16-6.12
             out_dir: out/android16-6.12
             ccache_suffix: android16-6.12
+            disable_btf: true
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-${{ matrix.ccache_suffix }}
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -131,6 +134,12 @@ jobs:
             HOSTCC="ccache clang"
           )
           make "${COMMON_ARGS[@]}" gki_defconfig
+          if [ "${{ matrix.disable_btf || false }}" = "true" ]; then
+            "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+              -d DEBUG_INFO_BTF \
+              -d DEBUG_INFO_BTF_MODULES
+            make "${COMMON_ARGS[@]}" olddefconfig
+          fi
           make "${COMMON_ARGS[@]}" modules_prepare
           make "${COMMON_ARGS[@]}" -j"$(nproc)" modules
           test -f "$OUT_DIR/Module.symvers"

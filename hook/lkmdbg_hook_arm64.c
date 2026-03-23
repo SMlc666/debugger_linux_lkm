@@ -74,12 +74,9 @@ static phys_addr_t lkmdbg_text_phys_base(void *addr)
 	unsigned long base = (unsigned long)addr & PAGE_MASK;
 	struct page *page;
 
-	if (is_vmalloc_or_module_addr((const void *)base)) {
-		page = vmalloc_to_page((const void *)base);
-		if (!page)
-			return 0;
+	page = vmalloc_to_page((const void *)base);
+	if (page)
 		return page_to_phys(page);
-	}
 
 	return __pa_symbol(base);
 }
