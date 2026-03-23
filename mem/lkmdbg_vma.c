@@ -1,6 +1,7 @@
 #include <linux/dcache.h>
 #include <linux/fs.h>
 #include <linux/kdev_t.h>
+#include <linux/limits.h>
 #include <linux/mm.h>
 #include <linux/mm_types.h>
 #include <linux/mmap_lock.h>
@@ -11,6 +12,36 @@
 
 #define LKMDBG_VMA_MAX_ENTRIES 256U
 #define LKMDBG_VMA_MAX_NAMES_SIZE (128U * 1024U)
+#define LKMDBG_VMA_HASH_INIT 0xcbf29ce484222325ULL
+#define LKMDBG_VMA_HASH_PRIME 0x100000001b3ULL
+
+static u64 lkmdbg_vma_hash_bytes(u64 hash, const void *buf, size_t len)
+{
+	const u8 *bytes = buf;
+	size_t i;
+
+	for (i = 0; i < len; i++) {
+		hash ^= bytes[i];
+		hash *= LKMDBG_VMA_HASH_PRIME;
+	}
+
+	return hash;
+}
+
+static u64 lkmdbg_vma_generation_locked(struct mm_struct *mm)
+{
+	struct vm_area_struct *vma;
+	u64 hash = LKMDBG_VMA_HASH_INIT;
+
+	for (vma = find_vma(mm, 0); vma; vma = find_vma(mm, vma->vm_end)) {
+		struct lkmdbg_target_vma_info info;
+
+		lkmdbg_target_vma_fill_info(mm, vma, &info);
+		hash = lkmdbg_vma_hash_bytes(hash, &info, sizeof(info));
+	}
+
+	return hash ? hash : 1;
+}
 
 static int lkmdbg_validate_vma_query(struct lkmdbg_vma_query_request *req)
 {
@@ -21,7 +52,12 @@ static int lkmdbg_validate_vma_query(struct lkmdbg_vma_query_request *req)
 	    req->max_entries > LKMDBG_VMA_MAX_ENTRIES)
 		return -EINVAL;
 
-	if (req->flags)
+	if (req->flags & ~LKMDBG_VMA_QUERY_FLAG_FULL_PATH)
+		return -EINVAL;
+
+	if (req->match_flags_value & ~req->match_flags_mask)
+		return -EINVAL;
+	if (req->match_prot_value & ~req->match_prot_mask)
 		return -EINVAL;
 
 	if (req->names_size > LKMDBG_VMA_MAX_NAMES_SIZE)
@@ -37,9 +73,22 @@ static int lkmdbg_validate_vma_query(struct lkmdbg_vma_query_request *req)
 	return 0;
 }
 
+static bool lkmdbg_vma_matches_filter(const struct lkmdbg_vma_entry *entry,
+				      const struct lkmdbg_vma_query_request *req)
+{
+	if ((entry->flags & req->match_flags_mask) != req->match_flags_value)
+		return false;
+
+	if ((entry->prot & req->match_prot_mask) != req->match_prot_value)
+		return false;
+
+	return true;
+}
+
 static int lkmdbg_vma_fill_name(struct mm_struct *mm, struct vm_area_struct *vma,
 				struct lkmdbg_vma_query_request *req,
 				struct lkmdbg_vma_entry *entry, char *names,
+				char *path_buf,
 				u32 *names_used)
 {
 	const char *name = NULL;
@@ -49,8 +98,21 @@ static int lkmdbg_vma_fill_name(struct mm_struct *mm, struct vm_area_struct *vma
 		return 0;
 
 	if (vma->vm_file) {
-		name = vma->vm_file->f_path.dentry->d_name.name;
-		name_len = vma->vm_file->f_path.dentry->d_name.len + 1;
+		if (req->flags & LKMDBG_VMA_QUERY_FLAG_FULL_PATH) {
+			char *resolved;
+
+			if (!path_buf)
+				return -ENOMEM;
+
+			resolved = d_path(&vma->vm_file->f_path, path_buf, PATH_MAX);
+			if (IS_ERR(resolved))
+				return PTR_ERR(resolved);
+
+			name = resolved;
+		} else {
+			name = vma->vm_file->f_path.dentry->d_name.name;
+			name_len = vma->vm_file->f_path.dentry->d_name.len + 1;
+		}
 	} else {
 		name = lkmdbg_target_vma_special_name(mm, vma, &entry->flags);
 	}
@@ -115,6 +177,7 @@ long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp)
 	struct lkmdbg_vma_entry *entries = NULL;
 	struct mm_struct *mm = NULL;
 	char *names = NULL;
+	char *path_buf = NULL;
 	u64 cursor;
 	size_t entries_bytes;
 	u32 filled = 0;
@@ -139,6 +202,14 @@ long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp)
 			ret = -ENOMEM;
 			goto out;
 		}
+
+		if (req.flags & LKMDBG_VMA_QUERY_FLAG_FULL_PATH) {
+			path_buf = kzalloc(PATH_MAX, GFP_KERNEL);
+			if (!path_buf) {
+				ret = -ENOMEM;
+				goto out;
+			}
+		}
 	}
 
 	ret = lkmdbg_get_target_mm(session, &mm);
@@ -149,6 +220,7 @@ long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp)
 	req.done = 1;
 	req.next_addr = 0;
 	mmap_read_lock(mm);
+	req.generation = lkmdbg_vma_generation_locked(mm);
 	while (filled < req.max_entries) {
 		struct vm_area_struct *vma;
 		int name_ret;
@@ -164,8 +236,13 @@ long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp)
 		}
 
 		lkmdbg_vma_fill_entry(mm, vma, &entries[filled]);
+		if (!lkmdbg_vma_matches_filter(&entries[filled], &req)) {
+			cursor = vma->vm_end;
+			continue;
+		}
+
 		name_ret = lkmdbg_vma_fill_name(mm, vma, &req, &entries[filled],
-						names, &names_used);
+						names, path_buf, &names_used);
 		if (name_ret == -E2BIG) {
 			if (!filled) {
 				ret = -E2BIG;
@@ -205,6 +282,7 @@ long lkmdbg_vma_query(struct lkmdbg_session *session, void __user *argp)
 out:
 	if (mm)
 		mmput(mm);
+	kfree(path_buf);
 	kfree(names);
 	kfree(entries);
 	return ret;

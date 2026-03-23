@@ -144,6 +144,7 @@ struct lkmdbg_target_pt_info {
 	u32 level;
 	u32 page_shift;
 	u32 flags;
+	u32 pt_flags;
 };
 
 int lkmdbg_disable_kprobe_blacklist(void);

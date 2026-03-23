@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 18
+#define LKMDBG_PROTO_VERSION 19
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -114,6 +114,8 @@
 #define LKMDBG_VMA_FLAG_PFNMAP 0x00000020U
 #define LKMDBG_VMA_FLAG_IO 0x00000040U
 
+#define LKMDBG_VMA_QUERY_FLAG_FULL_PATH 0x00000001U
+
 #define LKMDBG_IMAGE_FLAG_FILE 0x00000001U
 #define LKMDBG_IMAGE_FLAG_MAIN_EXE 0x00000002U
 #define LKMDBG_IMAGE_FLAG_SHARED 0x00000004U
@@ -138,6 +140,16 @@
 #define LKMDBG_PAGE_FLAG_IO 0x00010000U
 #define LKMDBG_PAGE_FLAG_PT_PRESENT 0x00020000U
 #define LKMDBG_PAGE_FLAG_PT_HUGE 0x00040000U
+
+#define LKMDBG_PAGE_QUERY_FLAG_LEAF_STEP 0x00000001U
+
+#define LKMDBG_PAGE_PT_FLAG_VALID 0x00000001U
+#define LKMDBG_PAGE_PT_FLAG_USER 0x00000002U
+#define LKMDBG_PAGE_PT_FLAG_WRITE 0x00000004U
+#define LKMDBG_PAGE_PT_FLAG_DIRTY 0x00000008U
+#define LKMDBG_PAGE_PT_FLAG_YOUNG 0x00000010U
+#define LKMDBG_PAGE_PT_FLAG_EXEC 0x00000020U
+#define LKMDBG_PAGE_PT_FLAG_PROTNONE 0x00000040U
 
 #define LKMDBG_PAGE_LEVEL_NONE 0U
 #define LKMDBG_PAGE_LEVEL_PTE 1U
@@ -252,6 +264,11 @@ struct lkmdbg_phys_op {
 	__u32 flags;
 	__u32 bytes_done;
 	__u32 reserved0;
+	__u64 resolved_phys_addr;
+	__u32 page_shift;
+	__u32 pt_level;
+	__u32 pt_flags;
+	__u32 phys_span_length;
 };
 
 struct lkmdbg_phys_request {
@@ -266,6 +283,7 @@ struct lkmdbg_phys_request {
 };
 
 #define LKMDBG_PHYS_OP_FLAG_TARGET_VADDR 0x00000001U
+#define LKMDBG_PHYS_OP_FLAG_TRANSLATE_ONLY 0x00000002U
 
 struct lkmdbg_vma_entry {
 	__u64 start_addr;
@@ -288,6 +306,10 @@ struct lkmdbg_vma_query_request {
 	__u64 entries_addr;
 	__u32 max_entries;
 	__u32 flags;
+	__u32 match_flags_mask;
+	__u32 match_flags_value;
+	__u32 match_prot_mask;
+	__u32 match_prot_value;
 	__u64 names_addr;
 	__u32 names_size;
 	__u32 entries_filled;
@@ -295,6 +317,7 @@ struct lkmdbg_vma_query_request {
 	__u32 done;
 	__u32 reserved0;
 	__u64 next_addr;
+	__u64 generation;
 };
 
 struct lkmdbg_image_entry {
@@ -471,6 +494,7 @@ struct lkmdbg_page_entry {
 	__u32 dev_minor;
 	__u32 page_shift;
 	__u32 pt_level;
+	__u32 pt_flags;
 	__u32 reserved0;
 };
 

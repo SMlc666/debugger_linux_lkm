@@ -12,18 +12,30 @@
 #define LKMDBG_PHYS_MAX_BATCH_BYTES (1024U * 1024U)
 #define LKMDBG_PHYS_MAX_WINDOW_BYTES (16U * PAGE_SIZE)
 
+static void lkmdbg_phys_reset_result(struct lkmdbg_phys_op *op)
+{
+	op->bytes_done = 0;
+	op->resolved_phys_addr = 0;
+	op->page_shift = 0;
+	op->pt_level = LKMDBG_PAGE_LEVEL_NONE;
+	op->pt_flags = 0;
+	op->phys_span_length = 0;
+}
+
 static int lkmdbg_validate_phys_op(const struct lkmdbg_phys_op *op)
 {
 	if (!op->length || op->length > LKMDBG_PHYS_MAX_XFER)
 		return -EINVAL;
 
-	if (!op->local_addr)
+	if (!(op->flags & LKMDBG_PHYS_OP_FLAG_TRANSLATE_ONLY) && !op->local_addr)
 		return -EINVAL;
 
 	if (op->phys_addr + op->length < op->phys_addr)
 		return -EINVAL;
 
-	if (op->flags & ~LKMDBG_PHYS_OP_FLAG_TARGET_VADDR)
+	if (op->flags &
+	    ~(LKMDBG_PHYS_OP_FLAG_TARGET_VADDR |
+	      LKMDBG_PHYS_OP_FLAG_TRANSLATE_ONLY))
 		return -EINVAL;
 
 	if (op->flags & LKMDBG_PHYS_OP_FLAG_TARGET_VADDR) {
@@ -106,6 +118,12 @@ static void lkmdbg_phys_accumulate_progress(const struct lkmdbg_phys_op *ops,
 
 	for (i = 0; i < op_count; i++) {
 		total_bytes += ops[i].bytes_done;
+		if (ops[i].flags & LKMDBG_PHYS_OP_FLAG_TRANSLATE_ONLY) {
+			if (!ops[i].phys_span_length)
+				break;
+			processed++;
+			continue;
+		}
 		if (!ops[i].bytes_done)
 			break;
 		processed++;
@@ -215,6 +233,39 @@ static long lkmdbg_phys_xfer_target_vaddr(struct mm_struct *mm, u64 remote_addr,
 	return (long)total_done;
 }
 
+static int lkmdbg_phys_translate_target_vaddr(struct mm_struct *mm,
+					      struct lkmdbg_phys_op *op)
+{
+	struct lkmdbg_target_pt_info pt_info;
+	unsigned long addr;
+	u64 leaf_size;
+	u64 leaf_offset;
+	int ret;
+
+	addr = (unsigned long)op->phys_addr;
+
+	mmap_read_lock(mm);
+	ret = lkmdbg_target_pt_lookup_locked(mm, addr, &pt_info);
+	mmap_read_unlock(mm);
+	if (ret)
+		return ret;
+
+	if (!(pt_info.flags & LKMDBG_TARGET_PT_FLAG_PRESENT) || !pt_info.page_shift)
+		return -ENOENT;
+
+	leaf_size = 1ULL << pt_info.page_shift;
+	leaf_offset = addr & (leaf_size - 1);
+
+	op->resolved_phys_addr = pt_info.phys_addr;
+	if (!(pt_info.flags & LKMDBG_TARGET_PT_FLAG_HUGE))
+		op->resolved_phys_addr += leaf_offset;
+	op->page_shift = pt_info.page_shift;
+	op->pt_level = pt_info.level;
+	op->pt_flags = pt_info.pt_flags;
+	op->phys_span_length = min_t(u64, op->length, leaf_size - leaf_offset);
+	return 0;
+}
+
 static long lkmdbg_phys_xfer_ops(struct lkmdbg_phys_op *ops, u32 op_count,
 				 struct mm_struct *target_mm, bool write)
 {
@@ -232,7 +283,7 @@ static long lkmdbg_phys_xfer_ops(struct lkmdbg_phys_op *ops, u32 op_count,
 			return -E2BIG;
 
 		batch_total += ops[i].length;
-		ops[i].bytes_done = 0;
+		lkmdbg_phys_reset_result(&ops[i]);
 	}
 
 	for (i = 0; i < op_count; i++) {
@@ -241,10 +292,20 @@ static long lkmdbg_phys_xfer_ops(struct lkmdbg_phys_op *ops, u32 op_count,
 		if (ops[i].flags & LKMDBG_PHYS_OP_FLAG_TARGET_VADDR) {
 			if (!target_mm)
 				return -ENODEV;
+			ret = lkmdbg_phys_translate_target_vaddr(target_mm, &ops[i]);
+			if (ret)
+				return ret;
+			if (ops[i].flags & LKMDBG_PHYS_OP_FLAG_TRANSLATE_ONLY)
+				continue;
 			copied = lkmdbg_phys_xfer_target_vaddr(
 				target_mm, ops[i].phys_addr, ops[i].local_addr,
 				ops[i].length, write);
 		} else {
+			ops[i].resolved_phys_addr = ops[i].phys_addr;
+			ops[i].phys_span_length = ops[i].length;
+			ops[i].page_shift = PAGE_SHIFT;
+			if (ops[i].flags & LKMDBG_PHYS_OP_FLAG_TRANSLATE_ONLY)
+				continue;
 			copied = lkmdbg_phys_xfer_window(
 				(phys_addr_t)ops[i].phys_addr, ops[i].local_addr,
 				ops[i].length, write);

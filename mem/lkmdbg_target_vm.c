@@ -6,6 +6,48 @@
 
 #include "lkmdbg_internal.h"
 
+static u32 lkmdbg_target_pt_decode_flags(u64 entry_raw)
+{
+	u32 flags = 0;
+
+#ifdef PTE_VALID
+	if (entry_raw & PTE_VALID)
+		flags |= LKMDBG_PAGE_PT_FLAG_VALID;
+#endif
+#ifdef PTE_USER
+	if (entry_raw & PTE_USER)
+		flags |= LKMDBG_PAGE_PT_FLAG_USER;
+#endif
+#if defined(PTE_WRITE)
+	if (entry_raw & PTE_WRITE)
+		flags |= LKMDBG_PAGE_PT_FLAG_WRITE;
+#elif defined(PTE_RDONLY)
+	if (!(entry_raw & PTE_RDONLY))
+		flags |= LKMDBG_PAGE_PT_FLAG_WRITE;
+#endif
+#ifdef PTE_DIRTY
+	if (entry_raw & PTE_DIRTY)
+		flags |= LKMDBG_PAGE_PT_FLAG_DIRTY;
+#endif
+#ifdef PTE_AF
+	if (entry_raw & PTE_AF)
+		flags |= LKMDBG_PAGE_PT_FLAG_YOUNG;
+#endif
+#ifdef PTE_UXN
+	if (!(entry_raw & PTE_UXN))
+		flags |= LKMDBG_PAGE_PT_FLAG_EXEC;
+#endif
+#if defined(PTE_PROT_NONE)
+	if (entry_raw & PTE_PROT_NONE)
+		flags |= LKMDBG_PAGE_PT_FLAG_PROTNONE;
+#elif defined(PTE_PRESENT_INVALID)
+	if (entry_raw & PTE_PRESENT_INVALID)
+		flags |= LKMDBG_PAGE_PT_FLAG_PROTNONE;
+#endif
+
+	return flags;
+}
+
 u32 lkmdbg_target_vm_prot_bits(u64 vm_flags)
 {
 	u32 prot = 0;
@@ -124,6 +166,7 @@ static void lkmdbg_target_pt_fill_leaf(struct lkmdbg_target_pt_info *info,
 	info->level = level;
 	info->page_shift = page_shift;
 	info->flags |= LKMDBG_TARGET_PT_FLAG_PRESENT;
+	info->pt_flags = lkmdbg_target_pt_decode_flags(entry_raw);
 	if (huge)
 		info->flags |= LKMDBG_TARGET_PT_FLAG_HUGE;
 }
@@ -194,6 +237,7 @@ int lkmdbg_target_pt_lookup_locked(struct mm_struct *mm, unsigned long addr,
 	info->entry_raw = (u64)pte_val(pte);
 	info->level = LKMDBG_PAGE_LEVEL_PTE;
 	info->page_shift = PAGE_SHIFT;
+	info->pt_flags = lkmdbg_target_pt_decode_flags(info->entry_raw);
 	if (pte_present(pte))
 		lkmdbg_target_pt_fill_leaf(info, (u64)pte_val(pte),
 					  (u64)pte_pfn(pte) << PAGE_SHIFT,

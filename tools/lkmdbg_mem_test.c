@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <linux/memfd.h>
+#include <linux/limits.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -181,6 +182,26 @@ static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   void *buf, size_t len);
 static int child_fill_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   size_t len, uint8_t value);
+static int query_target_pages_ex(int session_fd, uint64_t start_addr,
+				 uint64_t length, uint32_t flags,
+				 struct page_query_buffer *buf,
+				 struct lkmdbg_page_query_request *reply_out);
+static int query_target_vmas_ex(int session_fd, uint64_t start_addr,
+				uint32_t flags, uint32_t match_flags_mask,
+				uint32_t match_flags_value,
+				uint32_t match_prot_mask,
+				uint32_t match_prot_value,
+				struct vma_query_buffer *buf,
+				struct lkmdbg_vma_query_request *reply_out);
+static int lookup_target_vma_ex(int session_fd, uintptr_t remote_addr,
+				uint32_t flags, uint32_t match_flags_mask,
+				uint32_t match_flags_value,
+				uint32_t match_prot_mask,
+				uint32_t match_prot_value,
+				struct vma_query_buffer *buf,
+				struct lkmdbg_vma_entry *entry_out,
+				char *name_out, size_t name_out_size,
+				struct lkmdbg_vma_query_request *reply_out);
 static const char *describe_pte_mode(uint32_t mode, uint32_t flags, char *buf,
 				     size_t buf_size);
 static const char *describe_pte_patch_state(uint32_t state, char *buf,
@@ -914,6 +935,15 @@ static int query_target_pages(int session_fd, uint64_t start_addr,
 			      struct page_query_buffer *buf,
 			      struct lkmdbg_page_query_request *reply_out)
 {
+	return query_target_pages_ex(session_fd, start_addr, length, 0, buf,
+				     reply_out);
+}
+
+static int query_target_pages_ex(int session_fd, uint64_t start_addr,
+				 uint64_t length, uint32_t flags,
+				 struct page_query_buffer *buf,
+				 struct lkmdbg_page_query_request *reply_out)
+{
 	struct lkmdbg_page_query_request req = {
 		.version = LKMDBG_PROTO_VERSION,
 		.size = sizeof(req),
@@ -921,6 +951,7 @@ static int query_target_pages(int session_fd, uint64_t start_addr,
 		.length = length,
 		.entries_addr = (uintptr_t)buf->entries,
 		.max_entries = PAGE_QUERY_BATCH,
+		.flags = flags,
 	};
 
 	if (ioctl(session_fd, LKMDBG_IOC_QUERY_PAGES, &req) < 0) {
@@ -1571,12 +1602,29 @@ static int query_target_vmas(int session_fd, uint64_t start_addr,
 			     struct vma_query_buffer *buf,
 			     struct lkmdbg_vma_query_request *reply_out)
 {
+	return query_target_vmas_ex(session_fd, start_addr, 0, 0, 0, 0, 0, buf,
+				    reply_out);
+}
+
+static int query_target_vmas_ex(int session_fd, uint64_t start_addr,
+				uint32_t flags, uint32_t match_flags_mask,
+				uint32_t match_flags_value,
+				uint32_t match_prot_mask,
+				uint32_t match_prot_value,
+				struct vma_query_buffer *buf,
+				struct lkmdbg_vma_query_request *reply_out)
+{
 	struct lkmdbg_vma_query_request req = {
 		.version = LKMDBG_PROTO_VERSION,
 		.size = sizeof(req),
 		.start_addr = start_addr,
 		.entries_addr = (uintptr_t)buf->entries,
 		.max_entries = VMA_QUERY_BATCH,
+		.flags = flags,
+		.match_flags_mask = match_flags_mask,
+		.match_flags_value = match_flags_value,
+		.match_prot_mask = match_prot_mask,
+		.match_prot_value = match_prot_value,
 		.names_addr = (uintptr_t)buf->names,
 		.names_size = VMA_QUERY_NAMES_SIZE,
 	};
@@ -1646,10 +1694,27 @@ static int lookup_target_vma(int session_fd, uintptr_t remote_addr,
 			     struct lkmdbg_vma_entry *entry_out,
 			     char *name_out, size_t name_out_size)
 {
+	return lookup_target_vma_ex(session_fd, remote_addr, 0, 0, 0, 0, 0, buf,
+				    entry_out, name_out, name_out_size, NULL);
+}
+
+static int lookup_target_vma_ex(int session_fd, uintptr_t remote_addr,
+				uint32_t flags, uint32_t match_flags_mask,
+				uint32_t match_flags_value,
+				uint32_t match_prot_mask,
+				uint32_t match_prot_value,
+				struct vma_query_buffer *buf,
+				struct lkmdbg_vma_entry *entry_out,
+				char *name_out, size_t name_out_size,
+				struct lkmdbg_vma_query_request *reply_out)
+{
 	struct lkmdbg_vma_query_request reply;
 	unsigned int i;
 
-	if (query_target_vmas(session_fd, remote_addr, buf, &reply) < 0)
+	if (query_target_vmas_ex(session_fd, remote_addr, flags,
+				 match_flags_mask, match_flags_value,
+				 match_prot_mask, match_prot_value, buf,
+				 &reply) < 0)
 		return -1;
 
 	for (i = 0; i < reply.entries_filled; i++) {
@@ -1660,6 +1725,8 @@ static int lookup_target_vma(int session_fd, uintptr_t remote_addr,
 			continue;
 
 		*entry_out = *entry;
+		if (reply_out)
+			*reply_out = reply;
 		if (!name_out || !name_out_size)
 			return 0;
 
@@ -1785,7 +1852,14 @@ static int verify_vma_query(int session_fd, const struct child_info *info)
 {
 	struct vma_query_buffer buf = { 0 };
 	struct lkmdbg_vma_entry entry;
+	struct lkmdbg_vma_query_request full_reply;
+	struct lkmdbg_vma_query_request full_reply_again;
+	struct lkmdbg_vma_query_request filtered_reply;
 	char name[256];
+	char full_name[PATH_MAX];
+	uint64_t cursor = 0;
+	unsigned int filtered_total = 0;
+	int saw_filtered_file = 0;
 	int ret = -1;
 
 	buf.entries = calloc(VMA_QUERY_BATCH, sizeof(*buf.entries));
@@ -1831,11 +1905,92 @@ static int verify_vma_query(int session_fd, const struct child_info *info)
 		goto out;
 	}
 
+	memset(&entry, 0, sizeof(entry));
+	memset(full_name, 0, sizeof(full_name));
+	memset(&full_reply, 0, sizeof(full_reply));
+	if (lookup_target_vma_ex(session_fd, info->file_addr,
+				 LKMDBG_VMA_QUERY_FLAG_FULL_PATH, 0, 0, 0, 0,
+				 &buf, &entry, full_name, sizeof(full_name),
+				 &full_reply) < 0)
+		goto out;
+	if (!full_reply.generation || !entry.name_size ||
+	    strstr(full_name, "lkmdbg-vma") == NULL) {
+		fprintf(stderr,
+			"full-path VMA mismatch generation=0x%" PRIx64 " name=%s\n",
+			(uint64_t)full_reply.generation, full_name);
+		goto out;
+	}
+
+	memset(&full_reply_again, 0, sizeof(full_reply_again));
+	if (query_target_vmas_ex(session_fd, 0, LKMDBG_VMA_QUERY_FLAG_FULL_PATH,
+				 0, 0, 0, 0, &buf, &full_reply_again) < 0)
+		goto out;
+	if (full_reply_again.generation != full_reply.generation) {
+		fprintf(stderr,
+			"VMA generation changed unexpectedly old=0x%" PRIx64 " new=0x%" PRIx64 "\n",
+			(uint64_t)full_reply.generation,
+			(uint64_t)full_reply_again.generation);
+		goto out;
+	}
+
+	for (;;) {
+		unsigned int i;
+
+		if (query_target_vmas_ex(session_fd, cursor, 0,
+					 LKMDBG_VMA_FLAG_FILE,
+					 LKMDBG_VMA_FLAG_FILE, 0, 0, &buf,
+					 &filtered_reply) < 0)
+			goto out;
+		if (filtered_reply.generation != full_reply.generation) {
+			fprintf(stderr,
+				"filtered VMA generation mismatch full=0x%" PRIx64 " filtered=0x%" PRIx64 "\n",
+				(uint64_t)full_reply.generation,
+				(uint64_t)filtered_reply.generation);
+			goto out;
+		}
+		for (i = 0; i < filtered_reply.entries_filled; i++) {
+			const struct lkmdbg_vma_entry *filtered = &buf.entries[i];
+
+			if (!(filtered->flags & LKMDBG_VMA_FLAG_FILE)) {
+				fprintf(stderr,
+					"filtered VMA missing file flag flags=0x%x\n",
+					filtered->flags);
+				goto out;
+			}
+			if (info->file_addr >= filtered->start_addr &&
+			    info->file_addr < filtered->end_addr)
+				saw_filtered_file = 1;
+			if (info->force_read_addr >= filtered->start_addr &&
+			    info->force_read_addr < filtered->end_addr) {
+				fprintf(stderr,
+					"filtered VMA unexpectedly returned anon range\n");
+				goto out;
+			}
+		}
+		filtered_total += filtered_reply.entries_filled;
+		if (filtered_reply.done)
+			break;
+		if (filtered_reply.next_addr <= cursor) {
+			fprintf(stderr,
+				"filtered VMA cursor stalled old=0x%" PRIx64 " new=0x%" PRIx64 "\n",
+				(uint64_t)cursor, (uint64_t)filtered_reply.next_addr);
+			goto out;
+		}
+		cursor = filtered_reply.next_addr;
+	}
+	if (!filtered_total || !saw_filtered_file) {
+		fprintf(stderr,
+			"filtered VMA query missing file mapping total=%u saw_file=%d\n",
+			filtered_total, saw_filtered_file);
+		goto out;
+	}
+
 	if (verify_vma_iteration(session_fd, info, &buf) < 0)
 		goto out;
 
-	printf("selftest vma query ok file=%s inode=%" PRIu64 " dev=%u:%u\n",
-	       name, (uint64_t)info->file_inode, info->file_dev_major,
+	printf("selftest vma query ok file=%s full=%s generation=0x%" PRIx64 " inode=%" PRIu64 " dev=%u:%u\n",
+	       name, full_name, (uint64_t)full_reply.generation,
+	       (uint64_t)info->file_inode, info->file_dev_major,
 	       info->file_dev_minor);
 	ret = 0;
 
@@ -2018,12 +2173,14 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 	if (!(entry.flags & LKMDBG_PAGE_FLAG_PT_PRESENT) ||
 	    entry.pt_level != LKMDBG_PAGE_LEVEL_PTE ||
 	    entry.page_shift != expected_page_shift ||
-	    entry.phys_addr == 0 || entry.pt_entry_raw == 0) {
+	    entry.phys_addr == 0 || entry.pt_entry_raw == 0 ||
+	    !(entry.pt_flags & LKMDBG_PAGE_PT_FLAG_VALID) ||
+	    !(entry.pt_flags & LKMDBG_PAGE_PT_FLAG_USER)) {
 		fprintf(stderr,
-			"force-read page table mismatch level=%u shift=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x\n",
+			"force-read page table mismatch level=%u shift=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x pt_flags=0x%x\n",
 			entry.pt_level, entry.page_shift,
 			(uint64_t)entry.phys_addr,
-			(uint64_t)entry.pt_entry_raw, entry.flags);
+			(uint64_t)entry.pt_entry_raw, entry.flags, entry.pt_flags);
 		goto out;
 	}
 	force_read_flags = entry.flags;
@@ -2044,12 +2201,14 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 	if (!(entry.flags & LKMDBG_PAGE_FLAG_PT_PRESENT) ||
 	    entry.pt_level != LKMDBG_PAGE_LEVEL_PTE ||
 	    entry.page_shift != expected_page_shift ||
-	    entry.phys_addr == 0 || entry.pt_entry_raw == 0) {
+	    entry.phys_addr == 0 || entry.pt_entry_raw == 0 ||
+	    !(entry.pt_flags & LKMDBG_PAGE_PT_FLAG_VALID) ||
+	    !(entry.pt_flags & LKMDBG_PAGE_PT_FLAG_USER)) {
 		fprintf(stderr,
-			"force-write page table mismatch level=%u shift=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x\n",
+			"force-write page table mismatch level=%u shift=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x pt_flags=0x%x\n",
 			entry.pt_level, entry.page_shift,
 			(uint64_t)entry.phys_addr,
-			(uint64_t)entry.pt_entry_raw, entry.flags);
+			(uint64_t)entry.pt_entry_raw, entry.flags, entry.pt_flags);
 		goto out;
 	}
 	force_write_flags = entry.flags;
@@ -2070,11 +2229,13 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 	}
 	if (entry.flags & LKMDBG_PAGE_FLAG_PT_PRESENT) {
 		if (entry.pt_level == LKMDBG_PAGE_LEVEL_NONE ||
-		    entry.phys_addr == 0 || entry.pt_entry_raw == 0) {
+		    entry.phys_addr == 0 || entry.pt_entry_raw == 0 ||
+		    !(entry.pt_flags & LKMDBG_PAGE_PT_FLAG_VALID)) {
 			fprintf(stderr,
-				"file page table mismatch level=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x\n",
+				"file page table mismatch level=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x pt_flags=0x%x\n",
 				entry.pt_level, (uint64_t)entry.phys_addr,
-				(uint64_t)entry.pt_entry_raw, entry.flags);
+				(uint64_t)entry.pt_entry_raw, entry.flags,
+				entry.pt_flags);
 			goto out;
 		}
 	} else if (entry.pt_level != LKMDBG_PAGE_LEVEL_NONE ||
@@ -2084,6 +2245,40 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 			entry.pt_level, (uint64_t)entry.phys_addr,
 			(uint64_t)entry.pt_entry_raw, entry.flags);
 		goto out;
+	}
+
+	{
+		struct lkmdbg_page_query_request reply;
+		uint64_t start = info->large_addr;
+		uint64_t end = info->large_addr + (3ULL * info->page_size);
+		uint64_t last_addr = 0;
+		unsigned int i;
+
+		if (query_target_pages_ex(session_fd, start, end - start,
+					  LKMDBG_PAGE_QUERY_FLAG_LEAF_STEP,
+					  &buf, &reply) < 0)
+			goto out;
+		if (!reply.entries_filled) {
+			fprintf(stderr, "leaf-step QUERY_PAGES returned no entries\n");
+			goto out;
+		}
+		for (i = 0; i < reply.entries_filled; i++) {
+			if (i && buf.entries[i].page_addr <= last_addr) {
+				fprintf(stderr,
+					"leaf-step QUERY_PAGES not monotonic old=0x%" PRIx64 " new=0x%" PRIx64 "\n",
+					(uint64_t)last_addr,
+					(uint64_t)buf.entries[i].page_addr);
+				goto out;
+			}
+			if (buf.entries[i].page_shift &&
+			    buf.entries[i].page_shift < expected_page_shift) {
+				fprintf(stderr,
+					"leaf-step QUERY_PAGES returned invalid shift=%u\n",
+					buf.entries[i].page_shift);
+				goto out;
+			}
+			last_addr = buf.entries[i].page_addr;
+		}
 	}
 
 	printf("selftest page query ok nofault=0x%x force_read=0x%x force_write=0x%x\n",
@@ -2185,6 +2380,8 @@ static int verify_physical_memory_api(int session_fd, const struct child_info *i
 {
 	struct page_query_buffer buf = { 0 };
 	struct lkmdbg_page_entry entry;
+	struct lkmdbg_phys_op translate_op;
+	struct lkmdbg_phys_request translate_req;
 	uint32_t bytes_done = 0;
 	uint8_t virt_before;
 	uint8_t via_vaddr;
@@ -2253,6 +2450,39 @@ static int verify_physical_memory_api(int session_fd, const struct child_info *i
 		goto out;
 	}
 
+	memset(&translate_op, 0, sizeof(translate_op));
+	memset(&translate_req, 0, sizeof(translate_req));
+	translate_op.phys_addr = info->basic_addr;
+	translate_op.length = sizeof(via_vaddr);
+	translate_op.flags = LKMDBG_PHYS_OP_FLAG_TARGET_VADDR |
+			     LKMDBG_PHYS_OP_FLAG_TRANSLATE_ONLY;
+	if (xfer_physical_memory(session_fd, &translate_op, 1, 0, &translate_req,
+				 0) < 0) {
+		fprintf(stderr, "target-vaddr translate-only request failed\n");
+		goto out;
+	}
+	if (translate_req.ops_done != 1 || translate_req.bytes_done != 0 ||
+	    translate_op.bytes_done != 0 ||
+	    translate_op.resolved_phys_addr !=
+		    entry.phys_addr +
+			    (info->basic_addr & (info->page_size - 1)) ||
+	    translate_op.page_shift != entry.page_shift ||
+	    translate_op.pt_level != entry.pt_level ||
+	    !(translate_op.pt_flags & LKMDBG_PAGE_PT_FLAG_VALID) ||
+	    !translate_op.phys_span_length) {
+		fprintf(stderr,
+			"translate-only mismatch ops_done=%u bytes_done=%" PRIu64 " phys=0x%" PRIx64 " expected=0x%" PRIx64 " shift=%u/%u level=%u/%u pt_flags=0x%x span=%u\n",
+			translate_req.ops_done, (uint64_t)translate_req.bytes_done,
+			(uint64_t)translate_op.resolved_phys_addr,
+			(uint64_t)(entry.phys_addr +
+				   (info->basic_addr &
+				    (info->page_size - 1))),
+			translate_op.page_shift, entry.page_shift,
+			translate_op.pt_level, entry.pt_level,
+			translate_op.pt_flags, translate_op.phys_span_length);
+		goto out;
+	}
+
 	phys_new = (uint8_t)(phys_before ^ 0x5aU);
 	bytes_done = 0;
 	if (write_physical_memory_flags(session_fd, info->basic_addr, &phys_new,
@@ -2280,10 +2510,10 @@ static int verify_physical_memory_api(int session_fd, const struct child_info *i
 	}
 
 	ret = 0;
-	printf("selftest physical memory ok phys=0x%" PRIx64 " byte=0x%02x\n",
+	printf("selftest physical memory ok phys=0x%" PRIx64 " xlate=0x%" PRIx64 " byte=0x%02x\n",
 	       (uint64_t)(entry.phys_addr +
 			  (info->basic_addr & (info->page_size - 1))),
-	       phys_new);
+	       (uint64_t)translate_op.resolved_phys_addr, phys_new);
 
 restore:
 	bytes_done = 0;
@@ -3114,8 +3344,14 @@ static int dump_target_vmas(int session_fd)
 		struct lkmdbg_vma_query_request reply;
 		unsigned int i;
 
-		if (query_target_vmas(session_fd, cursor, &buf, &reply) < 0)
+		if (query_target_vmas_ex(session_fd, cursor,
+					 LKMDBG_VMA_QUERY_FLAG_FULL_PATH, 0, 0,
+					 0, 0, &buf, &reply) < 0)
 			goto out;
+
+		if (!cursor)
+			printf("vma.generation=0x%" PRIx64 "\n",
+			       (uint64_t)reply.generation);
 
 		for (i = 0; i < reply.entries_filled; i++) {
 			const struct lkmdbg_vma_entry *entry = &buf.entries[i];
@@ -3196,7 +3432,7 @@ static int dump_target_pages(int session_fd, uint64_t remote_addr,
 			last_addr = buf.entries[i].page_addr;
 			printf("page=0x%" PRIx64 " flags=0x%x vm_flags=0x%" PRIx64
 			       " level=%s shift=%u pt=0x%" PRIx64
-			       " phys=0x%" PRIx64
+			       " phys=0x%" PRIx64 " pt_flags=0x%x"
 			       " pgoff=0x%" PRIx64 " inode=%" PRIu64 " dev=%u:%u\n",
 			       (uint64_t)buf.entries[i].page_addr,
 			       buf.entries[i].flags,
@@ -3205,6 +3441,7 @@ static int dump_target_pages(int session_fd, uint64_t remote_addr,
 			       buf.entries[i].page_shift,
 			       (uint64_t)buf.entries[i].pt_entry_raw,
 			       (uint64_t)buf.entries[i].phys_addr,
+			       buf.entries[i].pt_flags,
 			       (uint64_t)buf.entries[i].pgoff,
 			       (uint64_t)buf.entries[i].inode,
 			       buf.entries[i].dev_major,

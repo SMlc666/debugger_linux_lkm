@@ -73,7 +73,7 @@ static int lkmdbg_validate_page_query(struct lkmdbg_page_query_request *req)
 	if (!req->length)
 		return -EINVAL;
 
-	if (req->flags)
+	if (req->flags & ~LKMDBG_PAGE_QUERY_FLAG_LEAF_STEP)
 		return -EINVAL;
 
 	if (req->start_addr >= (u64)TASK_SIZE_MAX)
@@ -311,10 +311,30 @@ static void lkmdbg_page_fill_pt_info(struct lkmdbg_page_entry *entry,
 	entry->phys_addr = info->phys_addr;
 	entry->page_shift = info->page_shift;
 	entry->pt_level = info->level;
+	entry->pt_flags = info->pt_flags;
 	if (info->flags & LKMDBG_TARGET_PT_FLAG_PRESENT)
 		entry->flags |= LKMDBG_PAGE_FLAG_PT_PRESENT;
 	if (info->flags & LKMDBG_TARGET_PT_FLAG_HUGE)
 		entry->flags |= LKMDBG_PAGE_FLAG_PT_HUGE;
+}
+
+static unsigned long lkmdbg_page_query_next_cursor(
+	unsigned long cursor, const struct lkmdbg_target_pt_info *pt_info,
+	u32 query_flags)
+{
+	u64 leaf_size;
+	u64 next;
+
+	if (!(query_flags & LKMDBG_PAGE_QUERY_FLAG_LEAF_STEP) ||
+	    !pt_info->page_shift)
+		return cursor + PAGE_SIZE;
+
+	leaf_size = 1ULL << pt_info->page_shift;
+	next = ((u64)cursor & ~(leaf_size - 1)) + leaf_size;
+	if (next <= cursor)
+		return cursor + PAGE_SIZE;
+
+	return (unsigned long)next;
 }
 
 static void lkmdbg_page_probe_access(struct mm_struct *mm,
@@ -560,7 +580,8 @@ long lkmdbg_page_query(struct lkmdbg_session *session, void __user *argp)
 		}
 
 		filled++;
-		cursor += PAGE_SIZE;
+		cursor = lkmdbg_page_query_next_cursor(cursor, &pt_info,
+						       req.flags);
 	}
 	mmap_read_unlock(mm);
 
