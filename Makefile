@@ -31,6 +31,9 @@ lkmdbg-mem-y := \
 	mem/lkmdbg_image.o \
 	mem/lkmdbg_vma.o
 
+lkmdbg-input-y := \
+	input/lkmdbg_input.o
+
 lkmdbg-task-y := \
 	task/lkmdbg_freeze.o \
 	task/lkmdbg_thread_ctrl.o \
@@ -44,6 +47,7 @@ lkmdbg-y := \
 	$(lkmdbg-hook-y) \
 	$(lkmdbg-transport-y) \
 	$(lkmdbg-mem-y) \
+	$(lkmdbg-input-y) \
 	$(lkmdbg-task-y) \
 	$(lkmdbg-ui-y)
 else

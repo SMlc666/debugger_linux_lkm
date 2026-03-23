@@ -617,6 +617,7 @@ static int lkmdbg_session_release(struct inode *inode, struct file *file)
 	lkmdbg_pte_patch_release(session);
 	lkmdbg_remote_map_release_session(session);
 	lkmdbg_remote_alloc_release_session(session);
+	lkmdbg_input_release_session(session);
 	lkmdbg_thread_ctrl_release(session);
 	lkmdbg_session_freeze_release(session);
 	wait_event(session->async_waitq, atomic_read(&session->async_refs) == 0);
@@ -789,6 +790,12 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_set_stealth(session, argp);
 	case LKMDBG_IOC_GET_STEALTH:
 		return lkmdbg_get_stealth(session, argp);
+	case LKMDBG_IOC_QUERY_INPUT_DEVICES:
+		return lkmdbg_query_input_devices(session, argp);
+	case LKMDBG_IOC_GET_INPUT_DEVICE_INFO:
+		return lkmdbg_get_input_device_info(session, argp);
+	case LKMDBG_IOC_OPEN_INPUT_CHANNEL:
+		return lkmdbg_open_input_channel(session, argp);
 	case LKMDBG_IOC_GET_STOP_STATE:
 		return lkmdbg_get_stop_state(session, argp);
 	case LKMDBG_IOC_CONTINUE_TARGET:
@@ -857,6 +864,7 @@ int lkmdbg_open_session(void __user *argp)
 	INIT_LIST_HEAD(&session->pte_patches);
 	INIT_LIST_HEAD(&session->remote_maps);
 	INIT_LIST_HEAD(&session->remote_allocs);
+	INIT_LIST_HEAD(&session->input_channels);
 	INIT_WORK(&session->stop_work, lkmdbg_session_stop_workfn);
 	atomic_set(&session->async_refs, 0);
 	session->owner_tgid = current->tgid;

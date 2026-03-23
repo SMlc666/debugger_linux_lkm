@@ -301,8 +301,20 @@ static int __init lkmdbg_init(void)
 	}
 	lkmdbg_trace_stage("transport_ready");
 
+	ret = lkmdbg_input_init();
+	if (ret) {
+		lkmdbg_transport_exit();
+		lkmdbg_hooks_exit();
+		lkmdbg_stealth_exit();
+		lkmdbg_symbols_exit();
+		lkmdbg_debugfs_exit();
+		return ret;
+	}
+	lkmdbg_trace_stage("input_ready");
+
 	ret = lkmdbg_runtime_hooks_init();
 	if (ret) {
+		lkmdbg_input_exit();
 		lkmdbg_transport_exit();
 		lkmdbg_hooks_exit();
 		lkmdbg_stealth_exit();
@@ -315,6 +327,7 @@ static int __init lkmdbg_init(void)
 	ret = lkmdbg_thread_ctrl_init();
 	if (ret) {
 		lkmdbg_runtime_hooks_exit();
+		lkmdbg_input_exit();
 		lkmdbg_transport_exit();
 		lkmdbg_hooks_exit();
 		lkmdbg_stealth_exit();
@@ -335,6 +348,7 @@ static void __exit lkmdbg_exit(void)
 	lkmdbg_stealth_exit();
 	lkmdbg_thread_ctrl_exit();
 	lkmdbg_runtime_hooks_exit();
+	lkmdbg_input_exit();
 	lkmdbg_transport_exit();
 	lkmdbg_selftest_hook = NULL;
 	lkmdbg_selftest_orig = NULL;

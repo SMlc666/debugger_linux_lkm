@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 19
+#define LKMDBG_PROTO_VERSION 20
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -45,6 +45,24 @@
 
 #define LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE 0x00000001U
 #define LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN 0x00000002U
+
+#define LKMDBG_INPUT_DEVICE_TEXT_MAX 80U
+#define LKMDBG_INPUT_EV_WORDS 1U
+#define LKMDBG_INPUT_KEY_WORDS 12U
+#define LKMDBG_INPUT_REL_WORDS 1U
+#define LKMDBG_INPUT_ABS_WORDS 1U
+#define LKMDBG_INPUT_PROP_WORDS 1U
+#define LKMDBG_INPUT_ABS_COUNT 64U
+
+#define LKMDBG_INPUT_DEVICE_FLAG_HAS_KEYS 0x00000001U
+#define LKMDBG_INPUT_DEVICE_FLAG_HAS_REL 0x00000002U
+#define LKMDBG_INPUT_DEVICE_FLAG_HAS_ABS 0x00000004U
+#define LKMDBG_INPUT_DEVICE_FLAG_HAS_MT 0x00000008U
+#define LKMDBG_INPUT_DEVICE_FLAG_CAN_INJECT 0x00000010U
+
+#define LKMDBG_INPUT_CHANNEL_FLAG_INCLUDE_INJECTED 0x00000001U
+
+#define LKMDBG_INPUT_EVENT_FLAG_INJECTED 0x00000001U
 
 #define LKMDBG_STOP_REASON_FREEZE 1U
 #define LKMDBG_STOP_REASON_BREAKPOINT 2U
@@ -689,6 +707,77 @@ struct lkmdbg_stealth_request {
 	__u32 supported_flags;
 };
 
+struct lkmdbg_input_device_entry {
+	__u64 device_id;
+	__u32 bustype;
+	__u16 vendor;
+	__u16 product;
+	__u16 version_id;
+	__u16 reserved0;
+	__u32 flags;
+	char name[LKMDBG_INPUT_DEVICE_TEXT_MAX];
+	char phys[LKMDBG_INPUT_DEVICE_TEXT_MAX];
+	char uniq[LKMDBG_INPUT_DEVICE_TEXT_MAX];
+};
+
+struct lkmdbg_input_query_request {
+	__u32 version;
+	__u32 size;
+	__u64 entries_addr;
+	__u32 max_entries;
+	__u32 flags;
+	__u64 start_id;
+	__u32 entries_filled;
+	__u32 done;
+	__u64 next_id;
+};
+
+struct lkmdbg_input_absinfo {
+	__s32 value;
+	__s32 minimum;
+	__s32 maximum;
+	__s32 fuzz;
+	__s32 flat;
+	__s32 resolution;
+};
+
+struct lkmdbg_input_device_info_request {
+	__u32 version;
+	__u32 size;
+	__u64 device_id;
+	__u32 flags;
+	__u32 supported_channel_flags;
+	struct lkmdbg_input_device_entry entry;
+	__u64 ev_bits[LKMDBG_INPUT_EV_WORDS];
+	__u64 key_bits[LKMDBG_INPUT_KEY_WORDS];
+	__u64 rel_bits[LKMDBG_INPUT_REL_WORDS];
+	__u64 abs_bits[LKMDBG_INPUT_ABS_WORDS];
+	__u64 prop_bits[LKMDBG_INPUT_PROP_WORDS];
+	struct lkmdbg_input_absinfo absinfo[LKMDBG_INPUT_ABS_COUNT];
+};
+
+struct lkmdbg_input_channel_request {
+	__u32 version;
+	__u32 size;
+	__u64 device_id;
+	__u32 flags;
+	__s32 channel_fd;
+	__u64 channel_id;
+	__u32 device_flags;
+	__u32 supported_flags;
+};
+
+struct lkmdbg_input_event {
+	__u64 seq;
+	__u64 timestamp_ns;
+	__u32 type;
+	__u32 code;
+	__s32 value;
+	__u32 flags;
+	__u32 reserved0;
+	__u32 reserved1;
+};
+
 #define LKMDBG_IOC_OPEN_SESSION \
 	_IOW(LKMDBG_IOC_MAGIC, 0x01, struct lkmdbg_open_session_request)
 #define LKMDBG_IOC_GET_STATUS \
@@ -764,5 +853,11 @@ struct lkmdbg_stealth_request {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x31, struct lkmdbg_stealth_request)
 #define LKMDBG_IOC_GET_STEALTH \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x32, struct lkmdbg_stealth_request)
+#define LKMDBG_IOC_QUERY_INPUT_DEVICES \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x33, struct lkmdbg_input_query_request)
+#define LKMDBG_IOC_GET_INPUT_DEVICE_INFO \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x34, struct lkmdbg_input_device_info_request)
+#define LKMDBG_IOC_OPEN_INPUT_CHANNEL \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x35, struct lkmdbg_input_channel_request)
 
 #endif

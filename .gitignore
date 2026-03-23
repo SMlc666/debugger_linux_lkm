@@ -15,4 +15,7 @@ Module.symvers
 *.orig
 *.rej
 tools/lkmdbg_mem_test
+tools/lkmdbg_mmu_test
 tools/lkmdbg_open_session
+tools/lkmdbg_stealth_ctl
+tools/lkmdbg_input_ctl

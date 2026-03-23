@@ -21,6 +21,7 @@
 #define LKMDBG_DIR_NAME "lkmdbg"
 #define LKMDBG_TARGET_PATH "/proc/version"
 #define LKMDBG_SESSION_EVENT_CAPACITY 32
+#define LKMDBG_INPUT_EVENT_CAPACITY 256
 #define LKMDBG_HOOK_NAME_MAX 32
 
 struct mm_struct;
@@ -29,6 +30,7 @@ struct task_struct;
 struct vm_area_struct;
 struct lkmdbg_freezer;
 struct perf_event;
+struct lkmdbg_input_channel;
 
 struct lkmdbg_hook_registry_entry {
 	struct list_head node;
@@ -175,6 +177,8 @@ struct lkmdbg_session {
 	u64 next_remote_map_id;
 	struct list_head remote_allocs;
 	u64 next_remote_alloc_id;
+	struct list_head input_channels;
+	u64 next_input_channel_id;
 	u64 signal_mask_words[2];
 	u32 signal_flags;
 	s32 syscall_trace_tid;
@@ -237,6 +241,16 @@ void lkmdbg_runtime_hooks_exit(void);
 
 int lkmdbg_transport_init(void);
 void lkmdbg_transport_exit(void);
+
+int lkmdbg_input_init(void);
+void lkmdbg_input_exit(void);
+void lkmdbg_input_release_session(struct lkmdbg_session *session);
+long lkmdbg_query_input_devices(struct lkmdbg_session *session,
+				void __user *argp);
+long lkmdbg_get_input_device_info(struct lkmdbg_session *session,
+				 void __user *argp);
+long lkmdbg_open_input_channel(struct lkmdbg_session *session,
+			       void __user *argp);
 
 int lkmdbg_open_session(void __user *argp);
 long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
