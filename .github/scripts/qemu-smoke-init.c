@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/input.h>
 #include <linux/reboot.h>
 #include <limits.h>
 #include <stdarg.h>
@@ -30,11 +31,15 @@
 #define MEM_TEST_TOOL "/lkmdbg_mem_test"
 #define MMU_TEST_TOOL "/lkmdbg_mmu_test"
 #define WATCHPOINT_CTRL_TOOL "/qemu_watchpoint_control"
+#define INPUT_QUERY_BATCH 16U
 #define QEMU_HOOK_SELFTEST_STRESS_REPEATS 5U
 #define QEMU_PROC_VERSION_REPEATS 5U
 #define QEMU_SEQ_READ_REPEATS 3U
 #define QEMU_HOOK_SOAK_PROC_VERSION_REPEATS 50U
 #define QEMU_HOOK_SOAK_SEQ_READ_REPEATS 50U
+#define QEMU_INPUT_HOST_TIMEOUT_MS 15000
+#define QEMU_INPUT_IDLE_TIMEOUT_MS 250
+#define QEMU_INPUT_INJECT_TIMEOUT_MS 1000
 
 static void qemu_poweroff(void)
 {
@@ -307,6 +312,216 @@ static int qemu_open_session(void)
 	return session_fd;
 }
 
+static bool qemu_bitmap64_test(const __u64 *words, size_t word_count,
+			       unsigned int bit)
+{
+	size_t word_index = bit / 64U;
+
+	if (word_index >= word_count)
+		return false;
+
+	return (words[word_index] & (1ULL << (bit % 64U))) != 0;
+}
+
+static void qemu_get_input_device_info(int session_fd, __u64 device_id,
+				       struct lkmdbg_input_device_info_request *req)
+{
+	memset(req, 0, sizeof(*req));
+	req->version = LKMDBG_PROTO_VERSION;
+	req->size = sizeof(*req);
+	req->device_id = device_id;
+
+	if (ioctl(session_fd, LKMDBG_IOC_GET_INPUT_DEVICE_INFO, req) == 0)
+		return;
+
+	qemu_fail("get_input_device_info errno=%d device=%llu", errno,
+		  (unsigned long long)device_id);
+}
+
+static int qemu_open_input_channel(int session_fd, __u64 device_id, __u32 flags)
+{
+	struct lkmdbg_input_channel_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.device_id = device_id,
+		.flags = flags,
+		.channel_fd = -1,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_OPEN_INPUT_CHANNEL, &req) == 0)
+		return req.channel_fd;
+
+	qemu_fail("open_input_channel errno=%d device=%llu flags=0x%x", errno,
+		  (unsigned long long)device_id, flags);
+	return -1;
+}
+
+static ssize_t qemu_input_read_events(int channel_fd,
+				      struct lkmdbg_input_event *events,
+				      size_t max_events, int timeout_ms)
+{
+	struct pollfd pfd = {
+		.fd = channel_fd,
+		.events = POLLIN,
+	};
+	ssize_t nr;
+
+	qemu_check(max_events > 0, "input_read_invalid_max_events");
+	if (poll(&pfd, 1, timeout_ms) < 0)
+		qemu_fail("poll_input_channel errno=%d", errno);
+	if (!(pfd.revents & POLLIN))
+		return 0;
+
+	nr = read(channel_fd, events, max_events * sizeof(events[0]));
+	if (nr < 0)
+		qemu_fail("read_input_channel errno=%d", errno);
+	qemu_check((nr % (ssize_t)sizeof(events[0])) == 0,
+		   "short_input_event_read=%zd", nr);
+	return nr / (ssize_t)sizeof(events[0]);
+}
+
+static __u64 qemu_find_keyboard_input_device(
+	int session_fd, struct lkmdbg_input_device_info_request *info_out)
+{
+	struct lkmdbg_input_device_entry entries[INPUT_QUERY_BATCH];
+	struct lkmdbg_input_query_request query = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(query),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = INPUT_QUERY_BATCH,
+	};
+	struct lkmdbg_input_device_info_request info;
+	bool saw_any = false;
+
+	for (;;) {
+		memset(entries, 0, sizeof(entries));
+		if (ioctl(session_fd, LKMDBG_IOC_QUERY_INPUT_DEVICES, &query) != 0)
+			qemu_fail("query_input_devices errno=%d", errno);
+
+		for (__u32 i = 0; i < query.entries_filled; i++) {
+			saw_any = true;
+			if (!(entries[i].flags & LKMDBG_INPUT_DEVICE_FLAG_HAS_KEYS))
+				continue;
+			if (!(entries[i].flags & LKMDBG_INPUT_DEVICE_FLAG_CAN_INJECT))
+				continue;
+
+			qemu_get_input_device_info(session_fd, entries[i].device_id,
+						   &info);
+			if (!qemu_bitmap64_test(info.ev_bits,
+						sizeof(info.ev_bits) /
+							sizeof(info.ev_bits[0]),
+						EV_KEY))
+				continue;
+			if (!qemu_bitmap64_test(info.key_bits,
+						sizeof(info.key_bits) /
+							sizeof(info.key_bits[0]),
+						KEY_A))
+				continue;
+			if (!(info.supported_channel_flags &
+			      LKMDBG_INPUT_CHANNEL_FLAG_INCLUDE_INJECTED))
+				continue;
+
+			*info_out = info;
+			return entries[i].device_id;
+		}
+
+		if (query.done)
+			break;
+		query.start_id = query.next_id;
+	}
+
+	qemu_check(saw_any, "no_input_devices_enumerated");
+	qemu_fail("no_viable_keyboard_input_device");
+	return 0;
+}
+
+static void qemu_wait_for_key_event(int channel_fd, int timeout_ms,
+				    bool expect_injected)
+{
+	struct lkmdbg_input_event events[16];
+	int remaining_ms = timeout_ms;
+
+	while (remaining_ms > 0) {
+		int slice_ms = remaining_ms > 1000 ? 1000 : remaining_ms;
+		ssize_t event_count;
+
+		event_count = qemu_input_read_events(
+			channel_fd, events, sizeof(events) / sizeof(events[0]),
+			slice_ms);
+		if (event_count > 0) {
+			ssize_t i;
+
+			for (i = 0; i < event_count; i++) {
+				bool injected =
+					(events[i].flags & LKMDBG_INPUT_EVENT_FLAG_INJECTED) != 0;
+
+				if (events[i].type != EV_KEY)
+					continue;
+				if (expect_injected && !injected)
+					continue;
+				if (!expect_injected && injected)
+					continue;
+				return;
+			}
+		}
+
+		remaining_ms -= slice_ms;
+	}
+
+	qemu_fail("missing_input_key_event injected=%u", expect_injected ? 1U : 0U);
+}
+
+static void qemu_expect_no_input_events(int channel_fd, int timeout_ms)
+{
+	struct lkmdbg_input_event events[4];
+	ssize_t event_count;
+
+	event_count = qemu_input_read_events(
+		channel_fd, events, sizeof(events) / sizeof(events[0]),
+		timeout_ms);
+	qemu_check(event_count == 0, "unexpected_input_events=%zd", event_count);
+}
+
+static void qemu_run_input_smoke(void)
+{
+	struct lkmdbg_input_device_info_request info;
+	struct lkmdbg_input_event inject_events[] = {
+		{ .type = EV_KEY, .code = KEY_A, .value = 1 },
+		{ .type = EV_SYN, .code = SYN_REPORT, .value = 0 },
+		{ .type = EV_KEY, .code = KEY_A, .value = 0 },
+		{ .type = EV_SYN, .code = SYN_REPORT, .value = 0 },
+	};
+	__u64 device_id;
+	int session_fd;
+	int host_fd;
+	int default_fd;
+	int include_fd;
+	ssize_t nwritten;
+
+	session_fd = qemu_open_session();
+	device_id = qemu_find_keyboard_input_device(session_fd, &info);
+
+	host_fd = qemu_open_input_channel(session_fd, device_id, 0);
+	printf("LKMDBG_QEMU_INPUT_WAIT_HOST_KEY device_id=%llu name=%s\n",
+	       (unsigned long long)device_id, info.entry.name);
+	fflush(stdout);
+	qemu_wait_for_key_event(host_fd, QEMU_INPUT_HOST_TIMEOUT_MS, false);
+	close(host_fd);
+
+	default_fd = qemu_open_input_channel(session_fd, device_id, 0);
+	include_fd = qemu_open_input_channel(
+		session_fd, device_id, LKMDBG_INPUT_CHANNEL_FLAG_INCLUDE_INJECTED);
+
+	nwritten = write(include_fd, inject_events, sizeof(inject_events));
+	qemu_check(nwritten == (ssize_t)sizeof(inject_events),
+		   "short_input_inject_write=%zd", nwritten);
+	qemu_wait_for_key_event(include_fd, QEMU_INPUT_INJECT_TIMEOUT_MS, true);
+	qemu_expect_no_input_events(default_fd, QEMU_INPUT_IDLE_TIMEOUT_MS);
+	close(include_fd);
+	close(default_fd);
+	close(session_fd);
+}
+
 static void qemu_drain_one_event(int session_fd)
 {
 	struct lkmdbg_event_record event;
@@ -505,6 +720,7 @@ int main(void)
 				   "missing_report_debugfs_dir");
 			qemu_run_tool(mem_test_argv);
 			qemu_run_tool(mmu_test_argv);
+			qemu_run_input_smoke();
 			printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
 			       qemu_read_status_u64("hwpoint_callback_total="),
 			       qemu_read_status_u64("breakpoint_callback_total="),

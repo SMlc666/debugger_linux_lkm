@@ -297,12 +297,15 @@ jobs:
               -e DEBUG_FS \
               -e DEVTMPFS \
               -e DEVTMPFS_MOUNT \
+              -e INPUT \
+              -e INPUT_EVDEV \
               -e KALLSYMS \
               -e KALLSYMS_ALL \
               -e KPROBES \
               -e MODULES \
               -e MODULE_UNLOAD \
-              -e PROC_FS
+              -e PROC_FS \
+              -e VIRTIO_INPUT
             make "${COMMON_ARGS[@]}" olddefconfig
             make "${COMMON_ARGS[@]}" -j"$(nproc)" Image modules
           else
@@ -409,23 +412,63 @@ jobs:
       - name: Install QEMU
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-arm
+          sudo apt-get install -y qemu-system-arm socat
 
       - name: Run QEMU smoke test (TCG)
         run: |
+          set -euo pipefail
           KERNEL_IMAGE="$RUNNER_TEMP/qemu-artifacts/Image"
           INITRAMFS="$RUNNER_TEMP/qemu-artifacts/initramfs.cpio.gz"
           LOG="$RUNNER_TEMP/qemu-smoke-tcg.log"
+          MONITOR="$RUNNER_TEMP/qemu-smoke-monitor.sock"
+          rm -f "$LOG" "$MONITOR"
           timeout 240s qemu-system-aarch64 \
             -machine virt \
             -cpu cortex-a72 \
             -smp 2 \
             -m 1024 \
             -nographic \
+            -device virtio-keyboard-device \
             -kernel "$KERNEL_IMAGE" \
             -initrd "$INITRAMFS" \
             -append "console=ttyAMA0 rdinit=/init panic=-1" \
-            -no-reboot | tee "$LOG"
+            -monitor "unix:$MONITOR,server,nowait" \
+            -no-reboot >"$LOG" 2>&1 &
+          QEMU_PID=$!
+          cleanup() {
+            if kill -0 "$QEMU_PID" 2>/dev/null; then
+              kill "$QEMU_PID" 2>/dev/null || true
+              wait "$QEMU_PID" || true
+            fi
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 30); do
+            if [ -S "$MONITOR" ]; then
+              break
+            fi
+            if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+              wait "$QEMU_PID"
+            fi
+            sleep 1
+          done
+          test -S "$MONITOR"
+
+          for _ in $(seq 1 120); do
+            if grep -q 'LKMDBG_QEMU_INPUT_WAIT_HOST_KEY' "$LOG"; then
+              break
+            fi
+            if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+              wait "$QEMU_PID"
+            fi
+            sleep 1
+          done
+          grep -q 'LKMDBG_QEMU_INPUT_WAIT_HOST_KEY' "$LOG"
+
+          printf 'sendkey a\n' | socat - UNIX-CONNECT:"$MONITOR" >/dev/null
+
+          wait "$QEMU_PID"
+          trap - EXIT
           grep -q 'LKMDBG_QEMU_SMOKE_OK' "$LOG"
 
       - name: Upload QEMU TCG log
