@@ -809,7 +809,7 @@ static const struct file_operations lkmdbg_remote_map_fops = {
 	.owner = THIS_MODULE,
 	.release = lkmdbg_remote_map_release,
 	.mmap = lkmdbg_remote_map_mmap,
-	.llseek = no_llseek,
+	.llseek = noop_llseek,
 };
 
 static int lkmdbg_remote_map_prepare_file(struct lkmdbg_remote_map *map,

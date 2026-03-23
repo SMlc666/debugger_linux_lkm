@@ -16,6 +16,14 @@
 
 #define LKMDBG_PTE_PATCH_MAX_ENTRIES 128U
 
+#if defined(PTE_PROT_NONE)
+#define LKMDBG_PTE_PROTNONE_BIT PTE_PROT_NONE
+#elif defined(PTE_PRESENT_INVALID)
+#define LKMDBG_PTE_PROTNONE_BIT PTE_PRESENT_INVALID
+#else
+#define LKMDBG_PTE_PROTNONE_BIT 0
+#endif
+
 struct lkmdbg_pte_patch {
 	struct list_head node;
 	u64 id;
@@ -72,7 +80,7 @@ pte_t lkmdbg_pte_make_exec_only(pte_t pte)
 {
 	pte = pte_wrprotect(pte);
 	pte = lkmdbg_pte_set_user_read(pte, false);
-	pte = clear_pte_bit(pte, __pgprot(PTE_PROT_NONE));
+	pte = clear_pte_bit(pte, __pgprot(LKMDBG_PTE_PROTNONE_BIT));
 	pte = set_pte_bit(pte, __pgprot(PTE_VALID));
 	pte = lkmdbg_pte_set_exec(pte, true);
 	return pte;
@@ -81,7 +89,7 @@ pte_t lkmdbg_pte_make_exec_only(pte_t pte)
 pte_t lkmdbg_pte_make_protnone(pte_t pte)
 {
 	pte = pte_wrprotect(pte);
-	pte = set_pte_bit(pte, __pgprot(PTE_PROT_NONE));
+	pte = set_pte_bit(pte, __pgprot(LKMDBG_PTE_PROTNONE_BIT));
 	pte = clear_pte_bit(pte, __pgprot(PTE_VALID));
 	return pte;
 }
@@ -98,7 +106,7 @@ pte_t lkmdbg_pte_build_alias_pte(struct page *page, pte_t template, u32 prot)
 	pte_t pte;
 
 	pte = pfn_pte(page_to_pfn(page), pte_pgprot(template));
-	pte = clear_pte_bit(pte, __pgprot(PTE_PROT_NONE));
+	pte = clear_pte_bit(pte, __pgprot(LKMDBG_PTE_PROTNONE_BIT));
 	pte = set_pte_bit(pte, __pgprot(PTE_VALID));
 	pte = lkmdbg_pte_set_user_read(
 		pte, !!(prot & LKMDBG_REMOTE_ALLOC_PROT_READ));
@@ -278,28 +286,28 @@ static int lkmdbg_pte_build_mode(pte_t current_pte, u32 mode, pte_t *new_out)
 	switch (mode) {
 	case LKMDBG_PTE_MODE_RO:
 		new_pte = lkmdbg_pte_set_user_read(new_pte, true);
-		new_pte = clear_pte_bit(new_pte, __pgprot(PTE_PROT_NONE));
+		new_pte = clear_pte_bit(new_pte, __pgprot(LKMDBG_PTE_PROTNONE_BIT));
 		new_pte = set_pte_bit(new_pte, __pgprot(PTE_VALID));
 		new_pte = pte_wrprotect(new_pte);
 		new_pte = lkmdbg_pte_set_exec(new_pte, false);
 		break;
 	case LKMDBG_PTE_MODE_RW:
 		new_pte = lkmdbg_pte_set_user_read(new_pte, true);
-		new_pte = clear_pte_bit(new_pte, __pgprot(PTE_PROT_NONE));
+		new_pte = clear_pte_bit(new_pte, __pgprot(LKMDBG_PTE_PROTNONE_BIT));
 		new_pte = set_pte_bit(new_pte, __pgprot(PTE_VALID));
 		new_pte = lkmdbg_pte_make_writable(new_pte);
 		new_pte = lkmdbg_pte_set_exec(new_pte, false);
 		break;
 	case LKMDBG_PTE_MODE_RX:
 		new_pte = lkmdbg_pte_set_user_read(new_pte, true);
-		new_pte = clear_pte_bit(new_pte, __pgprot(PTE_PROT_NONE));
+		new_pte = clear_pte_bit(new_pte, __pgprot(LKMDBG_PTE_PROTNONE_BIT));
 		new_pte = set_pte_bit(new_pte, __pgprot(PTE_VALID));
 		new_pte = pte_wrprotect(new_pte);
 		new_pte = lkmdbg_pte_set_exec(new_pte, true);
 		break;
 	case LKMDBG_PTE_MODE_RWX:
 		new_pte = lkmdbg_pte_set_user_read(new_pte, true);
-		new_pte = clear_pte_bit(new_pte, __pgprot(PTE_PROT_NONE));
+		new_pte = clear_pte_bit(new_pte, __pgprot(LKMDBG_PTE_PROTNONE_BIT));
 		new_pte = set_pte_bit(new_pte, __pgprot(PTE_VALID));
 		new_pte = lkmdbg_pte_make_writable(new_pte);
 		new_pte = lkmdbg_pte_set_exec(new_pte, true);
