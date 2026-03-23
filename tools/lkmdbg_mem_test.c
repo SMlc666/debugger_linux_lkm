@@ -120,6 +120,30 @@ struct remote_alloc_query_buffer {
 	struct lkmdbg_remote_alloc_entry *entries;
 };
 
+static int create_test_memfd(const char *name)
+{
+	unsigned int flags = MFD_CLOEXEC | MFD_ALLOW_SEALING;
+	int fd;
+
+#ifdef MFD_NOEXEC_SEAL
+	flags |= MFD_NOEXEC_SEAL;
+#endif
+
+	fd = memfd_create(name, flags);
+	if (fd >= 0)
+		return fd;
+
+#ifdef MFD_NOEXEC_SEAL
+	if ((flags & MFD_NOEXEC_SEAL) && errno == EINVAL) {
+		fd = memfd_create(name, flags & ~MFD_NOEXEC_SEAL);
+		if (fd >= 0)
+			return fd;
+	}
+#endif
+
+	return -1;
+}
+
 enum {
 	CHILD_OP_QUERY_NOFAULT = 1,
 	CHILD_OP_EXIT = 2,
@@ -2377,9 +2401,7 @@ static int verify_remote_map(int session_fd, pid_t child,
 		goto out;
 	}
 
-	stealth_fd = memfd_create("lkmdbg-rmap-stealth",
-				  MFD_CLOEXEC | MFD_ALLOW_SEALING |
-					  MFD_NOEXEC_SEAL);
+	stealth_fd = create_test_memfd("lkmdbg-rmap-stealth");
 	if (stealth_fd < 0) {
 		fprintf(stderr, "stealth local memfd_create failed: %s\n",
 			strerror(errno));
@@ -2569,9 +2591,7 @@ static int verify_remote_map(int session_fd, pid_t child,
 		goto out;
 	}
 
-	local_fd = memfd_create("lkmdbg-rmap-local",
-				MFD_CLOEXEC | MFD_ALLOW_SEALING |
-					MFD_NOEXEC_SEAL);
+	local_fd = create_test_memfd("lkmdbg-rmap-local");
 	if (local_fd < 0) {
 		fprintf(stderr, "remote inject memfd_create failed: %s\n",
 			strerror(errno));
