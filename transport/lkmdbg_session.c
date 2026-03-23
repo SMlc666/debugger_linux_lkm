@@ -829,7 +829,7 @@ static const struct file_operations lkmdbg_session_fops = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = lkmdbg_session_compat_ioctl,
 #endif
-	.llseek = no_llseek,
+	.llseek = noop_llseek,
 };
 
 int lkmdbg_open_session(void __user *argp)
