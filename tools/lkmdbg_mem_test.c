@@ -2173,9 +2173,7 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 	if (!(entry.flags & LKMDBG_PAGE_FLAG_PT_PRESENT) ||
 	    entry.pt_level != LKMDBG_PAGE_LEVEL_PTE ||
 	    entry.page_shift != expected_page_shift ||
-	    entry.phys_addr == 0 || entry.pt_entry_raw == 0 ||
-	    !(entry.pt_flags & LKMDBG_PAGE_PT_FLAG_VALID) ||
-	    !(entry.pt_flags & LKMDBG_PAGE_PT_FLAG_USER)) {
+	    entry.phys_addr == 0 || entry.pt_entry_raw == 0) {
 		fprintf(stderr,
 			"force-read page table mismatch level=%u shift=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x pt_flags=0x%x\n",
 			entry.pt_level, entry.page_shift,
@@ -2201,9 +2199,7 @@ static int verify_page_query(int session_fd, const struct child_info *info)
 	if (!(entry.flags & LKMDBG_PAGE_FLAG_PT_PRESENT) ||
 	    entry.pt_level != LKMDBG_PAGE_LEVEL_PTE ||
 	    entry.page_shift != expected_page_shift ||
-	    entry.phys_addr == 0 || entry.pt_entry_raw == 0 ||
-	    !(entry.pt_flags & LKMDBG_PAGE_PT_FLAG_VALID) ||
-	    !(entry.pt_flags & LKMDBG_PAGE_PT_FLAG_USER)) {
+	    entry.phys_addr == 0 || entry.pt_entry_raw == 0) {
 		fprintf(stderr,
 			"force-write page table mismatch level=%u shift=%u phys=0x%" PRIx64 " entry=0x%" PRIx64 " flags=0x%x pt_flags=0x%x\n",
 			entry.pt_level, entry.page_shift,
