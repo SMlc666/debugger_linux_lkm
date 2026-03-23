@@ -1,4 +1,5 @@
 #include <linux/cpu.h>
+#include <linux/delay.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
@@ -39,6 +40,9 @@ static DEFINE_MUTEX(lkmdbg_hook_lock);
 static void *lkmdbg_alias_page;
 static pte_t *lkmdbg_alias_ptep;
 static pte_t lkmdbg_alias_pte;
+
+#define LKMDBG_PATCH_VERIFY_ATTEMPTS 4
+#define LKMDBG_PATCH_VERIFY_SETTLE_US 50
 
 static pte_t *lkmdbg_lookup_kernel_pte(unsigned long addr)
 {
@@ -229,6 +233,26 @@ static bool lkmdbg_text_words_match(void *addr, const u32 *insns, u32 words)
 	return true;
 }
 
+static void lkmdbg_dump_text_words(const char *tag, void *addr, u32 words)
+{
+	u32 i;
+
+	for (i = 0; i < words; i++) {
+		u32 word;
+		int ret;
+
+		ret = lkmdbg_read_text_word((u8 *)addr + i * sizeof(u32), &word);
+		if (ret) {
+			pr_warn("lkmdbg: %s read failed addr=%px index=%u ret=%d\n",
+				tag, addr, i, ret);
+			continue;
+		}
+
+		pr_warn("lkmdbg: %s addr=%px index=%u word=%08x\n",
+			tag, addr, i, word);
+	}
+}
+
 static int lkmdbg_patch_target_words(void *addr, const u32 *insns, u32 words)
 {
 	struct lkmdbg_patch_ctx ctx = {
@@ -239,17 +263,19 @@ static int lkmdbg_patch_target_words(void *addr, const u32 *insns, u32 words)
 	int ret;
 	int attempt;
 
-	for (attempt = 0; attempt < 2; attempt++) {
+	for (attempt = 0; attempt < LKMDBG_PATCH_VERIFY_ATTEMPTS; attempt++) {
 		ret = stop_machine(lkmdbg_patch_stop_machine, &ctx, cpu_online_mask);
 		if (ret)
 			return ret;
 
+		udelay(LKMDBG_PATCH_VERIFY_SETTLE_US);
 		if (lkmdbg_text_words_match(addr, insns, words))
 			return 0;
 	}
 
-	pr_warn("lkmdbg: text patch verify failed addr=%px words=%u\n", addr,
-		words);
+	pr_warn("lkmdbg: text patch verify failed addr=%px words=%u attempts=%d\n",
+		addr, words, LKMDBG_PATCH_VERIFY_ATTEMPTS);
+	lkmdbg_dump_text_words("text patch actual", addr, words);
 	return -EIO;
 }
 
@@ -462,6 +488,7 @@ int lkmdbg_hook_prepare_exec(struct lkmdbg_inline_hook *hook, void **orig_out)
 int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
 {
 	int ret;
+	int rollback_ret;
 
 	if (!hook)
 		return -EINVAL;
@@ -483,11 +510,10 @@ int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
 					hook->core.tramp_insts,
 					hook->core.tramp_insts_num);
 	if (ret) {
-		if (lkmdbg_text_words_match((void *)hook->core.origin_addr,
-					    hook->core.tramp_insts,
-					    hook->core.tramp_insts_num)) {
-			int rollback_ret;
-
+		rollback_ret = 0;
+		if (!lkmdbg_text_words_match((void *)hook->core.origin_addr,
+					     hook->core.origin_insts,
+					     hook->core.tramp_insts_num)) {
 			rollback_ret = lkmdbg_patch_target_words(
 				(void *)hook->core.origin_addr,
 				hook->core.origin_insts,
@@ -497,8 +523,37 @@ int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
 					hook->origin, rollback_ret);
 		}
 
-		pr_err("lkmdbg: kp hook install failed target=%px origin=%px ret=%d\n",
-		       hook->target, hook->origin, ret);
+		if (!rollback_ret) {
+			ret = lkmdbg_patch_target_words(
+				(void *)hook->core.origin_addr,
+				hook->core.tramp_insts,
+				hook->core.tramp_insts_num);
+		}
+
+		if (ret && !rollback_ret &&
+		    !lkmdbg_text_words_match((void *)hook->core.origin_addr,
+					     hook->core.origin_insts,
+					     hook->core.tramp_insts_num)) {
+			rollback_ret = lkmdbg_patch_target_words(
+				(void *)hook->core.origin_addr,
+				hook->core.origin_insts,
+				hook->core.tramp_insts_num);
+			if (rollback_ret)
+				pr_warn("lkmdbg: kp hook install final rollback failed origin=%px ret=%d\n",
+					hook->origin, rollback_ret);
+		}
+
+		if (ret) {
+			pr_err("lkmdbg: kp hook install failed target=%px origin=%px ret=%d\n",
+			       hook->target, hook->origin, ret);
+			mutex_lock(&lkmdbg_state.lock);
+			lkmdbg_state.inline_hook_last_ret = ret;
+			mutex_unlock(&lkmdbg_state.lock);
+			return ret;
+		}
+	}
+
+	if (ret) {
 		mutex_lock(&lkmdbg_state.lock);
 		lkmdbg_state.inline_hook_last_ret = ret;
 		mutex_unlock(&lkmdbg_state.lock);
