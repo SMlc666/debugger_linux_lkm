@@ -1,6 +1,6 @@
 #include <linux/anon_inodes.h>
 #include <linux/bitops.h>
-#include <linux/fdtable.h>
+#include <linux/file.h>
 #include <linux/input.h>
 #include <linux/ktime.h>
 #include <linux/module.h>
@@ -535,31 +535,43 @@ lkmdbg_validate_input_device_info(struct lkmdbg_input_device_info_request *req)
 long lkmdbg_get_input_device_info(struct lkmdbg_session *session,
 				  void __user *argp)
 {
-	struct lkmdbg_input_device_info_request req;
+	struct lkmdbg_input_device_info_request *req;
 	struct lkmdbg_input_device *device;
 	int ret;
 
 	(void)session;
 
-	if (copy_from_user(&req, argp, sizeof(req)))
-		return -EFAULT;
+	req = kzalloc(sizeof(*req), GFP_KERNEL);
+	if (!req)
+		return -ENOMEM;
 
-	ret = lkmdbg_validate_input_device_info(&req);
-	if (ret)
+	if (copy_from_user(req, argp, sizeof(*req))) {
+		kfree(req);
+		return -EFAULT;
+	}
+
+	ret = lkmdbg_validate_input_device_info(req);
+	if (ret) {
+		kfree(req);
 		return ret;
+	}
 
 	mutex_lock(&lkmdbg_input_devices_lock);
-	device = lkmdbg_find_input_device_locked(req.device_id);
+	device = lkmdbg_find_input_device_locked(req->device_id);
 	if (!device || device->disconnected) {
 		mutex_unlock(&lkmdbg_input_devices_lock);
+		kfree(req);
 		return -ENOENT;
 	}
-	lkmdbg_input_fill_device_info(device, &req);
+	lkmdbg_input_fill_device_info(device, req);
 	mutex_unlock(&lkmdbg_input_devices_lock);
 
-	if (copy_to_user(argp, &req, sizeof(req)))
+	if (copy_to_user(argp, req, sizeof(*req))) {
+		kfree(req);
 		return -EFAULT;
+	}
 
+	kfree(req);
 	return 0;
 }
 
