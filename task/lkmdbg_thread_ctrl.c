@@ -563,6 +563,35 @@ static int lkmdbg_mmu_restore_baseline(struct mm_struct *mm,
 	return ret;
 }
 
+static bool lkmdbg_mmu_can_restore_baseline(struct mm_struct *mm,
+					    struct lkmdbg_hwpoint *entry)
+{
+	pte_t current_pte;
+	unsigned long vm_flags = 0;
+	pte_t baseline_pte;
+	int ret;
+
+	if (!mm || !entry)
+		return false;
+
+	ret = lkmdbg_pte_capture(mm, entry->page_addr, &current_pte, &vm_flags);
+	if (ret)
+		return false;
+	if (vm_flags != entry->mmu_baseline_vm_flags)
+		return false;
+
+	baseline_pte = __pte(entry->mmu_baseline_pte);
+	if (!pte_present(current_pte) || !pte_present(baseline_pte))
+		return false;
+
+	/*
+	 * Only restore when the mapping still targets the same backing page.
+	 * That lets us clean up permission-bit churn from legitimate writes on
+	 * the original page without clobbering a COW/remap transition.
+	 */
+	return pte_pfn(current_pte) == pte_pfn(baseline_pte);
+}
+
 static struct lkmdbg_hwpoint *
 lkmdbg_mmu_find_breakpoint_locked(pid_t tgid, unsigned long page_addr)
 {
@@ -1329,8 +1358,10 @@ static int lkmdbg_unregister_mmu_hwpoint(struct lkmdbg_hwpoint *entry)
 	struct task_struct *task;
 	struct mm_struct *mm = NULL;
 	pid_t rearm_tid = entry->rearm_step_tid;
+	u32 state;
 
 	lkmdbg_mmu_refresh_entry_state(entry);
+	state = READ_ONCE(entry->mmu_state);
 	lkmdbg_unregister_mmu_hwpoint_global(entry);
 	lkmdbg_disable_user_single_step_tid(rearm_tid);
 
@@ -1342,9 +1373,8 @@ static int lkmdbg_unregister_mmu_hwpoint(struct lkmdbg_hwpoint *entry)
 	if (!mm)
 		return 0;
 
-	if (!(READ_ONCE(entry->mmu_state) &
-	      (LKMDBG_HWPOINT_STATE_LOST | LKMDBG_HWPOINT_STATE_MUTATED)) &&
-	    entry->armed)
+	if (!(state & LKMDBG_HWPOINT_STATE_LOST) &&
+	    (entry->armed || lkmdbg_mmu_can_restore_baseline(mm, entry)))
 		lkmdbg_mmu_restore_baseline(mm, entry);
 	mmput(mm);
 	return 0;
