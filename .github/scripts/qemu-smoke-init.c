@@ -487,6 +487,29 @@ static void qemu_expect_no_input_events(int channel_fd, int timeout_ms)
 	qemu_check(event_count == 0, "unexpected_input_events=%zd", event_count);
 }
 
+static void qemu_drain_input_until_idle(int channel_fd, int idle_ms,
+					int budget_ms)
+{
+	struct lkmdbg_input_event events[16];
+	int remaining_ms = budget_ms;
+
+	while (remaining_ms > 0) {
+		int slice_ms = remaining_ms > idle_ms ? idle_ms : remaining_ms;
+		ssize_t event_count;
+
+		event_count = qemu_input_read_events(
+			channel_fd, events, sizeof(events) / sizeof(events[0]),
+			slice_ms);
+		if (event_count == 0)
+			return;
+
+		remaining_ms -= slice_ms;
+	}
+
+	qemu_fail("input_never_went_idle budget_ms=%d idle_ms=%d", budget_ms,
+		  idle_ms);
+}
+
 static void qemu_report_input_stealth(void)
 {
 	char buf[16384];
@@ -558,6 +581,7 @@ static void qemu_run_input_smoke(void)
 	       (unsigned long long)device_id, info.entry.name);
 	fflush(stdout);
 	qemu_wait_for_key_event(host_fd, QEMU_INPUT_HOST_TIMEOUT_MS, false);
+	qemu_drain_input_until_idle(host_fd, 150, 2000);
 	close(host_fd);
 
 	default_fd = qemu_open_input_channel(session_fd, device_id, 0);
