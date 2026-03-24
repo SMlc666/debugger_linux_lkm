@@ -134,7 +134,7 @@ static bool lkmdbg_freezer_thread_settled_locked(
 	 * user mode. Thaw will cancel its queued resume work if it never
 	 * reaches the parking callback.
 	 */
-	return !task_is_running(entry->task);
+	return READ_ONCE(entry->task->__state) != TASK_RUNNING;
 }
 
 static bool lkmdbg_freezer_all_settled_locked(struct lkmdbg_freezer *freezer)

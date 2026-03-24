@@ -41,7 +41,7 @@ static inline void *lkmdbg_kmap_local_page(struct page *page)
 	return kmap_local_page(page);
 }
 
-static inline void lkmdbg_kunmap_local(struct page *page, const void *addr)
+static inline void lkmdbg_kunmap_local(struct page *page, void *addr)
 {
 	(void)page;
 	kunmap_local(addr);
@@ -52,7 +52,7 @@ static inline void *lkmdbg_kmap_local_page(struct page *page)
 	return kmap(page);
 }
 
-static inline void lkmdbg_kunmap_local(struct page *page, const void *addr)
+static inline void lkmdbg_kunmap_local(struct page *page, void *addr)
 {
 	(void)addr;
 	kunmap(page);

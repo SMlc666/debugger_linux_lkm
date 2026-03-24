@@ -71,6 +71,11 @@ struct lkmdbg_hwpoint {
 typedef void (*lkmdbg_register_user_step_hook_fn)(struct step_hook *hook);
 typedef void (*lkmdbg_unregister_user_step_hook_fn)(struct step_hook *hook);
 typedef void (*lkmdbg_user_single_step_fn)(struct task_struct *task);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
+typedef unsigned long lkmdbg_step_hook_esr_t;
+#else
+typedef unsigned int lkmdbg_step_hook_esr_t;
+#endif
 
 static void lkmdbg_regs_arm64_export_stop(struct lkmdbg_regs_arm64 *dst,
 					  const struct pt_regs *src)
@@ -167,7 +172,8 @@ static enum lkmdbg_remote_vm_write_hook_kind
 #endif
 
 #ifdef CONFIG_ARM64
-static int lkmdbg_user_step_handler(struct pt_regs *regs, unsigned long esr);
+static int lkmdbg_user_step_handler(struct pt_regs *regs,
+				    lkmdbg_step_hook_esr_t esr);
 static int lkmdbg_do_page_fault_replacement(unsigned long far,
 					    unsigned long esr,
 					    struct pt_regs *regs);
@@ -1492,6 +1498,12 @@ static void lkmdbg_hwpoint_event(struct perf_event *bp,
 static int lkmdbg_register_hwpoint(struct lkmdbg_session *session,
 				   struct lkmdbg_hwpoint_request *req)
 {
+	struct perf_event_attr attr;
+	struct lkmdbg_hwpoint *entry;
+	struct task_struct *task = NULL;
+	u64 id;
+	int ret;
+
 #ifdef CONFIG_ARM64
 	if (req->flags & LKMDBG_HWPOINT_FLAG_MMU)
 		return lkmdbg_register_mmu_hwpoint(session, req);
@@ -1499,12 +1511,6 @@ static int lkmdbg_register_hwpoint(struct lkmdbg_session *session,
 	if (req->flags & LKMDBG_HWPOINT_FLAG_MMU)
 		return -EOPNOTSUPP;
 #endif
-
-	struct perf_event_attr attr;
-	struct lkmdbg_hwpoint *entry;
-	struct task_struct *task = NULL;
-	u64 id;
-	int ret;
 
 	ret = lkmdbg_get_target_thread(session, req->tid, &task);
 	if (ret)
@@ -1708,6 +1714,9 @@ static void lkmdbg_trace_raw_sys_enter(void *data, struct pt_regs *regs,
 				       long id)
 {
 	struct lkmdbg_regs_arm64 *stop_regs_ptr = NULL;
+#ifdef CONFIG_ARM64
+	struct lkmdbg_regs_arm64 stop_regs;
+#endif
 
 	(void)data;
 
@@ -1715,8 +1724,6 @@ static void lkmdbg_trace_raw_sys_enter(void *data, struct pt_regs *regs,
 		return;
 
 #ifdef CONFIG_ARM64
-	struct lkmdbg_regs_arm64 stop_regs;
-
 	lkmdbg_regs_arm64_export_stop(&stop_regs, regs);
 	stop_regs_ptr = &stop_regs;
 #endif
@@ -1730,6 +1737,9 @@ static void lkmdbg_trace_raw_sys_exit(void *data, struct pt_regs *regs,
 {
 	struct lkmdbg_regs_arm64 *stop_regs_ptr = NULL;
 	long nr;
+#ifdef CONFIG_ARM64
+	struct lkmdbg_regs_arm64 stop_regs;
+#endif
 
 	(void)data;
 
@@ -1741,8 +1751,6 @@ static void lkmdbg_trace_raw_sys_exit(void *data, struct pt_regs *regs,
 		return;
 
 #ifdef CONFIG_ARM64
-	struct lkmdbg_regs_arm64 stop_regs;
-
 	lkmdbg_regs_arm64_export_stop(&stop_regs, regs);
 	stop_regs_ptr = &stop_regs;
 #endif
@@ -2025,7 +2033,8 @@ passthrough:
 	return ret;
 }
 
-static int lkmdbg_user_step_handler(struct pt_regs *regs, unsigned long esr)
+static int lkmdbg_user_step_handler(struct pt_regs *regs,
+				    lkmdbg_step_hook_esr_t esr)
 {
 	struct lkmdbg_session *matched;
 	struct lkmdbg_hwpoint *entry = NULL;
