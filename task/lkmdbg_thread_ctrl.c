@@ -4,6 +4,7 @@
 #include <linux/list.h>
 #include <linux/mm.h>
 #include <linux/mmap_lock.h>
+#include <linux/module.h>
 #include <linux/perf_event.h>
 #include <linux/pid.h>
 #include <linux/ptrace.h>
@@ -139,7 +140,14 @@ static lkmdbg_invoke_syscall_fn lkmdbg_invoke_syscall_orig;
 static lkmdbg_invoke_syscall_inner_fn lkmdbg_invoke_syscall_inner_orig;
 static lkmdbg_do_el0_svc_fn lkmdbg_do_el0_svc_orig;
 static atomic_t lkmdbg_syscall_enter_inflight = ATOMIC_INIT(0);
+static atomic_t lkmdbg_syscall_enter_users = ATOMIC_INIT(0);
 static DECLARE_WAIT_QUEUE_HEAD(lkmdbg_syscall_enter_waitq);
+static DEFINE_MUTEX(lkmdbg_syscall_enter_backend_lock);
+static bool lkmdbg_syscall_enter_module_ref;
+static bool lkmdbg_syscall_enter_teardown_queued;
+static void lkmdbg_syscall_enter_teardown_workfn(struct work_struct *work);
+static DECLARE_WORK(lkmdbg_syscall_enter_teardown_work,
+		    lkmdbg_syscall_enter_teardown_workfn);
 static LIST_HEAD(lkmdbg_mmu_hwpoint_list);
 static DEFINE_SPINLOCK(lkmdbg_mmu_hwpoint_lock);
 static struct lkmdbg_inline_hook *lkmdbg_do_page_fault_hook;
@@ -212,6 +220,11 @@ static int lkmdbg_user_step_handler(struct pt_regs *regs,
 #ifdef CONFIG_ARM64
 static bool lkmdbg_handle_user_single_step(struct pt_regs *regs);
 static int lkmdbg_install_syscall_enter_backend(void);
+static void lkmdbg_uninstall_syscall_enter_backend_locked(void);
+static bool lkmdbg_syscall_enter_fallback_available(void);
+static bool lkmdbg_syscall_trace_needs_enter_fallback(u32 mode, u32 phases);
+static int lkmdbg_ensure_syscall_enter_backend(void);
+static void lkmdbg_queue_syscall_enter_teardown(void);
 static void lkmdbg_syscall_enter_broadcast_regs(struct pt_regs *regs, s32 nr);
 static void lkmdbg_invoke_syscall_replacement(
 	struct pt_regs *regs, unsigned int scno, unsigned int sc_nr,
@@ -450,7 +463,7 @@ static u32 lkmdbg_syscall_trace_supported_phases(void)
 	if (READ_ONCE(lkmdbg_trace_sys_exit_registered))
 		phases |= LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
 #ifdef CONFIG_ARM64
-	if (lkmdbg_syscall_enter_hook)
+	if (lkmdbg_syscall_enter_fallback_available())
 		phases |= LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
 #endif
 
@@ -465,7 +478,7 @@ static u32 lkmdbg_syscall_trace_capability_flags(void)
 	    READ_ONCE(lkmdbg_trace_sys_exit_registered))
 		flags |= LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT;
 #ifdef CONFIG_ARM64
-	if (lkmdbg_syscall_enter_hook)
+	if (lkmdbg_syscall_enter_fallback_available())
 		flags |= LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_ENTRY_HOOK;
 #endif
 
@@ -2495,6 +2508,105 @@ static int lkmdbg_install_syscall_enter_backend(void)
 		name, orig_fn, target);
 	return 0;
 }
+
+static void lkmdbg_uninstall_syscall_enter_backend_locked(void)
+{
+	if (lkmdbg_syscall_enter_hook) {
+		if (!lkmdbg_hook_deactivate(lkmdbg_syscall_enter_hook))
+			wait_event_timeout(
+				lkmdbg_syscall_enter_waitq,
+				atomic_read(&lkmdbg_syscall_enter_inflight) == 0,
+				msecs_to_jiffies(1000));
+		lkmdbg_hook_destroy(lkmdbg_syscall_enter_hook);
+		lkmdbg_syscall_enter_hook = NULL;
+	}
+	if (lkmdbg_syscall_enter_registry) {
+		lkmdbg_hook_registry_unregister(lkmdbg_syscall_enter_registry,
+						0);
+		lkmdbg_syscall_enter_registry = NULL;
+	}
+	lkmdbg_syscall_enter_hook_kind = LKMDBG_SYSCALL_ENTER_HOOK_NONE;
+	lkmdbg_invoke_syscall_orig = NULL;
+	lkmdbg_invoke_syscall_inner_orig = NULL;
+	lkmdbg_do_el0_svc_orig = NULL;
+	if (lkmdbg_syscall_enter_module_ref) {
+		module_put(THIS_MODULE);
+		lkmdbg_syscall_enter_module_ref = false;
+	}
+}
+
+static bool lkmdbg_syscall_enter_fallback_available(void)
+{
+	return !!(lkmdbg_symbols.invoke_syscall_sym ||
+		  lkmdbg_symbols.invoke_syscall_inner_sym ||
+		  lkmdbg_symbols.do_el0_svc_sym);
+}
+
+static bool lkmdbg_syscall_trace_needs_enter_fallback(u32 mode, u32 phases)
+{
+	if (!(mode & (LKMDBG_SYSCALL_TRACE_MODE_EVENT |
+		      LKMDBG_SYSCALL_TRACE_MODE_STOP)))
+		return false;
+	if (!(phases & LKMDBG_SYSCALL_TRACE_PHASE_ENTER))
+		return false;
+	if (READ_ONCE(lkmdbg_trace_sys_enter_registered))
+		return false;
+
+	return lkmdbg_syscall_enter_fallback_available();
+}
+
+static int lkmdbg_ensure_syscall_enter_backend(void)
+{
+	int ret = 0;
+
+	mutex_lock(&lkmdbg_syscall_enter_backend_lock);
+	if (READ_ONCE(lkmdbg_trace_sys_enter_registered) ||
+	    lkmdbg_syscall_enter_hook)
+		goto out;
+	if (!lkmdbg_syscall_enter_fallback_available()) {
+		ret = -EOPNOTSUPP;
+		goto out;
+	}
+	if (!lkmdbg_syscall_enter_module_ref) {
+		if (!try_module_get(THIS_MODULE)) {
+			ret = -ENODEV;
+			goto out;
+		}
+		lkmdbg_syscall_enter_module_ref = true;
+	}
+
+	ret = lkmdbg_install_syscall_enter_backend();
+	if (ret && lkmdbg_syscall_enter_module_ref) {
+		module_put(THIS_MODULE);
+		lkmdbg_syscall_enter_module_ref = false;
+	}
+out:
+	mutex_unlock(&lkmdbg_syscall_enter_backend_lock);
+	return ret;
+}
+
+static void lkmdbg_syscall_enter_teardown_workfn(struct work_struct *work)
+{
+	(void)work;
+
+	mutex_lock(&lkmdbg_syscall_enter_backend_lock);
+	lkmdbg_syscall_enter_teardown_queued = false;
+	if (atomic_read(&lkmdbg_syscall_enter_users) == 0)
+		lkmdbg_uninstall_syscall_enter_backend_locked();
+	mutex_unlock(&lkmdbg_syscall_enter_backend_lock);
+}
+
+static void lkmdbg_queue_syscall_enter_teardown(void)
+{
+	mutex_lock(&lkmdbg_syscall_enter_backend_lock);
+	if (atomic_read(&lkmdbg_syscall_enter_users) == 0 &&
+	    lkmdbg_syscall_enter_hook &&
+	    !lkmdbg_syscall_enter_teardown_queued) {
+		lkmdbg_syscall_enter_teardown_queued = true;
+		schedule_work(&lkmdbg_syscall_enter_teardown_work);
+	}
+	mutex_unlock(&lkmdbg_syscall_enter_backend_lock);
+}
 #endif
 
 int lkmdbg_thread_ctrl_init(void)
@@ -2506,15 +2618,6 @@ int lkmdbg_thread_ctrl_init(void)
 #endif
 
 	ret = lkmdbg_register_trace_hooks();
-#ifdef CONFIG_ARM64
-	if (!lkmdbg_trace_sys_enter_registered) {
-		int hook_ret = lkmdbg_install_syscall_enter_backend();
-
-		if (hook_ret && hook_ret != -ENOENT)
-			pr_warn("lkmdbg: syscall enter fallback install failed ret=%d\n",
-				hook_ret);
-	}
-#endif
 	return ret;
 }
 
@@ -2566,6 +2669,9 @@ long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 {
 	struct lkmdbg_syscall_trace_request req;
 	u32 supported_phases;
+	bool old_need;
+	bool new_need;
+	int ret;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
 		return -EFAULT;
@@ -2578,11 +2684,34 @@ long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 		return -EOPNOTSUPP;
 
 	mutex_lock(&session->lock);
+	old_need = session->syscall_trace_enter_fallback;
+	mutex_unlock(&session->lock);
+
+	new_need = lkmdbg_syscall_trace_needs_enter_fallback(req.mode,
+							     req.phases);
+	if (new_need) {
+		if (!old_need)
+			atomic_inc(&lkmdbg_syscall_enter_users);
+		ret = lkmdbg_ensure_syscall_enter_backend();
+		if (ret) {
+			if (!old_need)
+				atomic_dec(&lkmdbg_syscall_enter_users);
+			return ret;
+		}
+	}
+
+	mutex_lock(&session->lock);
 	session->syscall_trace_tid = req.tid;
 	session->syscall_trace_nr = req.syscall_nr;
 	session->syscall_trace_mode = req.mode;
 	session->syscall_trace_phases = req.phases;
+	session->syscall_trace_enter_fallback = new_need;
 	mutex_unlock(&session->lock);
+
+	if (old_need && !new_need) {
+		atomic_dec(&lkmdbg_syscall_enter_users);
+		lkmdbg_queue_syscall_enter_teardown();
+	}
 
 	req.flags = lkmdbg_syscall_trace_capability_flags();
 	req.supported_phases = supported_phases;
@@ -2680,24 +2809,10 @@ void lkmdbg_thread_ctrl_exit(void)
 #endif
 
 #ifdef CONFIG_ARM64
-	if (lkmdbg_syscall_enter_hook) {
-		if (!lkmdbg_hook_deactivate(lkmdbg_syscall_enter_hook))
-			wait_event_timeout(
-				lkmdbg_syscall_enter_waitq,
-				atomic_read(&lkmdbg_syscall_enter_inflight) == 0,
-				msecs_to_jiffies(1000));
-		lkmdbg_hook_destroy(lkmdbg_syscall_enter_hook);
-		lkmdbg_syscall_enter_hook = NULL;
-	}
-	if (lkmdbg_syscall_enter_registry) {
-		lkmdbg_hook_registry_unregister(lkmdbg_syscall_enter_registry,
-						0);
-		lkmdbg_syscall_enter_registry = NULL;
-	}
-	lkmdbg_syscall_enter_hook_kind = LKMDBG_SYSCALL_ENTER_HOOK_NONE;
-	lkmdbg_invoke_syscall_orig = NULL;
-	lkmdbg_invoke_syscall_inner_orig = NULL;
-	lkmdbg_do_el0_svc_orig = NULL;
+	flush_work(&lkmdbg_syscall_enter_teardown_work);
+	mutex_lock(&lkmdbg_syscall_enter_backend_lock);
+	lkmdbg_uninstall_syscall_enter_backend_locked();
+	mutex_unlock(&lkmdbg_syscall_enter_backend_lock);
 
 	if (lkmdbg_do_el0_softstep_hook) {
 		if (!lkmdbg_hook_deactivate(lkmdbg_do_el0_softstep_hook))
@@ -2779,6 +2894,7 @@ void lkmdbg_thread_ctrl_release(struct lkmdbg_session *session)
 	struct lkmdbg_hwpoint *tmp;
 #ifdef CONFIG_ARM64
 	lkmdbg_user_single_step_fn disable_fn;
+	bool fallback_active;
 	pid_t step_tid;
 #endif
 
@@ -2788,9 +2904,11 @@ void lkmdbg_thread_ctrl_release(struct lkmdbg_session *session)
 	mutex_lock(&session->lock);
 #ifdef CONFIG_ARM64
 	step_tid = session->step_tid;
+	fallback_active = session->syscall_trace_enter_fallback;
 	WRITE_ONCE(session->step_armed, false);
 	WRITE_ONCE(session->step_tgid, 0);
 	WRITE_ONCE(session->step_tid, 0);
+	session->syscall_trace_enter_fallback = false;
 #endif
 	list_for_each_entry_safe(entry, tmp, &session->hwpoints, node) {
 		list_del_init(&entry->node);
@@ -2805,6 +2923,11 @@ void lkmdbg_thread_ctrl_release(struct lkmdbg_session *session)
 	mutex_unlock(&session->lock);
 
 #ifdef CONFIG_ARM64
+	if (fallback_active) {
+		atomic_dec(&lkmdbg_syscall_enter_users);
+		lkmdbg_queue_syscall_enter_teardown();
+	}
+
 	if (!step_tid || !lkmdbg_symbols.user_disable_single_step_sym)
 		return;
 

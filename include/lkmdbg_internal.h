@@ -217,6 +217,7 @@ struct lkmdbg_session {
 	s32 syscall_trace_nr;
 	u32 syscall_trace_mode;
 	u32 syscall_trace_phases;
+	bool syscall_trace_enter_fallback;
 	pid_t step_tgid;
 	pid_t step_tid;
 	bool step_armed;
