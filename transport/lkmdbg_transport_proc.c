@@ -28,21 +28,25 @@ static long lkmdbg_bootstrap_ioctl(struct file *file, unsigned int cmd,
 				   unsigned long arg)
 {
 	void __user *argp = (void __user *)arg;
+	long ret;
+
+	(void)file;
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.bootstrap_ioctl_calls++;
 	mutex_unlock(&lkmdbg_state.lock);
 
-	switch (cmd) {
-	case LKMDBG_IOC_OPEN_SESSION:
-		if (!capable(CAP_SYS_ADMIN))
-			return -EPERM;
-		return lkmdbg_open_session(argp);
-	default:
-		if (proc_version_orig_ioctl)
-			return proc_version_orig_ioctl(file, cmd, arg);
+	if (cmd != LKMDBG_IOC_OPEN_SESSION)
 		return -ENOTTY;
-	}
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -ENOTTY;
+
+	ret = lkmdbg_open_session(argp);
+	if (ret == -EPERM)
+		return -ENOTTY;
+
+	return ret;
 }
 
 static int lkmdbg_proc_version_open(struct inode *inode, struct file *file)
@@ -107,7 +111,13 @@ static int lkmdbg_proc_version_release(struct inode *inode, struct file *file)
 static long lkmdbg_proc_version_ioctl(struct file *file, unsigned int cmd,
 				      unsigned long arg)
 {
-	return lkmdbg_bootstrap_ioctl(file, cmd, arg);
+	if (_IOC_TYPE(cmd) == LKMDBG_IOC_MAGIC)
+		return lkmdbg_bootstrap_ioctl(file, cmd, arg);
+
+	if (proc_version_orig_ioctl)
+		return proc_version_orig_ioctl(file, cmd, arg);
+
+	return -ENOTTY;
 }
 
 #ifdef CONFIG_COMPAT
