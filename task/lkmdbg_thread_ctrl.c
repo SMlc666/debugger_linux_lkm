@@ -2669,9 +2669,11 @@ long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 {
 	struct lkmdbg_syscall_trace_request req;
 	u32 supported_phases;
+	bool new_need = false;
+#ifdef CONFIG_ARM64
 	bool old_need;
-	bool new_need;
 	int ret;
+#endif
 
 	if (copy_from_user(&req, argp, sizeof(req)))
 		return -EFAULT;
@@ -2683,6 +2685,7 @@ long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 	if (req.mode && (req.phases & ~supported_phases))
 		return -EOPNOTSUPP;
 
+#ifdef CONFIG_ARM64
 	mutex_lock(&session->lock);
 	old_need = session->syscall_trace_enter_fallback;
 	mutex_unlock(&session->lock);
@@ -2699,6 +2702,7 @@ long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 			return ret;
 		}
 	}
+#endif
 
 	mutex_lock(&session->lock);
 	session->syscall_trace_tid = req.tid;
@@ -2708,10 +2712,12 @@ long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 	session->syscall_trace_enter_fallback = new_need;
 	mutex_unlock(&session->lock);
 
+#ifdef CONFIG_ARM64
 	if (old_need && !new_need) {
 		atomic_dec(&lkmdbg_syscall_enter_users);
 		lkmdbg_queue_syscall_enter_teardown();
 	}
+#endif
 
 	req.flags = lkmdbg_syscall_trace_capability_flags();
 	req.supported_phases = supported_phases;
