@@ -1419,13 +1419,6 @@ static int lkmdbg_rearm_mmu_hwpoint_locked(struct lkmdbg_hwpoint *entry)
 
 	lkmdbg_hwpoint_finish_rearm(entry);
 	mmput(mm);
-	pr_info("lkmdbg: mmu rearm id=%llu page=0x%lx baseline=0x%llx expected=0x%llx state=0x%x latched=%d disturbed=%d\n",
-		entry->id, entry->page_addr,
-		(unsigned long long)entry->mmu_baseline_pte,
-		(unsigned long long)entry->mmu_expected_pte,
-		READ_ONCE(entry->mmu_state),
-		atomic_read(&entry->stop_latched),
-		READ_ONCE(entry->mmu_disturbed));
 	return 0;
 }
 #endif
@@ -1872,15 +1865,6 @@ static bool lkmdbg_mmu_try_handle_fault(struct mm_struct *mm,
 		}
 		if (entry->armed)
 			goto armed_ok;
-		pr_info("lkmdbg: mmu fault miss id=%llu page=0x%lx actual=0x%x ip=0x%llx armed=%d latched=%d current=0x%llx expected=0x%llx baseline=0x%llx state=0x%x disturbed=%d\n",
-			entry->id, entry->page_addr, actual_type,
-			(unsigned long long)ip, entry->armed,
-			atomic_read(&entry->stop_latched),
-			(unsigned long long)pte_val(current_pte),
-			(unsigned long long)entry->mmu_expected_pte,
-			(unsigned long long)entry->mmu_baseline_pte,
-			READ_ONCE(entry->mmu_state),
-			READ_ONCE(entry->mmu_disturbed));
 		entry->armed = false;
 		lkmdbg_mmu_mark_state(entry, LKMDBG_HWPOINT_STATE_MUTATED,
 				      LKMDBG_HWPOINT_STATE_LOST);
@@ -1958,12 +1942,6 @@ armed_ok:
 	}
 
 	if (!atomic_xchg(&entry->stop_latched, 1)) {
-		pr_info("lkmdbg: mmu fault stop id=%llu page=0x%lx actual=0x%x ip=0x%llx current=0x%llx baseline=0x%llx expected=0x%llx\n",
-			entry->id, entry->page_addr, actual_type,
-			(unsigned long long)ip,
-			(unsigned long long)pte_val(current_pte),
-			(unsigned long long)entry->mmu_baseline_pte,
-			(unsigned long long)entry->mmu_expected_pte);
 		lkmdbg_regs_arm64_export_stop(&stop_regs, regs);
 		lkmdbg_session_request_async_stop(
 			entry->session, reason, entry->tgid, current->pid,
