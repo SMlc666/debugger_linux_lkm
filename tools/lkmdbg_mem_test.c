@@ -6411,42 +6411,9 @@ static int run_selftest(const char *prog)
 
 	memset(read_buf, 0xCC, sizeof(read_buf));
 	if (read_target_memory(session_fd, info.nofault_addr, read_buf,
-			       sizeof(read_buf), &bytes_done, 1) < 0) {
-		fprintf(stderr, "nofault READ_MEM request failed bytes_done=%u\n",
-			bytes_done);
-		close(session_fd);
-		close(info_pipe[0]);
-		close(cmd_pipe[1]);
-		close(resp_pipe[0]);
-		kill(child, SIGKILL);
-		waitpid(child, NULL, 0);
-		return 1;
-	}
-
-	/*
-	 * MADV_DONTNEED anonymous pages may be satisfied by the shared zero-page
-	 * under GUP nofault without instantiating a private target PTE. Accept a
-	 * full zero read here, but still require the target page to remain
-	 * non-resident afterwards.
-	 */
-	if (bytes_done != 0 && bytes_done != sizeof(read_buf)) {
-		fprintf(stderr,
-			"nofault READ_MEM bytes_done=%u expected=0-or-%zu\n",
-			bytes_done, sizeof(read_buf));
-		close(session_fd);
-		close(info_pipe[0]);
-		close(cmd_pipe[1]);
-		close(resp_pipe[0]);
-		kill(child, SIGKILL);
-		waitpid(child, NULL, 0);
-		return 1;
-	}
-
-	if (bytes_done == sizeof(read_buf) &&
-	    memcmp(read_buf, (unsigned char[sizeof(read_buf)]){ 0 },
-		   sizeof(read_buf)) != 0) {
-		fprintf(stderr,
-			"nofault READ_MEM expected zero-page contents bytes_done=%u\n",
+			       sizeof(read_buf), &bytes_done, 1) < 0 ||
+	    bytes_done != 0) {
+		fprintf(stderr, "nofault READ_MEM bytes_done=%u expected=0\n",
 			bytes_done);
 		close(session_fd);
 		close(info_pipe[0]);

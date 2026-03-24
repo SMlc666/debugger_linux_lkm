@@ -88,19 +88,40 @@ static long lkmdbg_get_remote_pages_nofault(struct mm_struct *mm,
 					    unsigned int flags,
 					    struct page **pages)
 {
+	struct lkmdbg_target_pt_info pt_info;
+	unsigned long page_addr;
+	unsigned int present_pages = 0;
 	long ret;
+	int lookup_ret;
 	int locked = 1;
 
 	mmap_read_lock(mm);
+	page_addr = start & PAGE_MASK;
+	while (present_pages < nr_pages) {
+		lookup_ret = lkmdbg_target_pt_lookup_locked(
+			mm, page_addr + (present_pages * PAGE_SIZE), &pt_info);
+		if (lookup_ret) {
+			ret = lookup_ret;
+			goto out_unlock;
+		}
+		if (!(pt_info.flags & LKMDBG_TARGET_PT_FLAG_PRESENT))
+			break;
+		present_pages++;
+	}
+	if (!present_pages) {
+		ret = 0;
+		goto out_unlock;
+	}
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
-	ret = get_user_pages_remote(mm, start, nr_pages,
+	ret = get_user_pages_remote(mm, start, present_pages,
 				    flags | LKMDBG_GUP_NOFAULT_FLAG, pages,
 				    &locked);
 #else
-	ret = get_user_pages_remote(mm, start, nr_pages,
+	ret = get_user_pages_remote(mm, start, present_pages,
 				    flags | LKMDBG_GUP_NOFAULT_FLAG, pages,
 				    NULL, &locked);
 #endif
+out_unlock:
 	if (locked)
 		mmap_read_unlock(mm);
 
