@@ -1412,11 +1412,13 @@ static int lkmdbg_rearm_mmu_hwpoint_locked(struct lkmdbg_hwpoint *entry)
 		return -ESRCH;
 
 	ret = lkmdbg_mmu_apply_trap(mm, entry);
-	mmput(mm);
-	if (ret)
+	if (ret) {
+		mmput(mm);
 		return ret;
+	}
 
 	lkmdbg_hwpoint_finish_rearm(entry);
+	mmput(mm);
 	pr_info("lkmdbg: mmu rearm id=%llu page=0x%lx baseline=0x%llx expected=0x%llx state=0x%x latched=%d disturbed=%d\n",
 		entry->id, entry->page_addr,
 		(unsigned long long)entry->mmu_baseline_pte,
@@ -1855,6 +1857,21 @@ static bool lkmdbg_mmu_try_handle_fault(struct mm_struct *mm,
 	if (!entry->armed ||
 	    !lkmdbg_pte_equivalent(current_pte,
 				   __pte(entry->mmu_expected_pte))) {
+		/* Recover the narrow window where the trap is visible before
+		 * the software-armed flag is published.
+		 */
+		if (!entry->armed &&
+		    !atomic_read(&entry->stop_latched) &&
+		    lkmdbg_pte_equivalent(current_pte,
+					 __pte(entry->mmu_expected_pte))) {
+			entry->armed = true;
+			lkmdbg_mmu_mark_state(
+				entry, 0,
+				LKMDBG_HWPOINT_STATE_LOST |
+					LKMDBG_HWPOINT_STATE_MUTATED);
+		}
+		if (entry->armed)
+			goto armed_ok;
 		pr_info("lkmdbg: mmu fault miss id=%llu page=0x%lx actual=0x%x ip=0x%llx armed=%d latched=%d current=0x%llx expected=0x%llx baseline=0x%llx state=0x%x disturbed=%d\n",
 			entry->id, entry->page_addr, actual_type,
 			(unsigned long long)ip, entry->armed,
@@ -1871,6 +1888,7 @@ static bool lkmdbg_mmu_try_handle_fault(struct mm_struct *mm,
 		return false;
 	}
 
+armed_ok:
 	ret = lkmdbg_mmu_restore_baseline(mm, entry);
 	if (ret) {
 		entry->armed = false;
