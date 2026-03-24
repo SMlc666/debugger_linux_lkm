@@ -40,6 +40,7 @@
 #define QEMU_INPUT_HOST_TIMEOUT_MS 15000
 #define QEMU_INPUT_IDLE_TIMEOUT_MS 250
 #define QEMU_INPUT_INJECT_TIMEOUT_MS 1000
+#define QEMU_INPUT_DEVICES_PATH "/proc/bus/input/devices"
 
 static void qemu_poweroff(void)
 {
@@ -486,6 +487,49 @@ static void qemu_expect_no_input_events(int channel_fd, int timeout_ms)
 	qemu_check(event_count == 0, "unexpected_input_events=%zd", event_count);
 }
 
+static void qemu_report_input_stealth(void)
+{
+	char buf[16384];
+	char line[256];
+	const char *cursor;
+	unsigned int handler_hits = 0;
+	unsigned int name_hits = 0;
+	bool printed_handler_line = false;
+
+	qemu_read_file(QEMU_INPUT_DEVICES_PATH, buf, sizeof(buf));
+	cursor = buf;
+
+	while (*cursor) {
+		const char *next = strchr(cursor, '\n');
+		size_t len;
+
+		if (!next)
+			next = cursor + strlen(cursor);
+		len = (size_t)(next - cursor);
+		if (len >= sizeof(line))
+			len = sizeof(line) - 1;
+		memcpy(line, cursor, len);
+		line[len] = '\0';
+
+		if (strstr(line, "Handlers=") && strstr(line, "lkmdbg-input")) {
+			handler_hits++;
+			if (!printed_handler_line) {
+				printf("LKMDBG_QEMU_INPUT_STEALTH first_handler_line=%s\n",
+				       line);
+				printed_handler_line = true;
+			}
+		}
+		if (strstr(line, "lkmdbg-input"))
+			name_hits++;
+
+		cursor = *next ? next + 1 : next;
+	}
+
+	printf("LKMDBG_QEMU_INPUT_STEALTH exposed=%u handler_hits=%u name_hits=%u\n",
+	       handler_hits ? 1U : 0U, handler_hits, name_hits);
+	fflush(stdout);
+}
+
 static void qemu_run_input_smoke(void)
 {
 	struct lkmdbg_input_device_info_request info;
@@ -504,6 +548,7 @@ static void qemu_run_input_smoke(void)
 
 	session_fd = qemu_open_session();
 	device_id = qemu_find_keyboard_input_device(session_fd, &info);
+	qemu_report_input_stealth();
 
 	host_fd = qemu_open_input_channel(session_fd, device_id, 0);
 	printf("LKMDBG_QEMU_INPUT_WAIT_HOST_KEY device_id=%llu name=%s\n",
