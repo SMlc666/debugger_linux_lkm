@@ -68,13 +68,18 @@ struct lkmdbg_hwpoint {
 };
 
 #ifdef CONFIG_ARM64
+typedef void (*lkmdbg_user_single_step_fn)(struct task_struct *task);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
+#define LKMDBG_ARM64_USER_STEP_HOOKS 1
 typedef void (*lkmdbg_register_user_step_hook_fn)(struct step_hook *hook);
 typedef void (*lkmdbg_unregister_user_step_hook_fn)(struct step_hook *hook);
-typedef void (*lkmdbg_user_single_step_fn)(struct task_struct *task);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
 typedef unsigned long lkmdbg_step_hook_esr_t;
 #else
 typedef unsigned int lkmdbg_step_hook_esr_t;
+#endif
+#else
+#define LKMDBG_ARM64_USER_STEP_HOOKS 0
 #endif
 
 static void lkmdbg_regs_arm64_export_stop(struct lkmdbg_regs_arm64 *dst,
@@ -171,7 +176,7 @@ static enum lkmdbg_remote_vm_write_hook_kind
 	lkmdbg_remote_vm_write_hook_kind;
 #endif
 
-#ifdef CONFIG_ARM64
+#if defined(CONFIG_ARM64) && LKMDBG_ARM64_USER_STEP_HOOKS
 static int lkmdbg_user_step_handler(struct pt_regs *regs,
 				    lkmdbg_step_hook_esr_t esr);
 static int lkmdbg_do_page_fault_replacement(unsigned long far,
@@ -184,8 +189,8 @@ static vm_fault_t lkmdbg_do_page_fault_inner_replacement(
 static struct step_hook lkmdbg_user_step_hook = {
 	.fn = lkmdbg_user_step_handler,
 };
-static bool lkmdbg_user_step_hook_registered;
 #endif
+static bool lkmdbg_user_step_hook_registered;
 
 static void __maybe_unused lkmdbg_hwpoint_get(struct lkmdbg_hwpoint *entry)
 {
@@ -1798,6 +1803,8 @@ static int lkmdbg_mmu_queue_step_rearm(struct lkmdbg_hwpoint *entry)
 
 	if (!entry)
 		return -EINVAL;
+	if (!LKMDBG_ARM64_USER_STEP_HOOKS || !lkmdbg_user_step_hook_registered)
+		return -EOPNOTSUPP;
 
 	enable_fn =
 		(lkmdbg_user_single_step_fn)lkmdbg_symbols.user_enable_single_step_sym;
@@ -2033,6 +2040,7 @@ passthrough:
 	return ret;
 }
 
+#if defined(CONFIG_ARM64) && LKMDBG_ARM64_USER_STEP_HOOKS
 static int lkmdbg_user_step_handler(struct pt_regs *regs,
 				    lkmdbg_step_hook_esr_t esr)
 {
@@ -2185,7 +2193,7 @@ static int lkmdbg_register_trace_hooks(void)
 
 int lkmdbg_thread_ctrl_init(void)
 {
-#ifdef CONFIG_ARM64
+#if defined(CONFIG_ARM64) && LKMDBG_ARM64_USER_STEP_HOOKS
 	if (lkmdbg_symbols.register_user_step_hook_sym &&
 	    lkmdbg_symbols.unregister_user_step_hook_sym &&
 	    lkmdbg_symbols.user_enable_single_step_sym &&
@@ -2343,7 +2351,7 @@ void lkmdbg_thread_ctrl_exit(void)
 	}
 	lkmdbg_trace_fork_tp = NULL;
 
-#ifdef CONFIG_ARM64
+#if defined(CONFIG_ARM64) && LKMDBG_ARM64_USER_STEP_HOOKS
 	if (lkmdbg_user_step_hook_registered) {
 		((lkmdbg_unregister_user_step_hook_fn)
 			 lkmdbg_symbols.unregister_user_step_hook_sym)(
@@ -2643,7 +2651,8 @@ long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp)
 #ifndef CONFIG_ARM64
 	return lkmdbg_single_step_copy_reply(argp, &req, -EOPNOTSUPP);
 #else
-	if (!lkmdbg_user_step_hook_registered ||
+	if (!LKMDBG_ARM64_USER_STEP_HOOKS ||
+	    !lkmdbg_user_step_hook_registered ||
 	    !lkmdbg_symbols.user_enable_single_step_sym)
 		return lkmdbg_single_step_copy_reply(argp, &req, -EOPNOTSUPP);
 
