@@ -43,7 +43,7 @@ static long lkmdbg_bootstrap_ioctl(struct file *file, unsigned int cmd,
 		return -ENOTTY;
 
 	ret = lkmdbg_open_session(argp);
-	if (ret == -EPERM)
+	if (ret == -EPERM || ret == -EINVAL || ret == -EFAULT)
 		return -ENOTTY;
 
 	return ret;
