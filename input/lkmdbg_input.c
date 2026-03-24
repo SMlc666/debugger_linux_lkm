@@ -10,6 +10,7 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
+#include <linux/version.h>
 
 #include "lkmdbg_internal.h"
 
@@ -899,6 +900,7 @@ static void lkmdbg_input_unregister_device(struct device *dev)
 	}
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 4, 0)
 static int lkmdbg_input_add_dev(struct device *dev,
 				struct class_interface *class_intf)
 {
@@ -914,6 +916,17 @@ static void lkmdbg_input_remove_dev(struct device *dev,
 
 	lkmdbg_input_unregister_device(dev);
 }
+#else
+static int lkmdbg_input_add_dev(struct device *dev)
+{
+	return lkmdbg_input_register_device(dev);
+}
+
+static void lkmdbg_input_remove_dev(struct device *dev)
+{
+	lkmdbg_input_unregister_device(dev);
+}
+#endif
 
 static int lkmdbg_install_input_event_hook(void)
 {
