@@ -102,6 +102,15 @@ typedef int (*lkmdbg_tracepoint_probe_register_fn)(struct tracepoint *tp,
 typedef int (*lkmdbg_tracepoint_probe_unregister_fn)(struct tracepoint *tp,
 						     void *probe, void *data);
 typedef void (*lkmdbg_perf_event_disable_local_fn)(struct perf_event *event);
+#ifdef CONFIG_ARM64
+typedef void (*lkmdbg_invoke_syscall_fn)(struct pt_regs *regs,
+					 unsigned int scno,
+					 unsigned int sc_nr,
+					 const syscall_fn_t syscall_table[]);
+typedef long (*lkmdbg_invoke_syscall_inner_fn)(struct pt_regs *regs,
+					       syscall_fn_t syscall_fn);
+typedef void (*lkmdbg_do_el0_svc_fn)(struct pt_regs *regs);
+#endif
 
 static bool lkmdbg_trace_fork_registered;
 static bool lkmdbg_trace_exec_registered;
@@ -117,6 +126,20 @@ static struct tracepoint *lkmdbg_trace_sys_enter_tp;
 static struct tracepoint *lkmdbg_trace_sys_exit_tp;
 static bool lkmdbg_perf_disable_missing_logged;
 #ifdef CONFIG_ARM64
+static struct lkmdbg_inline_hook *lkmdbg_syscall_enter_hook;
+static struct lkmdbg_hook_registry_entry *lkmdbg_syscall_enter_registry;
+enum lkmdbg_syscall_enter_hook_kind {
+	LKMDBG_SYSCALL_ENTER_HOOK_NONE = 0,
+	LKMDBG_SYSCALL_ENTER_HOOK_INVOKE,
+	LKMDBG_SYSCALL_ENTER_HOOK_INVOKE_INNER,
+	LKMDBG_SYSCALL_ENTER_HOOK_DO_EL0_SVC,
+};
+static enum lkmdbg_syscall_enter_hook_kind lkmdbg_syscall_enter_hook_kind;
+static lkmdbg_invoke_syscall_fn lkmdbg_invoke_syscall_orig;
+static lkmdbg_invoke_syscall_inner_fn lkmdbg_invoke_syscall_inner_orig;
+static lkmdbg_do_el0_svc_fn lkmdbg_do_el0_svc_orig;
+static atomic_t lkmdbg_syscall_enter_inflight = ATOMIC_INIT(0);
+static DECLARE_WAIT_QUEUE_HEAD(lkmdbg_syscall_enter_waitq);
 static LIST_HEAD(lkmdbg_mmu_hwpoint_list);
 static DEFINE_SPINLOCK(lkmdbg_mmu_hwpoint_lock);
 static struct lkmdbg_inline_hook *lkmdbg_do_page_fault_hook;
@@ -188,6 +211,14 @@ static int lkmdbg_user_step_handler(struct pt_regs *regs,
 #endif
 #ifdef CONFIG_ARM64
 static bool lkmdbg_handle_user_single_step(struct pt_regs *regs);
+static int lkmdbg_install_syscall_enter_backend(void);
+static void lkmdbg_syscall_enter_broadcast_regs(struct pt_regs *regs, s32 nr);
+static void lkmdbg_invoke_syscall_replacement(
+	struct pt_regs *regs, unsigned int scno, unsigned int sc_nr,
+	const syscall_fn_t syscall_table[]);
+static long lkmdbg_invoke_syscall_inner_replacement(
+	struct pt_regs *regs, syscall_fn_t syscall_fn);
+static void lkmdbg_do_el0_svc_replacement(struct pt_regs *regs);
 static void lkmdbg_do_el0_softstep_replacement(unsigned long esr,
 					       struct pt_regs *regs);
 static int lkmdbg_do_page_fault_replacement(unsigned long far,
@@ -418,6 +449,10 @@ static u32 lkmdbg_syscall_trace_supported_phases(void)
 		phases |= LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
 	if (READ_ONCE(lkmdbg_trace_sys_exit_registered))
 		phases |= LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
+#ifdef CONFIG_ARM64
+	if (lkmdbg_syscall_enter_hook)
+		phases |= LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
+#endif
 
 	return phases;
 }
@@ -426,8 +461,13 @@ static u32 lkmdbg_syscall_trace_capability_flags(void)
 {
 	u32 flags = 0;
 
-	if (lkmdbg_syscall_trace_supported_phases())
+	if (READ_ONCE(lkmdbg_trace_sys_enter_registered) ||
+	    READ_ONCE(lkmdbg_trace_sys_exit_registered))
 		flags |= LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT;
+#ifdef CONFIG_ARM64
+	if (lkmdbg_syscall_enter_hook)
+		flags |= LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_ENTRY_HOOK;
+#endif
 
 	return flags;
 }
@@ -1849,6 +1889,73 @@ static void lkmdbg_trace_raw_sys_exit(void *data, struct pt_regs *regs,
 		(s32)nr, (s64)ret, stop_regs_ptr);
 }
 
+#ifdef CONFIG_ARM64
+static void lkmdbg_syscall_enter_broadcast_regs(struct pt_regs *regs, s32 nr)
+{
+	struct lkmdbg_regs_arm64 stop_regs;
+	struct lkmdbg_regs_arm64 *stop_regs_ptr = NULL;
+
+	if (!regs || current->tgid <= 0 || current->pid <= 0 || nr < 0)
+		return;
+
+	lkmdbg_regs_arm64_export_stop(&stop_regs, regs);
+	stop_regs_ptr = &stop_regs;
+	lkmdbg_session_broadcast_syscall_event(
+		current->tgid, current->pid, LKMDBG_SYSCALL_TRACE_PHASE_ENTER,
+		nr, 0, stop_regs_ptr);
+}
+
+static void lkmdbg_invoke_syscall_replacement(
+	struct pt_regs *regs, unsigned int scno, unsigned int sc_nr,
+	const syscall_fn_t syscall_table[])
+{
+	atomic_inc(&lkmdbg_syscall_enter_inflight);
+
+	lkmdbg_syscall_enter_broadcast_regs(regs, (s32)scno);
+	if (lkmdbg_invoke_syscall_orig)
+		lkmdbg_invoke_syscall_orig(regs, scno, sc_nr, syscall_table);
+
+	if (atomic_dec_and_test(&lkmdbg_syscall_enter_inflight))
+		wake_up_all(&lkmdbg_syscall_enter_waitq);
+}
+
+static long lkmdbg_invoke_syscall_inner_replacement(
+	struct pt_regs *regs, syscall_fn_t syscall_fn)
+{
+	long ret = 0;
+	s32 nr = -1;
+
+	atomic_inc(&lkmdbg_syscall_enter_inflight);
+
+	if (regs)
+		nr = (s32)syscall_get_nr(current, regs);
+	lkmdbg_syscall_enter_broadcast_regs(regs, nr);
+	if (lkmdbg_invoke_syscall_inner_orig)
+		ret = lkmdbg_invoke_syscall_inner_orig(regs, syscall_fn);
+
+	if (atomic_dec_and_test(&lkmdbg_syscall_enter_inflight))
+		wake_up_all(&lkmdbg_syscall_enter_waitq);
+
+	return ret;
+}
+
+static void lkmdbg_do_el0_svc_replacement(struct pt_regs *regs)
+{
+	s32 nr = -1;
+
+	atomic_inc(&lkmdbg_syscall_enter_inflight);
+
+	if (regs)
+		nr = (s32)regs->regs[8];
+	lkmdbg_syscall_enter_broadcast_regs(regs, nr);
+	if (lkmdbg_do_el0_svc_orig)
+		lkmdbg_do_el0_svc_orig(regs);
+
+	if (atomic_dec_and_test(&lkmdbg_syscall_enter_inflight))
+		wake_up_all(&lkmdbg_syscall_enter_waitq);
+}
+#endif
+
 struct lkmdbg_tracepoint_lookup {
 	const char *name;
 	struct tracepoint *match;
@@ -2318,13 +2425,97 @@ static int lkmdbg_register_trace_hooks(void)
 	return 0;
 }
 
+#ifdef CONFIG_ARM64
+static int lkmdbg_install_syscall_enter_backend(void)
+{
+	void *target;
+	void *orig_fn = NULL;
+	void *replacement;
+	const char *name;
+	int ret;
+
+	if (lkmdbg_trace_sys_enter_registered || lkmdbg_syscall_enter_hook)
+		return 0;
+
+	if (lkmdbg_symbols.invoke_syscall_sym) {
+		target = (void *)lkmdbg_symbols.invoke_syscall_sym;
+		replacement = lkmdbg_invoke_syscall_replacement;
+		name = "invoke_syscall";
+		lkmdbg_syscall_enter_hook_kind =
+			LKMDBG_SYSCALL_ENTER_HOOK_INVOKE;
+	} else if (lkmdbg_symbols.invoke_syscall_inner_sym) {
+		target = (void *)lkmdbg_symbols.invoke_syscall_inner_sym;
+		replacement = lkmdbg_invoke_syscall_inner_replacement;
+		name = "__invoke_syscall";
+		lkmdbg_syscall_enter_hook_kind =
+			LKMDBG_SYSCALL_ENTER_HOOK_INVOKE_INNER;
+	} else if (lkmdbg_symbols.do_el0_svc_sym) {
+		target = (void *)lkmdbg_symbols.do_el0_svc_sym;
+		replacement = lkmdbg_do_el0_svc_replacement;
+		name = "do_el0_svc";
+		lkmdbg_syscall_enter_hook_kind =
+			LKMDBG_SYSCALL_ENTER_HOOK_DO_EL0_SVC;
+	} else {
+		return -ENOENT;
+	}
+
+	lkmdbg_syscall_enter_registry =
+		lkmdbg_hook_registry_register(name, target, replacement);
+	if (!lkmdbg_syscall_enter_registry)
+		return -ENOMEM;
+
+	ret = lkmdbg_hook_install(target, replacement, &lkmdbg_syscall_enter_hook,
+				  &orig_fn);
+	if (ret) {
+		lkmdbg_hook_registry_unregister(lkmdbg_syscall_enter_registry,
+						ret);
+		lkmdbg_syscall_enter_registry = NULL;
+		lkmdbg_syscall_enter_hook_kind = LKMDBG_SYSCALL_ENTER_HOOK_NONE;
+		return ret;
+	}
+
+	switch (lkmdbg_syscall_enter_hook_kind) {
+	case LKMDBG_SYSCALL_ENTER_HOOK_INVOKE:
+		lkmdbg_invoke_syscall_orig = (lkmdbg_invoke_syscall_fn)orig_fn;
+		break;
+	case LKMDBG_SYSCALL_ENTER_HOOK_INVOKE_INNER:
+		lkmdbg_invoke_syscall_inner_orig =
+			(lkmdbg_invoke_syscall_inner_fn)orig_fn;
+		break;
+	case LKMDBG_SYSCALL_ENTER_HOOK_DO_EL0_SVC:
+		lkmdbg_do_el0_svc_orig = (lkmdbg_do_el0_svc_fn)orig_fn;
+		break;
+	default:
+		break;
+	}
+
+	lkmdbg_hook_registry_mark_installed(lkmdbg_syscall_enter_registry, target,
+					    orig_fn, 0);
+	pr_info("lkmdbg: syscall enter fallback active target=%s origin=%px trampoline=%px\n",
+		name, orig_fn, target);
+	return 0;
+}
+#endif
+
 int lkmdbg_thread_ctrl_init(void)
 {
+	int ret;
+
 #ifdef CONFIG_ARM64
 	lkmdbg_install_user_single_step_backend();
 #endif
 
-	return lkmdbg_register_trace_hooks();
+	ret = lkmdbg_register_trace_hooks();
+#ifdef CONFIG_ARM64
+	if (!lkmdbg_trace_sys_enter_registered) {
+		int hook_ret = lkmdbg_install_syscall_enter_backend();
+
+		if (hook_ret && hook_ret != -ENOENT)
+			pr_warn("lkmdbg: syscall enter fallback install failed ret=%d\n",
+				hook_ret);
+	}
+#endif
+	return ret;
 }
 
 long lkmdbg_set_signal_config(struct lkmdbg_session *session, void __user *argp)
@@ -2489,6 +2680,25 @@ void lkmdbg_thread_ctrl_exit(void)
 #endif
 
 #ifdef CONFIG_ARM64
+	if (lkmdbg_syscall_enter_hook) {
+		if (!lkmdbg_hook_deactivate(lkmdbg_syscall_enter_hook))
+			wait_event_timeout(
+				lkmdbg_syscall_enter_waitq,
+				atomic_read(&lkmdbg_syscall_enter_inflight) == 0,
+				msecs_to_jiffies(1000));
+		lkmdbg_hook_destroy(lkmdbg_syscall_enter_hook);
+		lkmdbg_syscall_enter_hook = NULL;
+	}
+	if (lkmdbg_syscall_enter_registry) {
+		lkmdbg_hook_registry_unregister(lkmdbg_syscall_enter_registry,
+						0);
+		lkmdbg_syscall_enter_registry = NULL;
+	}
+	lkmdbg_syscall_enter_hook_kind = LKMDBG_SYSCALL_ENTER_HOOK_NONE;
+	lkmdbg_invoke_syscall_orig = NULL;
+	lkmdbg_invoke_syscall_inner_orig = NULL;
+	lkmdbg_do_el0_svc_orig = NULL;
+
 	if (lkmdbg_do_el0_softstep_hook) {
 		if (!lkmdbg_hook_deactivate(lkmdbg_do_el0_softstep_hook))
 			wait_event_timeout(

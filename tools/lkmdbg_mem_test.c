@@ -4582,6 +4582,8 @@ static const char *describe_syscall_trace_flags(uint32_t flags, char *buf,
 
 	if (flags & LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT)
 		append_flag_name(buf, buf_size, "tracepoint");
+	if (flags & LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_ENTRY_HOOK)
+		append_flag_name(buf, buf_size, "entry_hook");
 	if (!buf[0])
 		snprintf(buf, buf_size, "none");
 
@@ -5746,13 +5748,17 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, pid_t child)
 		return -1;
 	supported_phases = trace_req.supported_phases;
 	if (!!supported_phases !=
-	    !!(trace_req.flags & LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT)) {
+	    !!(trace_req.flags &
+	       (LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT |
+		LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_ENTRY_HOOK))) {
 		fprintf(stderr,
 			"syscall trace backend flag mismatch flags=0x%x supported=0x%x\n",
 			trace_req.flags, supported_phases);
 		return -1;
 	}
-	if ((trace_req.flags & LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT) &&
+	if ((trace_req.flags &
+	     (LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT |
+	      LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_ENTRY_HOOK)) &&
 	    !supported_phases) {
 		fprintf(stderr,
 			"syscall trace capability mismatch flags=0x%x supported=0x%x\n",
