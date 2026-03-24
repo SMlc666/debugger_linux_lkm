@@ -202,6 +202,7 @@ static struct step_hook lkmdbg_user_step_hook = {
 };
 #endif
 static bool lkmdbg_user_step_hook_registered;
+#endif
 
 static void __maybe_unused lkmdbg_hwpoint_get(struct lkmdbg_hwpoint *entry)
 {
@@ -1898,6 +1899,7 @@ static int lkmdbg_mmu_queue_step_rearm(struct lkmdbg_hwpoint *entry)
 	enable_fn(current);
 	return 0;
 }
+#endif
 
 static bool lkmdbg_mmu_try_handle_fault(struct mm_struct *mm,
 					unsigned long addr, u32 actual_type,
