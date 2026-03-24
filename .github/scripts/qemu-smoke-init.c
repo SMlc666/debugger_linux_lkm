@@ -400,6 +400,10 @@ static __u64 qemu_find_keyboard_input_device(
 
 		for (__u32 i = 0; i < query.entries_filled; i++) {
 			saw_any = true;
+			printf("LKMDBG_QEMU_INPUT_CANDIDATE device_id=%llu name=%s flags=0x%x\n",
+			       (unsigned long long)entries[i].device_id,
+			       entries[i].name, entries[i].flags);
+			fflush(stdout);
 			if (!(entries[i].flags & LKMDBG_INPUT_DEVICE_FLAG_HAS_KEYS))
 				continue;
 			if (!(entries[i].flags & LKMDBG_INPUT_DEVICE_FLAG_CAN_INJECT))
@@ -431,7 +435,7 @@ static __u64 qemu_find_keyboard_input_device(
 	}
 
 	qemu_check(saw_any, "no_input_devices_enumerated");
-	qemu_fail("no_viable_keyboard_input_device");
+	qemu_fail("no_viable_keyboard_input_device_missing_KEY_A");
 	return 0;
 }
 

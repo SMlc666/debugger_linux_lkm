@@ -428,7 +428,7 @@ jobs:
             -smp 2 \
             -m 1024 \
             -nographic \
-            -device virtio-keyboard-device \
+            -device virtio-keyboard-pci \
             -kernel "$KERNEL_IMAGE" \
             -initrd "$INITRAMFS" \
             -append "console=ttyAMA0 rdinit=/init panic=-1" \
