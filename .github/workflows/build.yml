@@ -220,6 +220,9 @@ jobs:
           - label: 6.12
             artifact_name: qemu-arm64-boot-6.12
             log_name: qemu-arm64-smoke-log-6.12
+          - label: 6.18
+            artifact_name: qemu-arm64-boot-6.18
+            log_name: qemu-arm64-smoke-log-6.18
 
     steps:
       - name: Download QEMU boot artifacts
@@ -315,6 +318,9 @@ jobs:
           - label: 6.12
             artifact_name: qemu-arm64-boot-6.12
             log_name: qemu-arm64-hook-soak-log-6.12
+          - label: 6.18
+            artifact_name: qemu-arm64-boot-6.18
+            log_name: qemu-arm64-hook-soak-log-6.18
 
     steps:
       - name: Download QEMU boot artifacts
