@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 20
+#define LKMDBG_PROTO_VERSION 21
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -70,6 +70,7 @@
 #define LKMDBG_STOP_REASON_SINGLE_STEP 4U
 #define LKMDBG_STOP_REASON_SIGNAL 5U
 #define LKMDBG_STOP_REASON_SYSCALL 6U
+#define LKMDBG_STOP_REASON_REMOTE_CALL 7U
 
 #define LKMDBG_STOP_FLAG_ACTIVE 0x00000001U
 #define LKMDBG_STOP_FLAG_FROZEN 0x00000002U
@@ -116,6 +117,8 @@
 #define LKMDBG_HWPOINT_STATE_MUTATED 0x00000008U
 
 #define LKMDBG_CONTINUE_FLAG_REARM_HWPOINTS 0x00000001U
+
+#define LKMDBG_REMOTE_CALL_MAX_ARGS 8U
 
 #define LKMDBG_VMA_PROT_READ 0x00000001U
 #define LKMDBG_VMA_PROT_WRITE 0x00000002U
@@ -500,6 +503,19 @@ struct lkmdbg_single_step_request {
 	__u32 flags;
 };
 
+struct lkmdbg_remote_call_request {
+	__u32 version;
+	__u32 size;
+	__s32 tid;
+	__u32 flags;
+	__u64 target_pc;
+	__u32 arg_count;
+	__u32 reserved0;
+	__u64 args[LKMDBG_REMOTE_CALL_MAX_ARGS];
+	__u64 call_id;
+	__u64 return_pc;
+};
+
 struct lkmdbg_page_entry {
 	__u64 page_addr;
 	__u64 pgoff;
@@ -859,5 +875,7 @@ struct lkmdbg_input_event {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x34, struct lkmdbg_input_device_info_request)
 #define LKMDBG_IOC_OPEN_INPUT_CHANNEL \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x35, struct lkmdbg_input_channel_request)
+#define LKMDBG_IOC_REMOTE_CALL \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x36, struct lkmdbg_remote_call_request)
 
 #endif

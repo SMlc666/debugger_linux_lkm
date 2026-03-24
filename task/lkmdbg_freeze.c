@@ -676,21 +676,20 @@ u32 lkmdbg_freeze_thread_flags(struct lkmdbg_session *session, pid_t tid)
 	u32 flags = 0;
 
 	freezer = lkmdbg_session_freezer_get(session);
-	if (!freezer)
-		return 0;
-
-	mutex_lock(&freezer->lock);
-	entry = lkmdbg_freezer_find_thread_locked(freezer, tid);
-	if (entry) {
-		flags |= LKMDBG_THREAD_FLAG_FREEZE_TRACKED;
-		if (lkmdbg_freezer_thread_settled_locked(entry))
-			flags |= LKMDBG_THREAD_FLAG_FREEZE_SETTLED;
-		if (entry->parked)
-			flags |= LKMDBG_THREAD_FLAG_FREEZE_PARKED;
+	if (freezer) {
+		mutex_lock(&freezer->lock);
+		entry = lkmdbg_freezer_find_thread_locked(freezer, tid);
+		if (entry) {
+			flags |= LKMDBG_THREAD_FLAG_FREEZE_TRACKED;
+			if (lkmdbg_freezer_thread_settled_locked(entry))
+				flags |= LKMDBG_THREAD_FLAG_FREEZE_SETTLED;
+			if (entry->parked)
+				flags |= LKMDBG_THREAD_FLAG_FREEZE_PARKED;
+		}
+		mutex_unlock(&freezer->lock);
+		lkmdbg_freezer_put(freezer);
 	}
-	mutex_unlock(&freezer->lock);
-
-	lkmdbg_freezer_put(freezer);
+	flags |= lkmdbg_remote_call_thread_flags(session, tid);
 	return flags;
 }
 

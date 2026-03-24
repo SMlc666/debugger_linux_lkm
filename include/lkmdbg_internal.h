@@ -10,6 +10,7 @@
 #include <linux/mutex.h>
 #include <linux/poll.h>
 #include <linux/spinlock.h>
+#include <linux/task_work.h>
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/wait.h>
@@ -149,6 +150,30 @@ struct lkmdbg_target_pt_info {
 	u32 pt_flags;
 };
 
+enum lkmdbg_remote_call_phase {
+	LKMDBG_REMOTE_CALL_NONE = 0,
+	LKMDBG_REMOTE_CALL_PREPARED = 1,
+	LKMDBG_REMOTE_CALL_RUNNING = 2,
+	LKMDBG_REMOTE_CALL_PARKED = 3,
+};
+
+struct lkmdbg_remote_call_state {
+	struct lkmdbg_session *session;
+	struct perf_event *return_event;
+	struct callback_head park_work;
+	struct lkmdbg_regs_arm64 saved_regs;
+	u64 call_id;
+	u64 target_pc;
+	u64 return_pc;
+	u64 return_value;
+	pid_t tgid;
+	pid_t tid;
+	u32 phase;
+	bool parked;
+	bool resume;
+	bool park_work_queued;
+};
+
 int lkmdbg_disable_kprobe_blacklist(void);
 int lkmdbg_cfi_bypass(void);
 
@@ -158,6 +183,7 @@ struct lkmdbg_session {
 	spinlock_t event_lock;
 	wait_queue_head_t readq;
 	wait_queue_head_t async_waitq;
+	wait_queue_head_t remote_call_waitq;
 	u64 session_id;
 	u64 ioctl_calls;
 	u64 event_seq;
@@ -195,8 +221,10 @@ struct lkmdbg_session {
 	bool stop_work_pending;
 	u64 stop_work_target_gen;
 	u64 next_stop_cookie;
+	u64 next_remote_call_id;
 	struct lkmdbg_stop_state stop_state;
 	struct lkmdbg_stop_state pending_stop;
+	struct lkmdbg_remote_call_state remote_call;
 	struct lkmdbg_event_record events[LKMDBG_SESSION_EVENT_CAPACITY];
 };
 
@@ -369,6 +397,20 @@ int lkmdbg_prepare_continue_hwpoints(struct lkmdbg_session *session,
 				     const struct lkmdbg_stop_state *stop,
 				     u32 flags);
 long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_remote_call(struct lkmdbg_session *session, void __user *argp);
+u32 lkmdbg_remote_call_thread_flags(struct lkmdbg_session *session, pid_t tid);
+int lkmdbg_remote_call_prepare_continue(struct lkmdbg_session *session,
+					const struct lkmdbg_stop_state *stop);
+void lkmdbg_remote_call_rollback_continue(
+	struct lkmdbg_session *session,
+	const struct lkmdbg_stop_state *stop);
+int lkmdbg_remote_call_finish_continue(struct lkmdbg_session *session,
+				       const struct lkmdbg_stop_state *stop);
+bool lkmdbg_remote_call_blocks_target_change(struct lkmdbg_session *session);
+bool lkmdbg_remote_call_blocks_manual_thaw(struct lkmdbg_session *session);
+void lkmdbg_remote_call_fail_stop(struct lkmdbg_session *session,
+				  const struct lkmdbg_stop_state *stop);
+void lkmdbg_remote_call_release(struct lkmdbg_session *session);
 long lkmdbg_freeze_threads(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_thaw_threads(struct lkmdbg_session *session, void __user *argp);
 int lkmdbg_session_freeze_target(struct lkmdbg_session *session,

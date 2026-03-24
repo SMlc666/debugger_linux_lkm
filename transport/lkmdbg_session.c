@@ -200,12 +200,15 @@ static void lkmdbg_session_stop_workfn(struct work_struct *work)
 	lkmdbg_session_zero_stop(&session->pending_stop);
 	mutex_unlock(&session->lock);
 
-	if (closing || !stop.reason)
+	if (closing || !stop.reason) {
+		lkmdbg_remote_call_fail_stop(session, &stop);
 		goto out;
+	}
 
 	mutex_lock(&session->lock);
 	if (session->target_gen != target_gen || session->target_tgid != stop.tgid) {
 		mutex_unlock(&session->lock);
+		lkmdbg_remote_call_fail_stop(session, &stop);
 		goto out;
 	}
 	mutex_unlock(&session->lock);
@@ -214,6 +217,7 @@ static void lkmdbg_session_stop_workfn(struct work_struct *work)
 	if (ret) {
 		pr_warn("lkmdbg: async stop freeze failed tgid=%d tid=%d reason=%u ret=%d\n",
 			stop.tgid, stop.tid, stop.reason, ret);
+		lkmdbg_remote_call_fail_stop(session, &stop);
 		goto out;
 	}
 
@@ -573,9 +577,15 @@ long lkmdbg_continue_target(struct lkmdbg_session *session, void __user *argp)
 	    req.stop_cookie != stop.cookie)
 		return -ESTALE;
 
-	ret = lkmdbg_prepare_continue_hwpoints(session, &stop, req.flags);
+	ret = lkmdbg_remote_call_prepare_continue(session, &stop);
 	if (ret)
 		return ret;
+
+	ret = lkmdbg_prepare_continue_hwpoints(session, &stop, req.flags);
+	if (ret) {
+		lkmdbg_remote_call_rollback_continue(session, &stop);
+		return ret;
+	}
 
 	lkmdbg_session_clear_stop(session);
 	ret = lkmdbg_session_thaw_target(session, req.timeout_ms, &thaw_req);
@@ -585,8 +595,15 @@ long lkmdbg_continue_target(struct lkmdbg_session *session, void __user *argp)
 			session->stop_state = stop;
 			mutex_unlock(&session->lock);
 		}
+		lkmdbg_remote_call_rollback_continue(session, &stop);
 		return ret;
 	}
+	if (ret == -ENODEV)
+		lkmdbg_remote_call_release(session);
+
+	ret = lkmdbg_remote_call_finish_continue(session, &stop);
+	if (ret)
+		return ret;
 
 	req.threads_total = thaw_req.threads_total;
 	req.threads_settled = thaw_req.threads_settled;
@@ -618,6 +635,7 @@ static int lkmdbg_session_release(struct inode *inode, struct file *file)
 	lkmdbg_remote_map_release_session(session);
 	lkmdbg_remote_alloc_release_session(session);
 	lkmdbg_input_release_session(session);
+	lkmdbg_remote_call_release(session);
 	lkmdbg_thread_ctrl_release(session);
 	lkmdbg_session_freeze_release(session);
 	wait_event(session->async_waitq, atomic_read(&session->async_refs) == 0);
@@ -737,6 +755,8 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 					      current->tgid);
 		return 0;
 	case LKMDBG_IOC_SET_TARGET:
+		if (lkmdbg_remote_call_blocks_target_change(session))
+			return -EBUSY;
 		if (lkmdbg_session_freeze_on_target_change(session))
 			return -EBUSY;
 		return lkmdbg_mem_set_target(session, argp);
@@ -810,9 +830,13 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_rearm_hwpoint(session, argp);
 	case LKMDBG_IOC_SINGLE_STEP:
 		return lkmdbg_single_step(session, argp);
+	case LKMDBG_IOC_REMOTE_CALL:
+		return lkmdbg_remote_call(session, argp);
 	case LKMDBG_IOC_FREEZE_THREADS:
 		return lkmdbg_freeze_threads(session, argp);
 	case LKMDBG_IOC_THAW_THREADS:
+		if (lkmdbg_remote_call_blocks_manual_thaw(session))
+			return -EBUSY;
 		return lkmdbg_thaw_threads(session, argp);
 	default:
 		return -ENOTTY;
@@ -859,6 +883,7 @@ int lkmdbg_open_session(void __user *argp)
 	spin_lock_init(&session->event_lock);
 	init_waitqueue_head(&session->readq);
 	init_waitqueue_head(&session->async_waitq);
+	init_waitqueue_head(&session->remote_call_waitq);
 	INIT_LIST_HEAD(&session->node);
 	INIT_LIST_HEAD(&session->hwpoints);
 	INIT_LIST_HEAD(&session->pte_patches);
@@ -869,6 +894,7 @@ int lkmdbg_open_session(void __user *argp)
 	atomic_set(&session->async_refs, 0);
 	session->owner_tgid = current->tgid;
 	session->syscall_trace_nr = -1;
+	session->remote_call.session = session;
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.next_session_id++;

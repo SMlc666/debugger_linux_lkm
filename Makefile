@@ -36,6 +36,7 @@ lkmdbg-input-y := \
 
 lkmdbg-task-y := \
 	task/lkmdbg_freeze.o \
+	task/lkmdbg_remote_call.o \
 	task/lkmdbg_thread_ctrl.o \
 	task/lkmdbg_thread.o
 
