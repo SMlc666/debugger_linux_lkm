@@ -1,10 +1,12 @@
 #include <linux/anon_inodes.h>
 #include <linux/bitops.h>
+#include <linux/device.h>
 #include <linux/file.h>
 #include <linux/input.h>
 #include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/poll.h>
+#include <linux/rcupdate.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
@@ -35,24 +37,76 @@ struct lkmdbg_input_channel {
 
 struct lkmdbg_input_device {
 	struct list_head node;
+	struct list_head retired_node;
 	spinlock_t lock;
 	struct mutex inject_lock;
 	struct list_head channels;
-	struct input_handle handle;
+	struct input_dev *input_dev;
+	struct device *dev;
 	u64 device_id;
 	u32 flags;
 	bool disconnected;
 	bool injecting;
+	bool dev_ref_held;
 	struct task_struct *inject_task;
 };
 
 static LIST_HEAD(lkmdbg_input_devices);
+static LIST_HEAD(lkmdbg_input_retired_devices);
 static DEFINE_MUTEX(lkmdbg_input_devices_lock);
 static u64 lkmdbg_next_input_device_id;
+
+static struct class_interface lkmdbg_input_class_interface;
+static struct class *lkmdbg_input_class;
+static struct lkmdbg_inline_hook *lkmdbg_input_event_hook;
+static struct lkmdbg_hook_registry_entry *lkmdbg_input_event_registry;
+static void (*lkmdbg_input_event_orig)(struct input_dev *dev, unsigned int type,
+				       unsigned int code, int value);
+static atomic_t lkmdbg_input_event_inflight = ATOMIC_INIT(0);
+static DECLARE_WAIT_QUEUE_HEAD(lkmdbg_input_event_waitq);
 
 static bool lkmdbg_input_channel_has_events(struct lkmdbg_input_channel *channel)
 {
 	return READ_ONCE(channel->event_count) > 0;
+}
+
+static struct lkmdbg_input_device *
+lkmdbg_find_input_device_locked(u64 device_id)
+{
+	struct lkmdbg_input_device *device;
+
+	list_for_each_entry(device, &lkmdbg_input_devices, node) {
+		if (device->device_id == device_id)
+			return device;
+	}
+
+	return NULL;
+}
+
+static struct lkmdbg_input_device *
+lkmdbg_find_input_device_by_dev_locked(struct input_dev *input_dev)
+{
+	struct lkmdbg_input_device *device;
+
+	list_for_each_entry(device, &lkmdbg_input_devices, node) {
+		if (device->input_dev == input_dev)
+			return device;
+	}
+
+	return NULL;
+}
+
+static struct lkmdbg_input_device *
+lkmdbg_find_input_device_by_dev_rcu(struct input_dev *input_dev)
+{
+	struct lkmdbg_input_device *device;
+
+	list_for_each_entry_rcu(device, &lkmdbg_input_devices, node) {
+		if (READ_ONCE(device->input_dev) == input_dev)
+			return device;
+	}
+
+	return NULL;
 }
 
 static u32 lkmdbg_input_device_flags_from_dev(struct input_dev *dev)
@@ -75,9 +129,8 @@ static u32 lkmdbg_input_device_flags_from_dev(struct input_dev *dev)
 		flags |= LKMDBG_INPUT_DEVICE_FLAG_HAS_MT;
 	if (flags & (LKMDBG_INPUT_DEVICE_FLAG_HAS_KEYS |
 		     LKMDBG_INPUT_DEVICE_FLAG_HAS_REL |
-		     LKMDBG_INPUT_DEVICE_FLAG_HAS_ABS)) {
+		     LKMDBG_INPUT_DEVICE_FLAG_HAS_ABS))
 		flags |= LKMDBG_INPUT_DEVICE_FLAG_CAN_INJECT;
-	}
 
 	return flags;
 }
@@ -86,7 +139,7 @@ static void lkmdbg_input_fill_device_entry(
 	struct lkmdbg_input_device *device,
 	struct lkmdbg_input_device_entry *entry)
 {
-	struct input_dev *dev = device->handle.dev;
+	struct input_dev *dev = device->input_dev;
 
 	memset(entry, 0, sizeof(*entry));
 	entry->device_id = device->device_id;
@@ -118,7 +171,7 @@ static void
 lkmdbg_input_fill_device_info(struct lkmdbg_input_device *device,
 			      struct lkmdbg_input_device_info_request *req)
 {
-	struct input_dev *dev = device->handle.dev;
+	struct input_dev *dev = device->input_dev;
 	unsigned int i;
 
 	memset(req, 0, sizeof(*req));
@@ -252,6 +305,77 @@ static int lkmdbg_input_event_supported(struct input_dev *dev, u32 type, u32 cod
 	}
 }
 
+static void lkmdbg_input_deliver_event(struct lkmdbg_input_device *device,
+				       u32 type, u32 code, s32 value,
+				       bool injected)
+{
+	struct lkmdbg_input_channel *channel;
+	unsigned long irqflags;
+
+	if (!device)
+		return;
+
+	spin_lock_irqsave(&device->lock, irqflags);
+	if (device->disconnected) {
+		spin_unlock_irqrestore(&device->lock, irqflags);
+		return;
+	}
+
+	list_for_each_entry(channel, &device->channels, device_node) {
+		unsigned long channel_irqflags;
+		u32 flags = 0;
+
+		if (injected) {
+			flags |= LKMDBG_INPUT_EVENT_FLAG_INJECTED;
+			if (!(channel->flags &
+			      LKMDBG_INPUT_CHANNEL_FLAG_INCLUDE_INJECTED))
+				continue;
+		}
+
+		spin_lock_irqsave(&channel->lock, channel_irqflags);
+		if (!channel->closing && !channel->disconnected)
+			lkmdbg_input_channel_queue_locked(channel, type, code, value,
+							  flags);
+		spin_unlock_irqrestore(&channel->lock, channel_irqflags);
+		wake_up_interruptible(&channel->readq);
+	}
+
+	spin_unlock_irqrestore(&device->lock, irqflags);
+}
+
+static void lkmdbg_input_event_replacement(struct input_dev *dev,
+					   unsigned int type,
+					   unsigned int code, int value)
+{
+	struct lkmdbg_hook_registry_entry *registry;
+	void (*orig)(struct input_dev *dev, unsigned int type, unsigned int code,
+		     int value);
+	struct lkmdbg_input_device *device;
+	bool injected = false;
+
+	atomic_inc(&lkmdbg_input_event_inflight);
+
+	registry = READ_ONCE(lkmdbg_input_event_registry);
+	if (registry)
+		lkmdbg_hook_registry_note_hit(registry);
+
+	orig = READ_ONCE(lkmdbg_input_event_orig);
+	if (orig)
+		orig(dev, type, code, value);
+
+	rcu_read_lock();
+	device = lkmdbg_find_input_device_by_dev_rcu(dev);
+	if (device)
+		injected = READ_ONCE(device->injecting) &&
+			   READ_ONCE(device->inject_task) == current;
+	if (device)
+		lkmdbg_input_deliver_event(device, type, code, value, injected);
+	rcu_read_unlock();
+
+	if (atomic_dec_and_test(&lkmdbg_input_event_inflight))
+		wake_up_all(&lkmdbg_input_event_waitq);
+}
+
 static ssize_t lkmdbg_input_channel_read(struct file *file, char __user *buf,
 					 size_t count, loff_t *ppos)
 {
@@ -347,7 +471,8 @@ static ssize_t lkmdbg_input_channel_write(struct file *file,
 
 	mutex_lock(&device->inject_lock);
 	spin_lock_irqsave(&device->lock, irqflags);
-	if (channel->device != device || channel->closing || channel->disconnected) {
+	if (channel->device != device || channel->closing || channel->disconnected ||
+	    device->disconnected || !device->input_dev) {
 		spin_unlock_irqrestore(&device->lock, irqflags);
 		mutex_unlock(&device->inject_lock);
 		kfree(events);
@@ -358,12 +483,13 @@ static ssize_t lkmdbg_input_channel_write(struct file *file,
 	spin_unlock_irqrestore(&device->lock, irqflags);
 
 	for (i = 0; i < event_count; i++) {
-		ret = lkmdbg_input_event_supported(device->handle.dev, events[i].type,
+		ret = lkmdbg_input_event_supported(device->input_dev,
+						   events[i].type,
 						   events[i].code);
 		if (ret)
 			break;
-		input_inject_event(&device->handle, events[i].type, events[i].code,
-				   events[i].value);
+		input_event(device->input_dev, events[i].type, events[i].code,
+			    events[i].value);
 	}
 
 	spin_lock_irqsave(&device->lock, irqflags);
@@ -432,19 +558,6 @@ static const struct file_operations lkmdbg_input_channel_fops = {
 	.poll = lkmdbg_input_channel_poll,
 	.llseek = noop_llseek,
 };
-
-static struct lkmdbg_input_device *
-lkmdbg_find_input_device_locked(u64 device_id)
-{
-	struct lkmdbg_input_device *device;
-
-	list_for_each_entry(device, &lkmdbg_input_devices, node) {
-		if (device->device_id == device_id)
-			return device;
-	}
-
-	return NULL;
-}
 
 static int lkmdbg_validate_input_query(struct lkmdbg_input_query_request *req)
 {
@@ -633,7 +746,7 @@ long lkmdbg_open_input_channel(struct lkmdbg_session *session, void __user *argp
 
 	mutex_lock(&lkmdbg_input_devices_lock);
 	device = lkmdbg_find_input_device_locked(req.device_id);
-	if (!device || device->disconnected) {
+	if (!device || device->disconnected || !device->input_dev) {
 		mutex_unlock(&lkmdbg_input_devices_lock);
 		put_unused_fd(fd);
 		fput(file);
@@ -652,7 +765,7 @@ long lkmdbg_open_input_channel(struct lkmdbg_session *session, void __user *argp
 	mutex_unlock(&session->lock);
 
 	spin_lock_irqsave(&device->lock, irqflags);
-	if (channel->device != device) {
+	if (channel->device != device || device->disconnected) {
 		spin_unlock_irqrestore(&device->lock, irqflags);
 		lkmdbg_input_channel_detach_from_session(channel, session);
 		mutex_unlock(&device->inject_lock);
@@ -702,95 +815,74 @@ void lkmdbg_input_release_session(struct lkmdbg_session *session)
 	mutex_unlock(&session->lock);
 }
 
-static void lkmdbg_input_event(struct input_handle *handle, unsigned int type,
-			       unsigned int code, int value)
+static int lkmdbg_input_register_device(struct device *dev)
 {
-	struct lkmdbg_input_device *device =
-		container_of(handle, struct lkmdbg_input_device, handle);
-	struct lkmdbg_input_channel *channel;
-	unsigned long irqflags;
-	bool injected;
-
-	spin_lock_irqsave(&device->lock, irqflags);
-	injected = device->injecting && device->inject_task == current;
-	list_for_each_entry(channel, &device->channels, device_node) {
-		unsigned long channel_irqflags;
-		u32 flags = 0;
-
-		if (injected) {
-			flags |= LKMDBG_INPUT_EVENT_FLAG_INJECTED;
-			if (!(channel->flags &
-			      LKMDBG_INPUT_CHANNEL_FLAG_INCLUDE_INJECTED))
-				continue;
-		}
-
-		spin_lock_irqsave(&channel->lock, channel_irqflags);
-		if (!channel->closing && !channel->disconnected)
-			lkmdbg_input_channel_queue_locked(channel, type, code, value,
-							  flags);
-		spin_unlock_irqrestore(&channel->lock, channel_irqflags);
-		wake_up_interruptible(&channel->readq);
-	}
-	spin_unlock_irqrestore(&device->lock, irqflags);
-}
-
-static int lkmdbg_input_connect(struct input_handler *handler,
-				struct input_dev *dev,
-				const struct input_device_id *id)
-{
+	struct input_dev *input_dev;
 	struct lkmdbg_input_device *device;
-	int ret;
 
-	(void)id;
+	if (!dev)
+		return -EINVAL;
+
+	input_dev = to_input_dev(dev);
+	if (!input_dev)
+		return -ENODEV;
 
 	device = kzalloc(sizeof(*device), GFP_KERNEL);
 	if (!device)
 		return -ENOMEM;
 
 	INIT_LIST_HEAD(&device->node);
+	INIT_LIST_HEAD(&device->retired_node);
 	INIT_LIST_HEAD(&device->channels);
 	spin_lock_init(&device->lock);
 	mutex_init(&device->inject_lock);
-	device->flags = lkmdbg_input_device_flags_from_dev(dev);
-	device->handle.dev = dev;
-	device->handle.name = "lkmdbg-input";
-	device->handle.handler = handler;
-
-	ret = input_register_handle(&device->handle);
-	if (ret) {
-		kfree(device);
-		return ret;
-	}
-
-	ret = input_open_device(&device->handle);
-	if (ret) {
-		input_unregister_handle(&device->handle);
-		kfree(device);
-		return ret;
-	}
+	device->input_dev = input_dev;
+	device->dev = dev;
+	device->flags = lkmdbg_input_device_flags_from_dev(input_dev);
+	get_device(dev);
+	device->dev_ref_held = true;
 
 	mutex_lock(&lkmdbg_input_devices_lock);
+	if (lkmdbg_find_input_device_by_dev_locked(input_dev)) {
+		mutex_unlock(&lkmdbg_input_devices_lock);
+		put_device(dev);
+		kfree(device);
+		return 0;
+	}
 	lkmdbg_next_input_device_id++;
 	device->device_id = lkmdbg_next_input_device_id;
-	list_add_tail(&device->node, &lkmdbg_input_devices);
+	list_add_tail_rcu(&device->node, &lkmdbg_input_devices);
 	mutex_unlock(&lkmdbg_input_devices_lock);
 
 	return 0;
 }
 
-static void lkmdbg_input_disconnect(struct input_handle *handle)
+static void lkmdbg_input_unregister_device(struct device *dev)
 {
-	struct lkmdbg_input_device *device =
-		container_of(handle, struct lkmdbg_input_device, handle);
+	struct input_dev *input_dev;
+	struct lkmdbg_input_device *device;
 	struct lkmdbg_input_channel *channel;
 	struct lkmdbg_input_channel *tmp;
 
+	if (!dev)
+		return;
+
+	input_dev = to_input_dev(dev);
+	if (!input_dev)
+		return;
+
 	mutex_lock(&lkmdbg_input_devices_lock);
+	device = lkmdbg_find_input_device_by_dev_locked(input_dev);
+	if (!device) {
+		mutex_unlock(&lkmdbg_input_devices_lock);
+		return;
+	}
 	device->disconnected = true;
+	list_del_rcu(&device->node);
+	list_add_tail(&device->retired_node, &lkmdbg_input_retired_devices);
 	mutex_unlock(&lkmdbg_input_devices_lock);
 
 	mutex_lock(&device->inject_lock);
-
 	spin_lock_irq(&device->lock);
 	list_for_each_entry_safe(channel, tmp, &device->channels, device_node) {
 		list_del_init(&channel->device_node);
@@ -798,41 +890,170 @@ static void lkmdbg_input_disconnect(struct input_handle *handle)
 		lkmdbg_input_channel_shutdown(channel, true);
 	}
 	spin_unlock_irq(&device->lock);
-
-	input_close_device(handle);
-	input_unregister_handle(handle);
 	mutex_unlock(&device->inject_lock);
+
+	WRITE_ONCE(device->input_dev, NULL);
+	if (device->dev_ref_held) {
+		put_device(dev);
+		device->dev_ref_held = false;
+	}
 }
 
-static const struct input_device_id lkmdbg_input_ids[] = {
-	{ .driver_info = 1 },
-	{ },
-};
-
-static struct input_handler lkmdbg_input_handler = {
-	.event = lkmdbg_input_event,
-	.connect = lkmdbg_input_connect,
-	.disconnect = lkmdbg_input_disconnect,
-	.name = "lkmdbg-input",
-	.id_table = lkmdbg_input_ids,
-};
-
-int lkmdbg_input_init(void)
+static int lkmdbg_input_add_dev(struct device *dev,
+				struct class_interface *class_intf)
 {
-	return input_register_handler(&lkmdbg_input_handler);
+	(void)class_intf;
+
+	return lkmdbg_input_register_device(dev);
 }
 
-void lkmdbg_input_exit(void)
+static void lkmdbg_input_remove_dev(struct device *dev,
+				    struct class_interface *class_intf)
+{
+	(void)class_intf;
+
+	lkmdbg_input_unregister_device(dev);
+}
+
+static int lkmdbg_install_input_event_hook(void)
+{
+	void *target;
+	void *orig_fn = NULL;
+	int ret;
+
+	if (!lkmdbg_symbols.kallsyms_lookup_name)
+		return -ENOENT;
+
+	target = (void *)lkmdbg_symbols.kallsyms_lookup_name("input_event");
+	if (!target)
+		return -ENOENT;
+
+	lkmdbg_input_event_registry = lkmdbg_hook_registry_register(
+		"input_event", target, lkmdbg_input_event_replacement);
+	if (!lkmdbg_input_event_registry)
+		return -ENOMEM;
+
+	ret = lkmdbg_hook_install(target, lkmdbg_input_event_replacement,
+				  &lkmdbg_input_event_hook, &orig_fn);
+	if (ret) {
+		lkmdbg_hook_registry_unregister(lkmdbg_input_event_registry, ret);
+		lkmdbg_input_event_registry = NULL;
+		return ret;
+	}
+
+	lkmdbg_input_event_orig = orig_fn;
+	lkmdbg_hook_registry_mark_installed(lkmdbg_input_event_registry, target,
+						orig_fn, 0);
+	return 0;
+}
+
+static void lkmdbg_input_free_device_list(struct list_head *list)
 {
 	struct lkmdbg_input_device *device;
 	struct lkmdbg_input_device *tmp;
 
-	input_unregister_handler(&lkmdbg_input_handler);
-
-	mutex_lock(&lkmdbg_input_devices_lock);
-	list_for_each_entry_safe(device, tmp, &lkmdbg_input_devices, node) {
-		list_del_init(&device->node);
+	list_for_each_entry_safe(device, tmp, list, retired_node) {
+		list_del_init(&device->retired_node);
+		if (device->dev_ref_held && device->dev) {
+			put_device(device->dev);
+			device->dev_ref_held = false;
+		}
 		kfree(device);
 	}
+}
+
+static void lkmdbg_input_retire_all_active_locked(void)
+{
+	struct lkmdbg_input_device *device;
+	struct lkmdbg_input_device *tmp;
+
+	list_for_each_entry_safe(device, tmp, &lkmdbg_input_devices, node) {
+		list_del_init(&device->node);
+		device->disconnected = true;
+		list_add_tail(&device->retired_node, &lkmdbg_input_retired_devices);
+	}
+}
+
+int lkmdbg_input_init(void)
+{
+	unsigned long class_addr;
+	int ret;
+
+	atomic_set(&lkmdbg_input_event_inflight, 0);
+	lkmdbg_input_event_hook = NULL;
+	lkmdbg_input_event_registry = NULL;
+	lkmdbg_input_event_orig = NULL;
+
+	if (!lkmdbg_symbols.kallsyms_lookup_name)
+		return -ENOENT;
+
+	class_addr = lkmdbg_symbols.kallsyms_lookup_name("input_class");
+	if (!class_addr)
+		return -ENOENT;
+
+	lkmdbg_input_class = (struct class *)class_addr;
+	memset(&lkmdbg_input_class_interface, 0,
+	       sizeof(lkmdbg_input_class_interface));
+	lkmdbg_input_class_interface.class = lkmdbg_input_class;
+	lkmdbg_input_class_interface.add_dev = lkmdbg_input_add_dev;
+	lkmdbg_input_class_interface.remove_dev = lkmdbg_input_remove_dev;
+
+	ret = class_interface_register(&lkmdbg_input_class_interface);
+	if (ret)
+		return ret;
+
+	ret = lkmdbg_install_input_event_hook();
+	if (ret) {
+		class_interface_unregister(&lkmdbg_input_class_interface);
+		synchronize_rcu();
+		mutex_lock(&lkmdbg_input_devices_lock);
+		lkmdbg_input_retire_all_active_locked();
+		lkmdbg_input_free_device_list(&lkmdbg_input_retired_devices);
+		INIT_LIST_HEAD(&lkmdbg_input_devices);
+		INIT_LIST_HEAD(&lkmdbg_input_retired_devices);
+		mutex_unlock(&lkmdbg_input_devices_lock);
+		lkmdbg_input_class = NULL;
+		return ret;
+	}
+
+	return 0;
+}
+
+void lkmdbg_input_exit(void)
+{
+	long remaining = 1;
+
+	if (lkmdbg_input_event_hook) {
+		if (!lkmdbg_hook_deactivate(lkmdbg_input_event_hook)) {
+			remaining = wait_event_timeout(
+				lkmdbg_input_event_waitq,
+				atomic_read(&lkmdbg_input_event_inflight) == 0,
+				msecs_to_jiffies(1000));
+			if (!remaining)
+				pr_warn("lkmdbg: input_event hook drain timed out inflight=%d\n",
+					atomic_read(&lkmdbg_input_event_inflight));
+		}
+
+		lkmdbg_hook_destroy(lkmdbg_input_event_hook);
+		lkmdbg_input_event_hook = NULL;
+	}
+	if (lkmdbg_input_event_registry) {
+		lkmdbg_hook_registry_unregister(lkmdbg_input_event_registry, 0);
+		lkmdbg_input_event_registry = NULL;
+	}
+	lkmdbg_input_event_orig = NULL;
+
+	if (lkmdbg_input_class) {
+		class_interface_unregister(&lkmdbg_input_class_interface);
+		lkmdbg_input_class = NULL;
+	}
+
+	synchronize_rcu();
+
+	mutex_lock(&lkmdbg_input_devices_lock);
+	lkmdbg_input_retire_all_active_locked();
+	lkmdbg_input_free_device_list(&lkmdbg_input_retired_devices);
+	INIT_LIST_HEAD(&lkmdbg_input_devices);
+	INIT_LIST_HEAD(&lkmdbg_input_retired_devices);
 	mutex_unlock(&lkmdbg_input_devices_lock);
 }

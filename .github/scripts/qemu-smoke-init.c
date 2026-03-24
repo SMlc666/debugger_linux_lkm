@@ -528,6 +528,9 @@ static void qemu_report_input_stealth(void)
 	printf("LKMDBG_QEMU_INPUT_STEALTH exposed=%u handler_hits=%u name_hits=%u\n",
 	       handler_hits ? 1U : 0U, handler_hits, name_hits);
 	fflush(stdout);
+	qemu_check(handler_hits == 0, "input_stealth_handler_exposed=%u",
+		   handler_hits);
+	qemu_check(name_hits == 0, "input_stealth_name_exposed=%u", name_hits);
 }
 
 static void qemu_run_input_smoke(void)
