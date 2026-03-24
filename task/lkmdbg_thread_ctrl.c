@@ -260,6 +260,12 @@ static void lkmdbg_hwpoint_reset_cycle(struct lkmdbg_hwpoint *entry)
 	atomic_set(&entry->stop_latched, 0);
 }
 
+static void lkmdbg_hwpoint_finish_rearm(struct lkmdbg_hwpoint *entry)
+{
+	lkmdbg_hwpoint_reset_cycle(entry);
+	WRITE_ONCE(entry->armed, true);
+}
+
 static int lkmdbg_validate_hwpoint_request(struct lkmdbg_hwpoint_request *req,
 					   bool remove)
 {
@@ -1410,8 +1416,7 @@ static int lkmdbg_rearm_mmu_hwpoint_locked(struct lkmdbg_hwpoint *entry)
 	if (ret)
 		return ret;
 
-	lkmdbg_hwpoint_reset_cycle(entry);
-	entry->armed = true;
+	lkmdbg_hwpoint_finish_rearm(entry);
 	return 0;
 }
 #endif
@@ -1622,8 +1627,7 @@ static int lkmdbg_rearm_hwpoint_locked(struct lkmdbg_hwpoint *entry)
 	if (ret)
 		return ret;
 
-	lkmdbg_hwpoint_reset_cycle(entry);
-	WRITE_ONCE(entry->armed, true);
+	lkmdbg_hwpoint_finish_rearm(entry);
 	return 0;
 }
 
