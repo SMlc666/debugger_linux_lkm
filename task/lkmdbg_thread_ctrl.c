@@ -392,9 +392,6 @@ static int lkmdbg_validate_syscall_trace_request(
 	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
 		return -EINVAL;
 
-	if (req->flags)
-		return -EINVAL;
-
 	if (req->tid < 0 || req->syscall_nr < -1)
 		return -EINVAL;
 
@@ -411,6 +408,28 @@ static int lkmdbg_validate_syscall_trace_request(
 		return -EINVAL;
 
 	return 0;
+}
+
+static u32 lkmdbg_syscall_trace_supported_phases(void)
+{
+	u32 phases = 0;
+
+	if (READ_ONCE(lkmdbg_trace_sys_enter_registered))
+		phases |= LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
+	if (READ_ONCE(lkmdbg_trace_sys_exit_registered))
+		phases |= LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
+
+	return phases;
+}
+
+static u32 lkmdbg_syscall_trace_capability_flags(void)
+{
+	u32 flags = 0;
+
+	if (lkmdbg_syscall_trace_supported_phases())
+		flags |= LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT;
+
+	return flags;
 }
 
 static struct lkmdbg_hwpoint *
@@ -2355,6 +2374,7 @@ long lkmdbg_get_signal_config(struct lkmdbg_session *session, void __user *argp)
 long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 {
 	struct lkmdbg_syscall_trace_request req;
+	u32 supported_phases;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
 		return -EFAULT;
@@ -2362,12 +2382,19 @@ long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 	if (lkmdbg_validate_syscall_trace_request(&req))
 		return -EINVAL;
 
+	supported_phases = lkmdbg_syscall_trace_supported_phases();
+	if (req.mode && (req.phases & ~supported_phases))
+		return -EOPNOTSUPP;
+
 	mutex_lock(&session->lock);
 	session->syscall_trace_tid = req.tid;
 	session->syscall_trace_nr = req.syscall_nr;
 	session->syscall_trace_mode = req.mode;
 	session->syscall_trace_phases = req.phases;
 	mutex_unlock(&session->lock);
+
+	req.flags = lkmdbg_syscall_trace_capability_flags();
+	req.supported_phases = supported_phases;
 
 	if (copy_to_user(argp, &req, sizeof(req)))
 		return -EFAULT;
@@ -2382,8 +2409,7 @@ long lkmdbg_get_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 	if (copy_from_user(&req, argp, sizeof(req)))
 		return -EFAULT;
 
-	if (req.version != LKMDBG_PROTO_VERSION || req.size != sizeof(req) ||
-	    req.flags)
+	if (req.version != LKMDBG_PROTO_VERSION || req.size != sizeof(req))
 		return -EINVAL;
 
 	mutex_lock(&session->lock);
@@ -2392,6 +2418,8 @@ long lkmdbg_get_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 	req.mode = session->syscall_trace_mode;
 	req.phases = session->syscall_trace_phases;
 	mutex_unlock(&session->lock);
+	req.flags = lkmdbg_syscall_trace_capability_flags();
+	req.supported_phases = lkmdbg_syscall_trace_supported_phases();
 
 	if (copy_to_user(argp, &req, sizeof(req)))
 		return -EFAULT;

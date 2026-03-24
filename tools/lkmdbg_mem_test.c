@@ -1282,6 +1282,37 @@ static int get_syscall_trace(int session_fd,
 	return 0;
 }
 
+static int expect_set_syscall_trace_errno(int session_fd, pid_t tid,
+					  int syscall_nr, uint32_t mode,
+					  uint32_t phases, int expected_errno)
+{
+	struct lkmdbg_syscall_trace_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.tid = tid,
+		.syscall_nr = syscall_nr,
+		.mode = mode,
+		.phases = phases,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_SET_SYSCALL_TRACE, &req) == 0) {
+		fprintf(stderr,
+			"SET_SYSCALL_TRACE unexpectedly succeeded tid=%d nr=%d mode=0x%x phases=0x%x\n",
+			tid, syscall_nr, mode, phases);
+		return -1;
+	}
+
+	if (errno != expected_errno) {
+		fprintf(stderr,
+			"SET_SYSCALL_TRACE failed with %s instead of %s tid=%d nr=%d mode=0x%x phases=0x%x\n",
+			strerror(errno), strerror(expected_errno), tid, syscall_nr,
+			mode, phases);
+		return -1;
+	}
+
+	return 0;
+}
+
 static int set_stealth(int session_fd, uint32_t flags,
 		       struct lkmdbg_stealth_request *reply_out)
 {
@@ -4544,6 +4575,19 @@ static const char *describe_syscall_trace_mode(uint32_t mode, char *buf,
 	return buf;
 }
 
+static const char *describe_syscall_trace_flags(uint32_t flags, char *buf,
+						size_t buf_size)
+{
+	buf[0] = '\0';
+
+	if (flags & LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT)
+		append_flag_name(buf, buf_size, "tracepoint");
+	if (!buf[0])
+		snprintf(buf, buf_size, "none");
+
+	return buf;
+}
+
 static const char *describe_syscall_trace_phases(uint32_t phases, char *buf,
 						 size_t buf_size)
 {
@@ -5688,8 +5732,9 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, pid_t child)
 	const uint32_t nr = SYS_getppid;
 	const pid_t parent_pid = getpid();
 	const int event_timeout_ms = 5000;
+	uint32_t supported_phases;
+	uint32_t stop_phase;
 	int trace_active = 0;
-	int ret;
 
 	memset(&trace_req, 0, sizeof(trace_req));
 	memset(&stop_req, 0, sizeof(stop_req));
@@ -5697,22 +5742,67 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, pid_t child)
 	if (drain_session_events(session_fd) < 0)
 		return -1;
 
+	if (get_syscall_trace(session_fd, &trace_req) < 0)
+		return -1;
+	supported_phases = trace_req.supported_phases;
+	if (!!supported_phases !=
+	    !!(trace_req.flags & LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT)) {
+		fprintf(stderr,
+			"syscall trace backend flag mismatch flags=0x%x supported=0x%x\n",
+			trace_req.flags, supported_phases);
+		return -1;
+	}
+	if ((trace_req.flags & LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT) &&
+	    !supported_phases) {
+		fprintf(stderr,
+			"syscall trace capability mismatch flags=0x%x supported=0x%x\n",
+			trace_req.flags, supported_phases);
+		return -1;
+	}
+	if (supported_phases &
+	    ~(LKMDBG_SYSCALL_TRACE_PHASE_ENTER |
+	      LKMDBG_SYSCALL_TRACE_PHASE_EXIT)) {
+		fprintf(stderr,
+			"syscall trace supported phases invalid: 0x%x\n",
+			supported_phases);
+		return -1;
+	}
+	if (!supported_phases) {
+		if (expect_set_syscall_trace_errno(
+			    session_fd, 0, (int)nr,
+			    LKMDBG_SYSCALL_TRACE_MODE_EVENT,
+			    LKMDBG_SYSCALL_TRACE_PHASE_ENTER, EOPNOTSUPP) < 0)
+			return -1;
+		printf("selftest syscall trace unavailable, skipping\n");
+		return 0;
+	}
+	if (((LKMDBG_SYSCALL_TRACE_PHASE_ENTER |
+	      LKMDBG_SYSCALL_TRACE_PHASE_EXIT) &
+	     ~supported_phases) != 0) {
+		if (expect_set_syscall_trace_errno(
+			    session_fd, 0, (int)nr,
+			    LKMDBG_SYSCALL_TRACE_MODE_EVENT,
+			    (LKMDBG_SYSCALL_TRACE_PHASE_ENTER |
+			     LKMDBG_SYSCALL_TRACE_PHASE_EXIT) &
+				    ~supported_phases,
+			    EOPNOTSUPP) < 0)
+			return -1;
+	}
+
 	if (set_syscall_trace(session_fd, 0, (int)nr,
 			      LKMDBG_SYSCALL_TRACE_MODE_EVENT,
-			      LKMDBG_SYSCALL_TRACE_PHASE_ENTER |
-				      LKMDBG_SYSCALL_TRACE_PHASE_EXIT,
+			      supported_phases,
 			      &trace_req) < 0)
 		return -1;
 	trace_active = 1;
 	if (trace_req.tid != 0 || trace_req.syscall_nr != (int)nr ||
 	    trace_req.mode != LKMDBG_SYSCALL_TRACE_MODE_EVENT ||
-	    trace_req.phases !=
-		    (LKMDBG_SYSCALL_TRACE_PHASE_ENTER |
-		     LKMDBG_SYSCALL_TRACE_PHASE_EXIT)) {
+	    trace_req.phases != supported_phases ||
+	    trace_req.supported_phases != supported_phases) {
 		fprintf(stderr,
-			"syscall trace set mismatch tid=%d nr=%d mode=0x%x phases=0x%x\n",
+			"syscall trace set mismatch tid=%d nr=%d mode=0x%x phases=0x%x supported=0x%x\n",
 			trace_req.tid, trace_req.syscall_nr, trace_req.mode,
-			trace_req.phases);
+			trace_req.phases, trace_req.supported_phases);
 		goto fail;
 	}
 
@@ -5721,55 +5811,62 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, pid_t child)
 		goto fail;
 	if (trace_req.tid != 0 || trace_req.syscall_nr != (int)nr ||
 	    trace_req.mode != LKMDBG_SYSCALL_TRACE_MODE_EVENT ||
-	    trace_req.phases !=
-		    (LKMDBG_SYSCALL_TRACE_PHASE_ENTER |
-		     LKMDBG_SYSCALL_TRACE_PHASE_EXIT)) {
+	    trace_req.phases != supported_phases ||
+	    trace_req.supported_phases != supported_phases) {
 		fprintf(stderr,
-			"syscall trace get mismatch tid=%d nr=%d mode=0x%x phases=0x%x\n",
+			"syscall trace get mismatch tid=%d nr=%d mode=0x%x phases=0x%x supported=0x%x\n",
 			trace_req.tid, trace_req.syscall_nr, trace_req.mode,
-			trace_req.phases);
+			trace_req.phases, trace_req.supported_phases);
 		goto fail;
 	}
 
 	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SYSCALL) < 0)
 		goto fail;
-	ret = wait_for_syscall_event(session_fd, LKMDBG_SYSCALL_TRACE_PHASE_ENTER,
-				     nr, event_timeout_ms, &event);
-	if (ret == -ETIMEDOUT) {
-		printf("selftest syscall trace unavailable, skipping\n");
-		goto clear;
+
+	if (supported_phases & LKMDBG_SYSCALL_TRACE_PHASE_ENTER) {
+		if (wait_for_syscall_event(session_fd,
+					   LKMDBG_SYSCALL_TRACE_PHASE_ENTER, nr,
+					   event_timeout_ms, &event) < 0)
+			goto fail;
+		if (event.tgid != child || event.tid != child ||
+		    event.value1 != 0) {
+			fprintf(stderr,
+				"syscall enter event mismatch tgid=%d tid=%d retval=%" PRId64 "\n",
+				event.tgid, event.tid, (int64_t)event.value1);
+			goto fail;
+		}
 	}
-	if (ret < 0)
-		goto fail;
-	if (event.tgid != child || event.tid != child || event.value1 != 0) {
-		fprintf(stderr,
-			"syscall enter event mismatch tgid=%d tid=%d retval=%" PRId64 "\n",
-			event.tgid, event.tid, (int64_t)event.value1);
-		goto fail;
-	}
-	if (wait_for_syscall_event(session_fd, LKMDBG_SYSCALL_TRACE_PHASE_EXIT,
-				   nr, event_timeout_ms, &event) < 0)
-		goto fail;
-	if (event.tgid != child || event.tid != child ||
-	    (pid_t)(int64_t)event.value1 != parent_pid) {
-		fprintf(stderr,
-			"syscall exit event mismatch tgid=%d tid=%d retval=%" PRId64 " expected=%d\n",
-			event.tgid, event.tid, (int64_t)event.value1, parent_pid);
-		goto fail;
+	if (supported_phases & LKMDBG_SYSCALL_TRACE_PHASE_EXIT) {
+		if (wait_for_syscall_event(session_fd,
+					   LKMDBG_SYSCALL_TRACE_PHASE_EXIT, nr,
+					   event_timeout_ms, &event) < 0)
+			goto fail;
+		if (event.tgid != child || event.tid != child ||
+		    (pid_t)(int64_t)event.value1 != parent_pid) {
+			fprintf(stderr,
+				"syscall exit event mismatch tgid=%d tid=%d retval=%" PRId64 " expected=%d\n",
+				event.tgid, event.tid, (int64_t)event.value1,
+				parent_pid);
+			goto fail;
+		}
 	}
 
+	stop_phase = (supported_phases & LKMDBG_SYSCALL_TRACE_PHASE_ENTER) ?
+			     LKMDBG_SYSCALL_TRACE_PHASE_ENTER :
+			     LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
 	if (set_syscall_trace(session_fd, child, (int)nr,
 			      LKMDBG_SYSCALL_TRACE_MODE_STOP,
-			      LKMDBG_SYSCALL_TRACE_PHASE_ENTER,
+			      stop_phase,
 			      &trace_req) < 0)
 		goto fail;
 	if (trace_req.tid != child || trace_req.syscall_nr != (int)nr ||
 	    trace_req.mode != LKMDBG_SYSCALL_TRACE_MODE_STOP ||
-	    trace_req.phases != LKMDBG_SYSCALL_TRACE_PHASE_ENTER) {
+	    trace_req.phases != stop_phase ||
+	    trace_req.supported_phases != supported_phases) {
 		fprintf(stderr,
-			"syscall stop config mismatch tid=%d nr=%d mode=0x%x phases=0x%x\n",
+			"syscall stop config mismatch tid=%d nr=%d mode=0x%x phases=0x%x supported=0x%x\n",
 			trace_req.tid, trace_req.syscall_nr, trace_req.mode,
-			trace_req.phases);
+			trace_req.phases, trace_req.supported_phases);
 		goto fail;
 	}
 
@@ -5784,8 +5881,10 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, pid_t child)
 		goto fail;
 	}
 	if (event.tgid != child || event.tid != child ||
-	    event.flags != LKMDBG_SYSCALL_TRACE_PHASE_ENTER ||
-	    event.value0 != nr || event.value1 != 0) {
+	    event.flags != stop_phase || event.value0 != nr ||
+	    event.value1 != (uint64_t)(stop_phase ==
+					       LKMDBG_SYSCALL_TRACE_PHASE_ENTER ?
+					       0 : parent_pid)) {
 		fprintf(stderr,
 			"syscall stop event mismatch tgid=%d tid=%d flags=0x%x nr=%" PRIu64 " retval=%" PRId64 "\n",
 			event.tgid, event.tid, event.flags, (uint64_t)event.value0,
@@ -5798,8 +5897,12 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, pid_t child)
 	if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
 	    !(stop_req.stop.flags & LKMDBG_STOP_FLAG_REGS_VALID) ||
 	    stop_req.stop.tgid != child || stop_req.stop.tid != child ||
-	    stop_req.stop.event_flags != LKMDBG_SYSCALL_TRACE_PHASE_ENTER ||
-	    stop_req.stop.value0 != nr || stop_req.stop.value1 != 0) {
+	    stop_req.stop.event_flags != stop_phase ||
+	    stop_req.stop.value0 != nr ||
+	    stop_req.stop.value1 !=
+		    (uint64_t)(stop_phase ==
+					       LKMDBG_SYSCALL_TRACE_PHASE_ENTER ?
+					       0 : parent_pid)) {
 		fprintf(stderr,
 			"syscall stop state mismatch flags=0x%x tgid=%d tid=%d event_flags=0x%x nr=%" PRIu64 " retval=%" PRId64 "\n",
 			stop_req.stop.flags, stop_req.stop.tgid, stop_req.stop.tid,
@@ -5810,7 +5913,6 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, pid_t child)
 	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0)
 		goto fail;
 
-clear:
 	memset(&trace_req, 0, sizeof(trace_req));
 	if (set_syscall_trace(session_fd, 0, -1, LKMDBG_SYSCALL_TRACE_MODE_OFF, 0,
 			      &trace_req) < 0)
@@ -5828,7 +5930,8 @@ clear:
 		return -1;
 	}
 
-	printf("selftest syscall trace ok nr=%u parent=%d\n", nr, parent_pid);
+	printf("selftest syscall trace ok nr=%u parent=%d supported=0x%x\n", nr,
+	       parent_pid, supported_phases);
 	return 0;
 
 fail:
@@ -7518,6 +7621,7 @@ int main(int argc, char **argv)
 		}
 	} else if (strcmp(argv[1], "sysset") == 0) {
 		struct lkmdbg_syscall_trace_request reply;
+		char flags_buf[32];
 		char mode_buf[32];
 		char phase_buf[32];
 
@@ -7536,8 +7640,17 @@ int main(int argc, char **argv)
 		printf("syscall_trace.phases=0x%x(%s)\n", reply.phases,
 		       describe_syscall_trace_phases(reply.phases, phase_buf,
 						     sizeof(phase_buf)));
+		printf("syscall_trace.flags=0x%x(%s)\n", reply.flags,
+		       describe_syscall_trace_flags(reply.flags, flags_buf,
+						    sizeof(flags_buf)));
+		printf("syscall_trace.supported_phases=0x%x(%s)\n",
+		       reply.supported_phases,
+		       describe_syscall_trace_phases(reply.supported_phases,
+						     phase_buf,
+						     sizeof(phase_buf)));
 	} else if (strcmp(argv[1], "sysget") == 0) {
 		struct lkmdbg_syscall_trace_request reply;
+		char flags_buf[32];
 		char mode_buf[32];
 		char phase_buf[32];
 
@@ -7553,6 +7666,14 @@ int main(int argc, char **argv)
 						   sizeof(mode_buf)));
 		printf("syscall_trace.phases=0x%x(%s)\n", reply.phases,
 		       describe_syscall_trace_phases(reply.phases, phase_buf,
+						     sizeof(phase_buf)));
+		printf("syscall_trace.flags=0x%x(%s)\n", reply.flags,
+		       describe_syscall_trace_flags(reply.flags, flags_buf,
+						    sizeof(flags_buf)));
+		printf("syscall_trace.supported_phases=0x%x(%s)\n",
+		       reply.supported_phases,
+		       describe_syscall_trace_phases(reply.supported_phases,
+						     phase_buf,
 						     sizeof(phase_buf)));
 	} else if (strcmp(argv[1], "stealthset") == 0) {
 		struct lkmdbg_stealth_request reply;

@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 21
+#define LKMDBG_PROTO_VERSION 22
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -42,6 +42,8 @@
 
 #define LKMDBG_SYSCALL_TRACE_PHASE_ENTER 0x00000001U
 #define LKMDBG_SYSCALL_TRACE_PHASE_EXIT 0x00000002U
+
+#define LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT 0x00000001U
 
 #define LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE 0x00000001U
 #define LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN 0x00000002U
@@ -713,7 +715,7 @@ struct lkmdbg_syscall_trace_request {
 	__u32 mode;
 	__u32 phases;
 	__u32 flags;
-	__u32 reserved0;
+	__u32 supported_phases;
 };
 
 struct lkmdbg_stealth_request {
