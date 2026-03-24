@@ -3584,10 +3584,15 @@ static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
 		return -1;
 	}
 
-	fault_src = mmap(NULL, page_size, PROT_NONE,
+	fault_src = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
 			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (fault_src == MAP_FAILED) {
 		fprintf(stderr, "partial WRITE_MEM fault mapping failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+	if (munmap(fault_src, page_size) < 0) {
+		fprintf(stderr, "partial WRITE_MEM fault munmap failed: %s\n",
 			strerror(errno));
 		return -1;
 	}
@@ -3609,14 +3614,12 @@ static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
 	errno = 0;
 	if (ioctl(session_fd, LKMDBG_IOC_WRITE_MEM, &req) == 0) {
 		fprintf(stderr, "partial WRITE_MEM unexpectedly succeeded\n");
-		munmap(fault_src, page_size);
 		return -1;
 	}
 
 	if (errno != EFAULT) {
 		fprintf(stderr, "partial WRITE_MEM errno=%d expected=%d\n", errno,
 			EFAULT);
-		munmap(fault_src, page_size);
 		return -1;
 	}
 
@@ -3626,7 +3629,6 @@ static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
 			"partial WRITE_MEM progress mismatch ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
 			req.ops_done, (uint64_t)req.bytes_done, ops[0].bytes_done,
 			ops[1].bytes_done);
-		munmap(fault_src, page_size);
 		return -1;
 	}
 
@@ -3637,11 +3639,8 @@ static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
 		fprintf(stderr,
 			"partial WRITE_MEM first op readback failed bytes_done=%u\n",
 			bytes_done);
-		munmap(fault_src, page_size);
 		return -1;
 	}
-
-	munmap(fault_src, page_size);
 	return 0;
 }
 
