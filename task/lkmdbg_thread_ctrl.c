@@ -2450,7 +2450,19 @@ static int lkmdbg_install_syscall_enter_backend(void)
 	if (lkmdbg_trace_sys_enter_registered || lkmdbg_syscall_enter_hook)
 		return 0;
 
-	if (lkmdbg_symbols.invoke_syscall_sym) {
+	if (
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+		lkmdbg_symbols.invoke_syscall_inner_sym
+#else
+		false
+#endif
+	) {
+		target = (void *)lkmdbg_symbols.invoke_syscall_inner_sym;
+		replacement = lkmdbg_invoke_syscall_inner_replacement;
+		name = "__invoke_syscall";
+		lkmdbg_syscall_enter_hook_kind =
+			LKMDBG_SYSCALL_ENTER_HOOK_INVOKE_INNER;
+	} else if (lkmdbg_symbols.invoke_syscall_sym) {
 		target = (void *)lkmdbg_symbols.invoke_syscall_sym;
 		replacement = lkmdbg_invoke_syscall_replacement;
 		name = "invoke_syscall";
