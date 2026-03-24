@@ -126,6 +126,8 @@ static int lkmdbg_task_work_add_resume(struct task_struct *task,
 static bool lkmdbg_freezer_thread_settled_locked(
 	struct lkmdbg_freeze_thread *entry)
 {
+	long state;
+
 	if (entry->completed || entry->parked)
 		return true;
 
@@ -134,7 +136,12 @@ static bool lkmdbg_freezer_thread_settled_locked(
 	 * user mode. Thaw will cancel its queued resume work if it never
 	 * reaches the parking callback.
 	 */
-	return READ_ONCE(entry->task->__state) != TASK_RUNNING;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+	state = READ_ONCE(entry->task->__state);
+#else
+	state = READ_ONCE(entry->task->state);
+#endif
+	return state != TASK_RUNNING;
 }
 
 static bool lkmdbg_freezer_all_settled_locked(struct lkmdbg_freezer *freezer)

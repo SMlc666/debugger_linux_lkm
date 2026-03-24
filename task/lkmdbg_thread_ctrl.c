@@ -1901,6 +1901,7 @@ static int lkmdbg_mmu_queue_step_rearm(struct lkmdbg_hwpoint *entry)
 }
 #endif
 
+#ifdef CONFIG_ARM64
 static bool lkmdbg_mmu_try_handle_fault(struct mm_struct *mm,
 					unsigned long addr, u32 actual_type,
 					struct pt_regs *regs)
@@ -2202,6 +2203,7 @@ out:
 	if (atomic_dec_and_test(&lkmdbg_do_el0_softstep_inflight))
 		wake_up_all(&lkmdbg_do_el0_softstep_waitq);
 }
+#endif
 #endif
 
 static int lkmdbg_register_trace_hooks(void)
