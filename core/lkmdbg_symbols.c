@@ -147,6 +147,10 @@ static int lkmdbg_resolve_runtime_symbols(void)
 	if (addr)
 		lkmdbg_symbols.do_page_fault_sym = addr;
 
+	addr = lkmdbg_lookup_runtime_symbol("do_el0_softstep");
+	if (addr)
+		lkmdbg_symbols.do_el0_softstep_sym = addr;
+
 	addr = lkmdbg_lookup_runtime_symbol("process_vm_rw");
 	if (addr)
 		lkmdbg_symbols.process_vm_rw_sym = addr;
@@ -197,6 +201,7 @@ void lkmdbg_symbols_exit(void)
 	lkmdbg_symbols.perf_event_disable_local_sym = 0;
 	lkmdbg_symbols.do_page_fault_inner_sym = 0;
 	lkmdbg_symbols.do_page_fault_sym = 0;
+	lkmdbg_symbols.do_el0_softstep_sym = 0;
 	lkmdbg_symbols.process_vm_rw_sym = 0;
 	lkmdbg_symbols.do_sys_process_vm_writev_sym = 0;
 	lkmdbg_symbols.access_remote_vm_sym = 0;

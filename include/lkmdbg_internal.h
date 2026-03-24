@@ -122,6 +122,7 @@ struct lkmdbg_symbols {
 	unsigned long perf_event_disable_local_sym;
 	unsigned long do_page_fault_inner_sym;
 	unsigned long do_page_fault_sym;
+	unsigned long do_el0_softstep_sym;
 	unsigned long process_vm_rw_sym;
 	unsigned long do_sys_process_vm_writev_sym;
 	unsigned long access_remote_vm_sym;

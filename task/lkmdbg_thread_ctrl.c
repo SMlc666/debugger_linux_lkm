@@ -134,6 +134,12 @@ static vm_fault_t (*lkmdbg_do_page_fault_inner_orig)(
 	unsigned int mm_flags, unsigned long vm_flags, struct pt_regs *regs);
 static atomic_t lkmdbg_do_page_fault_inflight = ATOMIC_INIT(0);
 static DECLARE_WAIT_QUEUE_HEAD(lkmdbg_do_page_fault_waitq);
+static struct lkmdbg_inline_hook *lkmdbg_do_el0_softstep_hook;
+static struct lkmdbg_hook_registry_entry *lkmdbg_do_el0_softstep_registry;
+static void (*lkmdbg_do_el0_softstep_orig)(unsigned long esr,
+					   struct pt_regs *regs);
+static atomic_t lkmdbg_do_el0_softstep_inflight = ATOMIC_INIT(0);
+static DECLARE_WAIT_QUEUE_HEAD(lkmdbg_do_el0_softstep_waitq);
 static struct lkmdbg_inline_hook *lkmdbg_process_vm_write_hook;
 static struct lkmdbg_hook_registry_entry *lkmdbg_process_vm_write_registry;
 static ssize_t (*lkmdbg_process_vm_rw_orig)(pid_t pid,
@@ -179,13 +185,18 @@ static enum lkmdbg_remote_vm_write_hook_kind
 #if defined(CONFIG_ARM64) && LKMDBG_ARM64_USER_STEP_HOOKS
 static int lkmdbg_user_step_handler(struct pt_regs *regs,
 				    lkmdbg_step_hook_esr_t esr);
+#endif
+#ifdef CONFIG_ARM64
+static bool lkmdbg_handle_user_single_step(struct pt_regs *regs);
+static void lkmdbg_do_el0_softstep_replacement(unsigned long esr,
+					       struct pt_regs *regs);
 static int lkmdbg_do_page_fault_replacement(unsigned long far,
 					    unsigned long esr,
 					    struct pt_regs *regs);
 static vm_fault_t lkmdbg_do_page_fault_inner_replacement(
 	struct mm_struct *mm, struct vm_area_struct *vma, unsigned long addr,
 	unsigned int mm_flags, unsigned long vm_flags, struct pt_regs *regs);
-
+#if LKMDBG_ARM64_USER_STEP_HOOKS
 static struct step_hook lkmdbg_user_step_hook = {
 	.fn = lkmdbg_user_step_handler,
 };
@@ -825,6 +836,60 @@ static int lkmdbg_mmu_install_page_fault_hook(void)
 	pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
 		name, orig_fn, target);
 	return 0;
+}
+
+static int lkmdbg_install_user_single_step_backend(void)
+{
+#ifdef CONFIG_ARM64
+	void *target;
+	void *replacement;
+	void *orig_fn;
+	int ret;
+
+#if LKMDBG_ARM64_USER_STEP_HOOKS
+	if (lkmdbg_symbols.register_user_step_hook_sym &&
+	    lkmdbg_symbols.unregister_user_step_hook_sym &&
+	    lkmdbg_symbols.user_enable_single_step_sym &&
+	    lkmdbg_symbols.user_disable_single_step_sym) {
+		((lkmdbg_register_user_step_hook_fn)
+			 lkmdbg_symbols.register_user_step_hook_sym)(
+			&lkmdbg_user_step_hook);
+		lkmdbg_user_step_hook_registered = true;
+		return 0;
+	}
+#endif
+	if (lkmdbg_do_el0_softstep_hook)
+		return 0;
+	if (lkmdbg_symbols.do_el0_softstep_sym) {
+		target = (void *)lkmdbg_symbols.do_el0_softstep_sym;
+		replacement = lkmdbg_do_el0_softstep_replacement;
+		orig_fn = NULL;
+
+		lkmdbg_do_el0_softstep_registry =
+			lkmdbg_hook_registry_register("do_el0_softstep", target,
+							 replacement);
+		if (!lkmdbg_do_el0_softstep_registry)
+			return -ENOMEM;
+
+		ret = lkmdbg_hook_install(target, replacement,
+					  &lkmdbg_do_el0_softstep_hook,
+					  &orig_fn);
+		if (ret) {
+			lkmdbg_hook_registry_unregister(
+				lkmdbg_do_el0_softstep_registry, ret);
+			lkmdbg_do_el0_softstep_registry = NULL;
+			return ret;
+		}
+
+		lkmdbg_do_el0_softstep_orig = orig_fn;
+		lkmdbg_hook_registry_mark_installed(
+			lkmdbg_do_el0_softstep_registry, target, orig_fn, 0);
+		pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
+			"do_el0_softstep", orig_fn, target);
+		return 0;
+	}
+#endif
+	return -ENOENT;
 }
 
 static bool lkmdbg_mmu_iov_overlaps_page(const struct iovec __user *rvec,
@@ -1796,6 +1861,14 @@ static struct tracepoint *lkmdbg_find_tracepoint(const char *name)
 }
 
 #ifdef CONFIG_ARM64
+static bool lkmdbg_user_single_step_backend_ready(void)
+{
+	if (LKMDBG_ARM64_USER_STEP_HOOKS && lkmdbg_user_step_hook_registered)
+		return true;
+
+	return lkmdbg_do_el0_softstep_hook != NULL;
+}
+
 static int lkmdbg_mmu_queue_step_rearm(struct lkmdbg_hwpoint *entry)
 {
 	lkmdbg_user_single_step_fn enable_fn;
@@ -1803,7 +1876,7 @@ static int lkmdbg_mmu_queue_step_rearm(struct lkmdbg_hwpoint *entry)
 
 	if (!entry)
 		return -EINVAL;
-	if (!LKMDBG_ARM64_USER_STEP_HOOKS || !lkmdbg_user_step_hook_registered)
+	if (!lkmdbg_user_single_step_backend_ready())
 		return -EOPNOTSUPP;
 
 	enable_fn =
@@ -2040,9 +2113,8 @@ passthrough:
 	return ret;
 }
 
-#if defined(CONFIG_ARM64) && LKMDBG_ARM64_USER_STEP_HOOKS
-static int lkmdbg_user_step_handler(struct pt_regs *regs,
-				    lkmdbg_step_hook_esr_t esr)
+#ifdef CONFIG_ARM64
+static bool lkmdbg_handle_user_single_step(struct pt_regs *regs)
 {
 	struct lkmdbg_session *matched;
 	struct lkmdbg_hwpoint *entry = NULL;
@@ -2050,8 +2122,6 @@ static int lkmdbg_user_step_handler(struct pt_regs *regs,
 	pid_t tgid = current->tgid;
 	lkmdbg_user_single_step_fn disable_fn;
 	unsigned long irqflags;
-
-	(void)esr;
 
 	spin_lock_irqsave(&lkmdbg_mmu_hwpoint_lock, irqflags);
 	entry = lkmdbg_mmu_find_step_rearm_locked(tgid, tid);
@@ -2073,12 +2143,12 @@ static int lkmdbg_user_step_handler(struct pt_regs *regs,
 			entry->armed = true;
 		}
 		lkmdbg_hwpoint_put(entry);
-		return DBG_HOOK_HANDLED;
+		return true;
 	}
 
 	matched = lkmdbg_session_consume_single_step(tgid, tid);
 	if (!matched)
-		return DBG_HOOK_ERROR;
+		return false;
 
 	disable_fn =
 		(lkmdbg_user_single_step_fn)lkmdbg_symbols.user_disable_single_step_sym;
@@ -2094,7 +2164,41 @@ static int lkmdbg_user_step_handler(struct pt_regs *regs,
 			instruction_pointer(regs), 0, &stop_regs);
 	}
 	lkmdbg_session_async_put(matched);
-	return DBG_HOOK_HANDLED;
+	return true;
+}
+#endif
+
+#if defined(CONFIG_ARM64) && LKMDBG_ARM64_USER_STEP_HOOKS
+static int lkmdbg_user_step_handler(struct pt_regs *regs,
+				    lkmdbg_step_hook_esr_t esr)
+{
+	(void)esr;
+
+	if (lkmdbg_handle_user_single_step(regs))
+		return DBG_HOOK_HANDLED;
+
+	return DBG_HOOK_ERROR;
+}
+#endif
+
+#ifdef CONFIG_ARM64
+static void lkmdbg_do_el0_softstep_replacement(unsigned long esr,
+					       struct pt_regs *regs)
+{
+	atomic_inc(&lkmdbg_do_el0_softstep_inflight);
+
+	if (!regs || !user_mode(regs) || !current->mm)
+		goto passthrough;
+
+	if (lkmdbg_handle_user_single_step(regs))
+		goto out;
+
+passthrough:
+	if (lkmdbg_do_el0_softstep_orig)
+		lkmdbg_do_el0_softstep_orig(esr, regs);
+out:
+	if (atomic_dec_and_test(&lkmdbg_do_el0_softstep_inflight))
+		wake_up_all(&lkmdbg_do_el0_softstep_waitq);
 }
 #endif
 
@@ -2193,16 +2297,8 @@ static int lkmdbg_register_trace_hooks(void)
 
 int lkmdbg_thread_ctrl_init(void)
 {
-#if defined(CONFIG_ARM64) && LKMDBG_ARM64_USER_STEP_HOOKS
-	if (lkmdbg_symbols.register_user_step_hook_sym &&
-	    lkmdbg_symbols.unregister_user_step_hook_sym &&
-	    lkmdbg_symbols.user_enable_single_step_sym &&
-	    lkmdbg_symbols.user_disable_single_step_sym) {
-		((lkmdbg_register_user_step_hook_fn)
-			 lkmdbg_symbols.register_user_step_hook_sym)(
-			&lkmdbg_user_step_hook);
-		lkmdbg_user_step_hook_registered = true;
-	}
+#ifdef CONFIG_ARM64
+	lkmdbg_install_user_single_step_backend();
 #endif
 
 	return lkmdbg_register_trace_hooks();
@@ -2358,6 +2454,24 @@ void lkmdbg_thread_ctrl_exit(void)
 			&lkmdbg_user_step_hook);
 		lkmdbg_user_step_hook_registered = false;
 	}
+#endif
+
+#ifdef CONFIG_ARM64
+	if (lkmdbg_do_el0_softstep_hook) {
+		if (!lkmdbg_hook_deactivate(lkmdbg_do_el0_softstep_hook))
+			wait_event_timeout(
+				lkmdbg_do_el0_softstep_waitq,
+				atomic_read(&lkmdbg_do_el0_softstep_inflight) == 0,
+				msecs_to_jiffies(1000));
+		lkmdbg_hook_destroy(lkmdbg_do_el0_softstep_hook);
+		lkmdbg_do_el0_softstep_hook = NULL;
+	}
+	if (lkmdbg_do_el0_softstep_registry) {
+		lkmdbg_hook_registry_unregister(
+			lkmdbg_do_el0_softstep_registry, 0);
+		lkmdbg_do_el0_softstep_registry = NULL;
+	}
+	lkmdbg_do_el0_softstep_orig = NULL;
 
 	if (lkmdbg_do_page_fault_hook) {
 		if (!lkmdbg_hook_deactivate(lkmdbg_do_page_fault_hook))
@@ -2651,8 +2765,7 @@ long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp)
 #ifndef CONFIG_ARM64
 	return lkmdbg_single_step_copy_reply(argp, &req, -EOPNOTSUPP);
 #else
-	if (!LKMDBG_ARM64_USER_STEP_HOOKS ||
-	    !lkmdbg_user_step_hook_registered ||
+	if (!lkmdbg_user_single_step_backend_ready() ||
 	    !lkmdbg_symbols.user_enable_single_step_sym)
 		return lkmdbg_single_step_copy_reply(argp, &req, -EOPNOTSUPP);
 
