@@ -9,6 +9,10 @@
 #include <linux/task_work.h>
 #include <linux/uaccess.h>
 
+#ifdef CONFIG_ARM64
+#include <asm/ptrace.h>
+#endif
+
 #include "lkmdbg_internal.h"
 
 #define LKMDBG_TASK_WORK_NOTIFY_RESUME 1U
@@ -18,6 +22,7 @@ typedef int (*lkmdbg_task_work_add_fn)(struct task_struct *task,
 				       unsigned int notify);
 typedef void (*lkmdbg_perf_event_disable_local_fn)(struct perf_event *event);
 
+#ifdef CONFIG_ARM64
 static void lkmdbg_regs_arm64_export(struct lkmdbg_regs_arm64 *dst,
 				     const struct pt_regs *src)
 {
@@ -30,7 +35,6 @@ static void lkmdbg_regs_arm64_export(struct lkmdbg_regs_arm64 *dst,
 	dst->pc = src->pc;
 	dst->pstate = src->pstate;
 }
-
 static void lkmdbg_regs_arm64_import(struct pt_regs *dst,
 				     const struct lkmdbg_regs_arm64 *src)
 {
@@ -42,6 +46,7 @@ static void lkmdbg_regs_arm64_import(struct pt_regs *dst,
 	dst->pc = src->pc;
 	dst->pstate = src->pstate;
 }
+#endif
 
 static void lkmdbg_remote_call_reset_locked(struct lkmdbg_session *session)
 {
@@ -154,6 +159,7 @@ static void lkmdbg_remote_call_disable_breakpoint(struct perf_event *event)
 		disable_fn(event);
 }
 
+#ifdef CONFIG_ARM64
 static void lkmdbg_remote_call_breakpoint(struct perf_event *bp,
 					  struct perf_sample_data *data,
 					  struct pt_regs *regs)
@@ -212,10 +218,14 @@ static void lkmdbg_remote_call_breakpoint(struct perf_event *bp,
 					  tgid, tid, 0, 0, return_value, call_id,
 					  &stop_regs);
 }
+#endif
 
 static void lkmdbg_remote_call_restore_prepared_regs(
 	const struct lkmdbg_remote_call_state *snapshot)
 {
+#ifndef CONFIG_ARM64
+	(void)snapshot;
+#else
 	struct task_struct *task;
 	struct pt_regs *regs;
 
@@ -236,6 +246,7 @@ static void lkmdbg_remote_call_restore_prepared_regs(
 	if (regs)
 		lkmdbg_regs_arm64_import(regs, &snapshot->saved_regs);
 	put_task_struct(task);
+#endif
 }
 
 static void lkmdbg_remote_call_disarm_snapshot(
@@ -252,6 +263,12 @@ static int lkmdbg_remote_call_arm_breakpoint(struct lkmdbg_session *session,
 					     struct task_struct *task,
 					     struct perf_event **event_out)
 {
+#ifndef CONFIG_ARM64
+	(void)session;
+	(void)task;
+	(void)event_out;
+	return -EOPNOTSUPP;
+#else
 	struct perf_event_attr attr;
 	struct perf_event *event;
 	int ret;
@@ -281,11 +298,18 @@ static int lkmdbg_remote_call_arm_breakpoint(struct lkmdbg_session *session,
 
 	*event_out = event;
 	return 0;
+#endif
 }
 
 long lkmdbg_remote_call(struct lkmdbg_session *session, void __user *argp)
 {
 	struct lkmdbg_remote_call_request req;
+
+#ifndef CONFIG_ARM64
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+	return lkmdbg_remote_call_copy_reply(argp, &req, -EOPNOTSUPP);
+#else
 	struct lkmdbg_remote_call_state snapshot;
 	struct lkmdbg_stop_state stop;
 	struct task_struct *task = NULL;
@@ -296,11 +320,6 @@ long lkmdbg_remote_call(struct lkmdbg_session *session, void __user *argp)
 	long ret;
 	u32 i;
 
-#ifndef CONFIG_ARM64
-	if (copy_from_user(&req, argp, sizeof(req)))
-		return -EFAULT;
-	return lkmdbg_remote_call_copy_reply(argp, &req, -EOPNOTSUPP);
-#else
 	if (copy_from_user(&req, argp, sizeof(req)))
 		return -EFAULT;
 
