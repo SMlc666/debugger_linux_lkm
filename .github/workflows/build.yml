@@ -26,199 +26,6 @@ jobs:
           echo "Using KDIR=$KDIR"
           make KDIR="$KDIR" CC="gcc"
 
-  module-build-android-gki:
-    name: module-build-${{ matrix.label }}
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: android14-6.1
-            kernel_branch: android14-6.1
-            artifact_name: lkmdbg-android14-6.1
-            out_dir: out/android14-6.1
-            cache_suffix: android14-6.1
-            disable_btf: false
-          - label: android15-6.6
-            kernel_branch: android15-6.6
-            artifact_name: lkmdbg-android15-6.6
-            out_dir: out/android15-6.6
-            cache_suffix: android15-6.6
-            disable_btf: false
-          - label: android16-6.12
-            kernel_branch: android16-6.12
-            artifact_name: lkmdbg-android16-6.12
-            out_dir: out/android16-6.12
-            cache_suffix: android16-6.12
-            disable_btf: true
-    env:
-      ANDROID_KERNEL_PREP_DIR: ${{ github.workspace }}/.cache/android-kernel-prep-${{ matrix.cache_suffix }}
-      KERNEL_REPO: https://android.googlesource.com/kernel/common
-      KERNEL_BRANCH: ${{ matrix.kernel_branch }}
-      NDK_VERSION: android-ndk-r27d
-      NDK_ZIP: android-ndk-r27d-linux.zip
-      NDK_URL: "https://dl.google.com/android/repository/android-ndk-r27d-linux.zip"
-      NDK_DIR: ${{ github.workspace }}/.ndk/android-ndk-r27d
-      ANDROID_API: "34"
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Android kernel build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            bc \
-            bison \
-            build-essential \
-            clang \
-            flex \
-            git \
-            libdw-dev \
-            libelf-dev \
-            libssl-dev \
-            lld \
-            llvm \
-            pahole \
-            rsync \
-            unzip
-
-      - name: Resolve Android kernel revision
-        id: android-kernel-rev
-        run: |
-          KERNEL_SHA="$(git ls-remote "$KERNEL_REPO" "refs/heads/$KERNEL_BRANCH" | awk 'NR==1 {print $1}')"
-          test -n "$KERNEL_SHA"
-          echo "sha=$KERNEL_SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare Android cache directories
-        run: |
-          mkdir -p "$ANDROID_KERNEL_PREP_DIR"
-          mkdir -p "$(dirname "$NDK_DIR")"
-
-      - name: Restore Android kernel prep cache
-        id: android-kernel-prep-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ env.ANDROID_KERNEL_PREP_DIR }}
-          key: ${{ runner.os }}-${{ matrix.cache_suffix }}-kernel-prep-${{ steps.android-kernel-rev.outputs.sha }}-v1
-
-      - name: Cache Android NDK
-        id: cache-ndk
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.NDK_DIR }}
-          key: ${{ runner.os }}-${{ env.NDK_VERSION }}
-
-      - name: Fetch Android NDK
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
-        run: |
-          curl -L "$NDK_URL" -o "$RUNNER_TEMP/$NDK_ZIP"
-          unzip -q "$RUNNER_TEMP/$NDK_ZIP" -d "$(dirname "$NDK_DIR")"
-
-      - name: Fetch Android common kernel
-        run: |
-          git clone --depth=1 --branch "$KERNEL_BRANCH" "$KERNEL_REPO" "$RUNNER_TEMP/android-kernel-common"
-
-      - name: Build Android GKI tree and external module
-        run: |
-          KERNEL_DIR="$RUNNER_TEMP/android-kernel-common"
-          OUT_DIR="$RUNNER_TEMP/android-kernel-out"
-          PREP_DIR="$ANDROID_KERNEL_PREP_DIR"
-          COMMON_ARGS=(
-            -C "$KERNEL_DIR"
-            O="$OUT_DIR"
-            ARCH=arm64
-            LLVM=1
-            CC="clang"
-            HOSTCC="clang"
-          )
-
-          restore_kernel_prep() {
-            mkdir -p "$OUT_DIR"
-            mkdir -p "$OUT_DIR/arch/arm64/include"
-            rsync -a "$PREP_DIR/" "$OUT_DIR/"
-          }
-
-          stage_kernel_prep() {
-            rm -rf "$PREP_DIR"
-            mkdir -p "$PREP_DIR/arch/arm64/include"
-            rsync -a --delete \
-              "$OUT_DIR/.config" \
-              "$OUT_DIR/Module.symvers" \
-              "$OUT_DIR/Makefile" \
-              "$OUT_DIR/include" \
-              "$OUT_DIR/scripts" \
-              "$OUT_DIR/arch/arm64/include/generated" \
-              "$PREP_DIR/"
-          }
-
-          kernel_prep_ready() {
-            [ -f "$PREP_DIR/.config" ] &&
-            [ -f "$PREP_DIR/Module.symvers" ] &&
-            [ -f "$PREP_DIR/Makefile" ] &&
-            [ -f "$PREP_DIR/include/generated/autoconf.h" ] &&
-            [ -f "$PREP_DIR/include/config/auto.conf" ] &&
-            [ -f "$PREP_DIR/scripts/basic/fixdep" ] &&
-            [ -f "$PREP_DIR/scripts/mod/modpost" ] &&
-            [ -f "$PREP_DIR/arch/arm64/include/generated/asm-offsets.h" ]
-          }
-
-          if kernel_prep_ready; then
-            echo "Reusing prepared Android kernel artifacts from $PREP_DIR"
-            restore_kernel_prep
-          else
-            make "${COMMON_ARGS[@]}" gki_defconfig
-            if [ "${{ matrix.disable_btf || false }}" = "true" ]; then
-              "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
-                -d DEBUG_INFO_BTF \
-                -d DEBUG_INFO_BTF_MODULES
-              make "${COMMON_ARGS[@]}" olddefconfig
-            fi
-            make "${COMMON_ARGS[@]}" modules_prepare
-            make "${COMMON_ARGS[@]}" -j"$(nproc)" modules
-            test -f "$OUT_DIR/Module.symvers"
-            stage_kernel_prep
-          fi
-
-          make "${COMMON_ARGS[@]}" \
-            M="$GITHUB_WORKSPACE" \
-            -j"$(nproc)" \
-            modules
-
-      - name: Build Android userspace tools
-        run: |
-          TOOLCHAIN="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          TARGET="aarch64-linux-android${ANDROID_API}"
-          mkdir -p "$GITHUB_WORKSPACE/${{ matrix.out_dir }}"
-          "$TOOLCHAIN/${TARGET}-clang" -O2 -Wall -Wextra \
-            -o "$GITHUB_WORKSPACE/${{ matrix.out_dir }}/lkmdbg_open_session" \
-            "$GITHUB_WORKSPACE/tools/lkmdbg_open_session.c"
-          "$TOOLCHAIN/${TARGET}-clang" -O2 -Wall -Wextra -pthread \
-            -o "$GITHUB_WORKSPACE/${{ matrix.out_dir }}/lkmdbg_mem_test" \
-            "$GITHUB_WORKSPACE/tools/lkmdbg_mem_test.c"
-          "$TOOLCHAIN/${TARGET}-clang" -O2 -Wall -Wextra -pthread \
-            -o "$GITHUB_WORKSPACE/${{ matrix.out_dir }}/lkmdbg_mmu_test" \
-            "$GITHUB_WORKSPACE/tools/lkmdbg_mmu_test.c"
-
-      - name: Upload Android artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: |
-            lkmdbg.ko
-            ${{ matrix.out_dir }}/lkmdbg_open_session
-            ${{ matrix.out_dir }}/lkmdbg_mem_test
-            ${{ matrix.out_dir }}/lkmdbg_mmu_test
-          if-no-files-found: error
-
-      - name: Save Android kernel prep cache
-        if: success() && steps.android-kernel-prep-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.ANDROID_KERNEL_PREP_DIR }}
-          key: ${{ runner.os }}-${{ matrix.cache_suffix }}-kernel-prep-${{ steps.android-kernel-rev.outputs.sha }}-v1
-
   qemu-arm64-build-artifacts:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -226,6 +33,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - label: 5.10
+            kernel_ref: v5.10
+            artifact_name: qemu-arm64-boot-5.10
+            cache_suffix: v5.10
+          - label: 5.15
+            kernel_ref: v5.15
+            artifact_name: qemu-arm64-boot-5.15
+            cache_suffix: v5.15
           - label: 6.1
             kernel_ref: v6.1
             artifact_name: qemu-arm64-boot-6.1
@@ -238,6 +53,10 @@ jobs:
             kernel_ref: v6.12
             artifact_name: qemu-arm64-boot-6.12
             cache_suffix: v6.12
+          - label: 6.18
+            kernel_ref: v6.18
+            artifact_name: qemu-arm64-boot-6.18
+            cache_suffix: v6.18
     env:
       KERNEL_REPO: https://github.com/torvalds/linux.git
       KERNEL_REF: ${{ matrix.kernel_ref }}
