@@ -148,6 +148,7 @@ static void lkmdbg_pte_flush_page(struct mm_struct *mm, unsigned long addr)
 	__tlbi(vale1is, tlbi_addr);
 	__tlbi_user(vale1is, tlbi_addr);
 	dsb(ish);
+	isb();
 }
 
 int lkmdbg_pte_lookup_locked(struct mm_struct *mm, unsigned long addr,
