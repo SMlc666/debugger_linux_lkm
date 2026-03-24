@@ -98,7 +98,7 @@ static int lkmdbg_alias_map_page(void *addr, void **alias_out)
 	if (!phys)
 		return -EFAULT;
 
-	new_pte = pfn_pte(PHYS_PFN(phys), pte_pgprot(lkmdbg_alias_pte));
+	new_pte = pfn_pte(PHYS_PFN(phys), lkmdbg_pte_pgprot(lkmdbg_alias_pte));
 	set_pte(lkmdbg_alias_ptep, new_pte);
 	flush_tlb_kernel_range((unsigned long)lkmdbg_alias_page,
 			       (unsigned long)lkmdbg_alias_page + PAGE_SIZE);

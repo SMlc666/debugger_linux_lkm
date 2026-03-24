@@ -16,6 +16,7 @@
 #include <linux/wait.h>
 #include <linux/workqueue.h>
 
+#include "lkmdbg_compat.h"
 #include "../hook/lkmdbg_hook_internal.h"
 #include "lkmdbg_ioctl.h"
 

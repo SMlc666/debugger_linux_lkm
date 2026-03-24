@@ -105,7 +105,7 @@ pte_t lkmdbg_pte_build_alias_pte(struct page *page, pte_t template, u32 prot)
 {
 	pte_t pte;
 
-	pte = pfn_pte(page_to_pfn(page), pte_pgprot(template));
+	pte = pfn_pte(page_to_pfn(page), lkmdbg_pte_pgprot(template));
 	pte = clear_pte_bit(pte, __pgprot(LKMDBG_PTE_PROTNONE_BIT));
 	pte = set_pte_bit(pte, __pgprot(PTE_VALID));
 	pte = lkmdbg_pte_set_user_read(

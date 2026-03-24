@@ -5,9 +5,9 @@
 #include <linux/mm.h>
 #include <linux/mm_types.h>
 #include <linux/mmap_lock.h>
+#include <linux/sched/mm.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
-#include <linux/version.h>
 
 #include "lkmdbg_internal.h"
 
@@ -17,12 +17,6 @@
 #define LKMDBG_MEM_MAX_PIN_PAGES 16U
 #define LKMDBG_MEM_OP_VALID_FLAGS LKMDBG_MEM_OP_FLAG_FORCE_ACCESS
 #define LKMDBG_PAGE_MAX_ENTRIES 1024U
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
-#define LKMDBG_GUP_NOFAULT_FLAG (1U << 5)
-#else
-#define LKMDBG_GUP_NOFAULT_FLAG FOLL_NOFAULT
-#endif
 
 static int lkmdbg_validate_mem_op(const struct lkmdbg_mem_op *op, bool write)
 {
