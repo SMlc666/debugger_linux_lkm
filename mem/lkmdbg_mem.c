@@ -186,12 +186,12 @@ static long lkmdbg_mem_xfer_window(struct mm_struct *mm, u64 remote_addr,
 					  PAGE_SIZE - page_offset);
 			user_addr = u64_to_user_ptr(local_addr + total_done +
 						    window_done);
-			page_addr = kmap_local_page(pages[i]);
+			page_addr = lkmdbg_kmap_local_page(pages[i]);
 
 			if (write) {
 				if (copy_from_user((u8 *)page_addr + page_offset,
 						   user_addr, chunk_len)) {
-					kunmap_local(page_addr);
+					lkmdbg_kunmap_local(pages[i], page_addr);
 					lkmdbg_put_remote_pages(pages, pinned);
 					return -EFAULT;
 				}
@@ -199,12 +199,12 @@ static long lkmdbg_mem_xfer_window(struct mm_struct *mm, u64 remote_addr,
 			} else if (copy_to_user(user_addr,
 						(u8 *)page_addr + page_offset,
 						chunk_len)) {
-				kunmap_local(page_addr);
+				lkmdbg_kunmap_local(pages[i], page_addr);
 				lkmdbg_put_remote_pages(pages, pinned);
 				return -EFAULT;
 			}
 
-			kunmap_local(page_addr);
+			lkmdbg_kunmap_local(pages[i], page_addr);
 			put_page(pages[i]);
 			pages[i] = NULL;
 			window_done += chunk_len;

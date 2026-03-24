@@ -9,6 +9,7 @@
 #include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/poll.h>
+#include <linux/sched/mm.h>
 #include <linux/spinlock.h>
 #include <linux/task_work.h>
 #include <linux/types.h>
