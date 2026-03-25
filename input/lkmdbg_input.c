@@ -45,11 +45,18 @@ struct lkmdbg_input_device {
 	struct input_dev *input_dev;
 	struct device *dev;
 	u64 device_id;
+	u32 bustype;
+	u16 vendor;
+	u16 product;
+	u16 version_id;
 	u32 flags;
 	bool disconnected;
 	bool injecting;
 	bool dev_ref_held;
 	struct task_struct *inject_task;
+	char name[LKMDBG_INPUT_DEVICE_TEXT_MAX];
+	char phys[LKMDBG_INPUT_DEVICE_TEXT_MAX];
+	char uniq[LKMDBG_INPUT_DEVICE_TEXT_MAX];
 };
 
 static LIST_HEAD(lkmdbg_input_devices);
@@ -136,22 +143,44 @@ static u32 lkmdbg_input_device_flags_from_dev(struct input_dev *dev)
 	return flags;
 }
 
+static void lkmdbg_input_copy_string_nofault(char *dst, size_t dst_size,
+					     const char *src)
+{
+	size_t i;
+	char ch = '\0';
+
+	if (!dst || !dst_size)
+		return;
+
+	memset(dst, 0, dst_size);
+	if (!src)
+		return;
+
+	for (i = 0; i + 1 < dst_size; i++) {
+		if (probe_kernel_read(&ch, src + i, sizeof(ch)))
+			break;
+		dst[i] = ch;
+		if (!ch)
+			return;
+	}
+
+	dst[dst_size - 1] = '\0';
+}
+
 static void lkmdbg_input_fill_device_entry(
 	struct lkmdbg_input_device *device,
 	struct lkmdbg_input_device_entry *entry)
 {
-	struct input_dev *dev = device->input_dev;
-
 	memset(entry, 0, sizeof(*entry));
 	entry->device_id = device->device_id;
-	entry->bustype = dev->id.bustype;
-	entry->vendor = dev->id.vendor;
-	entry->product = dev->id.product;
-	entry->version_id = dev->id.version;
+	entry->bustype = device->bustype;
+	entry->vendor = device->vendor;
+	entry->product = device->product;
+	entry->version_id = device->version_id;
 	entry->flags = device->flags;
-	strscpy(entry->name, dev->name ? dev->name : "", sizeof(entry->name));
-	strscpy(entry->phys, dev->phys ? dev->phys : "", sizeof(entry->phys));
-	strscpy(entry->uniq, dev->uniq ? dev->uniq : "", sizeof(entry->uniq));
+	strscpy(entry->name, device->name, sizeof(entry->name));
+	strscpy(entry->phys, device->phys, sizeof(entry->phys));
+	strscpy(entry->uniq, device->uniq, sizeof(entry->uniq));
 }
 
 static void lkmdbg_input_copy_bitmap64(u64 *dst, u32 dst_words,
@@ -839,7 +868,17 @@ static int lkmdbg_input_register_device(struct device *dev)
 	mutex_init(&device->inject_lock);
 	device->input_dev = input_dev;
 	device->dev = dev;
+	device->bustype = input_dev->id.bustype;
+	device->vendor = input_dev->id.vendor;
+	device->product = input_dev->id.product;
+	device->version_id = input_dev->id.version;
 	device->flags = lkmdbg_input_device_flags_from_dev(input_dev);
+	lkmdbg_input_copy_string_nofault(device->name, sizeof(device->name),
+					 input_dev->name);
+	lkmdbg_input_copy_string_nofault(device->phys, sizeof(device->phys),
+					 input_dev->phys);
+	lkmdbg_input_copy_string_nofault(device->uniq, sizeof(device->uniq),
+					 input_dev->uniq);
 	get_device(dev);
 	device->dev_ref_held = true;
 
