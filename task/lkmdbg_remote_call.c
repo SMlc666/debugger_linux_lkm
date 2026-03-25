@@ -2,6 +2,7 @@
 #include <linux/hw_breakpoint.h>
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
+#include <linux/limits.h>
 #include <linux/mm.h>
 #include <linux/pid.h>
 #include <linux/ptrace.h>
@@ -102,13 +103,51 @@ static int lkmdbg_validate_remote_call_request(
 	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
 		return -EINVAL;
 
-	if (req->flags)
+	if (req->flags &
+	    ~(LKMDBG_REMOTE_CALL_FLAG_SET_SP |
+	      LKMDBG_REMOTE_CALL_FLAG_SET_RETURN_PC |
+	      LKMDBG_REMOTE_CALL_FLAG_SET_X8))
 		return -EINVAL;
 
 	if (req->tid <= 0 || !req->target_pc || req->arg_count > ARRAY_SIZE(req->args))
 		return -EINVAL;
 
 	if (req->target_pc >= (u64)TASK_SIZE_MAX)
+		return -EINVAL;
+	if ((req->flags & LKMDBG_REMOTE_CALL_FLAG_SET_SP) &&
+	    (!req->stack_ptr || req->stack_ptr >= (u64)TASK_SIZE_MAX))
+		return -EINVAL;
+	if ((req->flags & LKMDBG_REMOTE_CALL_FLAG_SET_RETURN_PC) &&
+	    (!req->return_pc || req->return_pc >= (u64)TASK_SIZE_MAX))
+		return -EINVAL;
+
+	return 0;
+}
+
+static long lkmdbg_remote_thread_create_copy_reply(
+	void __user *argp, struct lkmdbg_remote_thread_create_request *req,
+	long ret)
+{
+	if (copy_to_user(argp, req, sizeof(*req)))
+		return -EFAULT;
+
+	return ret;
+}
+
+static int lkmdbg_validate_remote_thread_create_request(
+	struct lkmdbg_remote_thread_create_request *req)
+{
+	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
+		return -EINVAL;
+	if (req->flags & ~LKMDBG_REMOTE_THREAD_CREATE_FLAG_SET_TLS)
+		return -EINVAL;
+	if (req->tid <= 0 || !req->launcher_pc || !req->start_pc)
+		return -EINVAL;
+	if (req->launcher_pc >= (u64)TASK_SIZE_MAX ||
+	    req->start_pc >= (u64)TASK_SIZE_MAX)
+		return -EINVAL;
+	if (req->stack_top >= (u64)TASK_SIZE_MAX ||
+	    req->tls >= (u64)TASK_SIZE_MAX)
 		return -EINVAL;
 
 	return 0;
@@ -301,14 +340,13 @@ static int lkmdbg_remote_call_arm_breakpoint(struct lkmdbg_session *session,
 #endif
 }
 
-long lkmdbg_remote_call(struct lkmdbg_session *session, void __user *argp)
+static int lkmdbg_remote_call_prepare(struct lkmdbg_session *session,
+				      struct lkmdbg_remote_call_request *req)
 {
-	struct lkmdbg_remote_call_request req;
-
 #ifndef CONFIG_ARM64
-	if (copy_from_user(&req, argp, sizeof(req)))
-		return -EFAULT;
-	return lkmdbg_remote_call_copy_reply(argp, &req, -EOPNOTSUPP);
+	(void)session;
+	(void)req;
+	return -EOPNOTSUPP;
 #else
 	struct lkmdbg_remote_call_state snapshot;
 	struct lkmdbg_stop_state stop;
@@ -317,28 +355,21 @@ long lkmdbg_remote_call(struct lkmdbg_session *session, void __user *argp)
 	struct perf_event *event = NULL;
 	struct lkmdbg_regs_arm64 prepared;
 	u32 freeze_flags;
-	long ret;
+	int ret;
 	u32 i;
-
-	if (copy_from_user(&req, argp, sizeof(req)))
-		return -EFAULT;
-
-	ret = lkmdbg_validate_remote_call_request(&req);
-	if (ret)
-		return ret;
 
 	if (!lkmdbg_symbols.task_work_add_sym ||
 	    !lkmdbg_symbols.perf_event_disable_local_sym)
-		return lkmdbg_remote_call_copy_reply(argp, &req, -EOPNOTSUPP);
+		return -EOPNOTSUPP;
 
-	ret = lkmdbg_get_target_thread(session, req.tid, &task);
+	ret = lkmdbg_get_target_thread(session, req->tid, &task);
 	if (ret)
-		return lkmdbg_remote_call_copy_reply(argp, &req, ret);
+		return ret;
 
 	freeze_flags = lkmdbg_freeze_thread_flags(session, task->pid);
 	if (!(freeze_flags & LKMDBG_THREAD_FLAG_FREEZE_PARKED)) {
 		put_task_struct(task);
-		return lkmdbg_remote_call_copy_reply(argp, &req, -EBUSY);
+		return -EBUSY;
 	}
 
 	mutex_lock(&session->lock);
@@ -349,14 +380,14 @@ long lkmdbg_remote_call(struct lkmdbg_session *session, void __user *argp)
 	    session->step_armed) {
 		mutex_unlock(&session->lock);
 		put_task_struct(task);
-		return lkmdbg_remote_call_copy_reply(argp, &req, -EBUSY);
+		return -EBUSY;
 	}
 
 	regs = task_pt_regs(task);
 	if (!regs) {
 		mutex_unlock(&session->lock);
 		put_task_struct(task);
-		return lkmdbg_remote_call_copy_reply(argp, &req, -ESRCH);
+		return -ESRCH;
 	}
 
 	lkmdbg_regs_arm64_export(&session->remote_call.saved_regs, regs);
@@ -364,15 +395,18 @@ long lkmdbg_remote_call(struct lkmdbg_session *session, void __user *argp)
 	session->remote_call.call_id = session->next_remote_call_id;
 	session->remote_call.tgid = task->tgid;
 	session->remote_call.tid = task->pid;
-	session->remote_call.target_pc = req.target_pc;
-	session->remote_call.return_pc = session->remote_call.saved_regs.pc;
+	session->remote_call.target_pc = req->target_pc;
+	session->remote_call.return_pc =
+		(req->flags & LKMDBG_REMOTE_CALL_FLAG_SET_RETURN_PC) ?
+			req->return_pc :
+			session->remote_call.saved_regs.pc;
 	session->remote_call.phase = LKMDBG_REMOTE_CALL_PREPARED;
 	session->remote_call.resume = false;
 	session->remote_call.parked = false;
 	session->remote_call.park_work_queued = false;
-	req.call_id = session->remote_call.call_id;
-	req.tid = task->pid;
-	req.return_pc = session->remote_call.return_pc;
+	req->call_id = session->remote_call.call_id;
+	req->tid = task->pid;
+	req->return_pc = session->remote_call.return_pc;
 	mutex_unlock(&session->lock);
 
 	ret = lkmdbg_remote_call_arm_breakpoint(session, task, &event);
@@ -384,10 +418,14 @@ long lkmdbg_remote_call(struct lkmdbg_session *session, void __user *argp)
 	prepared = session->remote_call.saved_regs;
 	mutex_unlock(&session->lock);
 
-	for (i = 0; i < req.arg_count; i++)
-		prepared.regs[i] = req.args[i];
-	prepared.pc = req.target_pc;
-	prepared.regs[30] = req.return_pc;
+	for (i = 0; i < req->arg_count; i++)
+		prepared.regs[i] = req->args[i];
+	prepared.pc = req->target_pc;
+	prepared.regs[30] = req->return_pc;
+	if (req->flags & LKMDBG_REMOTE_CALL_FLAG_SET_SP)
+		prepared.sp = req->stack_ptr;
+	if (req->flags & LKMDBG_REMOTE_CALL_FLAG_SET_X8)
+		prepared.regs[8] = req->x8;
 
 	regs = task_pt_regs(task);
 	if (!regs) {
@@ -396,7 +434,7 @@ long lkmdbg_remote_call(struct lkmdbg_session *session, void __user *argp)
 	}
 	lkmdbg_regs_arm64_import(regs, &prepared);
 	put_task_struct(task);
-	return lkmdbg_remote_call_copy_reply(argp, &req, 0);
+	return 0;
 
 out_abort:
 	mutex_lock(&session->lock);
@@ -415,7 +453,86 @@ out_restore:
 
 out_reply:
 	put_task_struct(task);
+	return ret;
+#endif
+}
+
+long lkmdbg_remote_call(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_remote_call_request req;
+	long ret;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	ret = lkmdbg_validate_remote_call_request(&req);
+	if (ret)
+		return ret;
+
+	ret = lkmdbg_remote_call_prepare(session, &req);
 	return lkmdbg_remote_call_copy_reply(argp, &req, ret);
+}
+
+long lkmdbg_remote_thread_create(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_remote_thread_create_request req;
+	struct lkmdbg_remote_call_request call_req;
+	struct lkmdbg_stop_state stop;
+	long ret;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	ret = lkmdbg_validate_remote_thread_create_request(&req);
+	if (ret)
+		return ret;
+
+#ifndef CONFIG_ARM64
+	return lkmdbg_remote_thread_create_copy_reply(argp, &req, -EOPNOTSUPP);
+#else
+	memset(&stop, 0, sizeof(stop));
+	memset(&call_req, 0, sizeof(call_req));
+	call_req.version = LKMDBG_PROTO_VERSION;
+	call_req.size = sizeof(call_req);
+	call_req.tid = req.tid;
+	call_req.target_pc = req.launcher_pc;
+	call_req.arg_count = 4;
+	call_req.args[0] = req.start_pc;
+	call_req.args[1] = req.start_arg;
+	call_req.args[2] = req.stack_top;
+	call_req.args[3] =
+		(req.flags & LKMDBG_REMOTE_THREAD_CREATE_FLAG_SET_TLS) ?
+			req.tls :
+			0;
+
+	ret = lkmdbg_remote_call_prepare(session, &call_req);
+	if (ret)
+		return lkmdbg_remote_thread_create_copy_reply(argp, &req, ret);
+
+	mutex_lock(&session->lock);
+	stop = session->stop_state;
+	mutex_unlock(&session->lock);
+
+	ret = lkmdbg_continue_target_internal(session, stop.cookie,
+					      req.timeout_ms, 0, NULL);
+	if (ret) {
+		lkmdbg_remote_call_release(session);
+		return lkmdbg_remote_thread_create_copy_reply(argp, &req, ret);
+	}
+
+	ret = lkmdbg_wait_for_stop_state(session, LKMDBG_STOP_REASON_REMOTE_CALL,
+					 call_req.call_id, req.timeout_ms,
+					 &stop);
+	if (ret)
+		return lkmdbg_remote_thread_create_copy_reply(argp, &req, ret);
+
+	req.call_id = call_req.call_id;
+	req.return_pc = call_req.return_pc;
+	req.stop_cookie = stop.cookie;
+	req.result = (s64)stop.value0;
+	req.created_tid =
+		(req.result > 0 && req.result <= INT_MAX) ? (s32)req.result : 0;
+	return lkmdbg_remote_thread_create_copy_reply(argp, &req, 0);
 #endif
 }
 

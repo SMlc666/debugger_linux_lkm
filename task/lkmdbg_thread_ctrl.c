@@ -433,7 +433,8 @@ static int lkmdbg_validate_syscall_trace_request(
 	struct lkmdbg_syscall_trace_request *req)
 {
 	u32 valid_modes = LKMDBG_SYSCALL_TRACE_MODE_EVENT |
-			  LKMDBG_SYSCALL_TRACE_MODE_STOP;
+			  LKMDBG_SYSCALL_TRACE_MODE_STOP |
+			  LKMDBG_SYSCALL_TRACE_MODE_CONTROL;
 	u32 valid_phases = LKMDBG_SYSCALL_TRACE_PHASE_ENTER |
 			    LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
 
@@ -453,6 +454,11 @@ static int lkmdbg_validate_syscall_trace_request(
 	}
 
 	if (!req->phases || (req->phases & ~valid_phases))
+		return -EINVAL;
+
+	if ((req->mode & LKMDBG_SYSCALL_TRACE_MODE_CONTROL) &&
+	    ((req->mode & LKMDBG_SYSCALL_TRACE_MODE_STOP) ||
+	     req->phases != LKMDBG_SYSCALL_TRACE_PHASE_ENTER))
 		return -EINVAL;
 
 	return 0;
@@ -501,8 +507,10 @@ static u32 lkmdbg_syscall_trace_capability_flags(void)
 	if (lkmdbg_syscall_trace_tracepoint_phases())
 		flags |= LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT;
 #ifdef CONFIG_ARM64
-	if (lkmdbg_syscall_trace_fallback_phases())
+	if (lkmdbg_syscall_enter_fallback_available()) {
 		flags |= LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_ENTRY_HOOK;
+		flags |= LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_CONTROL;
+	}
 #endif
 
 	return flags;
@@ -1963,16 +1971,20 @@ static void lkmdbg_invoke_syscall_replacement(
 	struct pt_regs *regs, unsigned int scno, unsigned int sc_nr,
 	const syscall_fn_t syscall_table[])
 {
+	bool skip = false;
 	s64 retval = 0;
+	s32 nr = (s32)scno;
 
 	atomic_inc(&lkmdbg_syscall_enter_inflight);
 
-	lkmdbg_syscall_enter_broadcast_regs(regs, (s32)scno);
-	if (lkmdbg_invoke_syscall_orig)
-		lkmdbg_invoke_syscall_orig(regs, scno, sc_nr, syscall_table);
+	lkmdbg_control_syscall_entry(regs, &nr, true, &skip, &retval);
+	lkmdbg_syscall_enter_broadcast_regs(regs, nr);
+	if (!skip && lkmdbg_invoke_syscall_orig)
+		lkmdbg_invoke_syscall_orig(regs, (unsigned int)nr, sc_nr,
+					   syscall_table);
 	if (regs)
 		retval = (s64)regs->regs[0];
-	lkmdbg_syscall_exit_broadcast_regs(regs, (s32)scno, retval);
+	lkmdbg_syscall_exit_broadcast_regs(regs, nr, retval);
 
 	if (atomic_dec_and_test(&lkmdbg_syscall_enter_inflight))
 		wake_up_all(&lkmdbg_syscall_enter_waitq);
@@ -1981,6 +1993,7 @@ static void lkmdbg_invoke_syscall_replacement(
 static long lkmdbg_invoke_syscall_inner_replacement(
 	struct pt_regs *regs, syscall_fn_t syscall_fn)
 {
+	bool skip = false;
 	long ret = 0;
 	s32 nr = -1;
 
@@ -1988,8 +2001,9 @@ static long lkmdbg_invoke_syscall_inner_replacement(
 
 	if (regs)
 		nr = (s32)syscall_get_nr(current, regs);
+	lkmdbg_control_syscall_entry(regs, &nr, false, &skip, &ret);
 	lkmdbg_syscall_enter_broadcast_regs(regs, nr);
-	if (lkmdbg_invoke_syscall_inner_orig)
+	if (!skip && lkmdbg_invoke_syscall_inner_orig)
 		ret = lkmdbg_invoke_syscall_inner_orig(regs, syscall_fn);
 	lkmdbg_syscall_exit_broadcast_regs(regs, nr, ret);
 
@@ -2002,14 +2016,16 @@ static long lkmdbg_invoke_syscall_inner_replacement(
 static void lkmdbg_do_el0_svc_replacement(struct pt_regs *regs)
 {
 	s32 nr = -1;
+	bool skip = false;
 	s64 retval = 0;
 
 	atomic_inc(&lkmdbg_syscall_enter_inflight);
 
 	if (regs)
 		nr = (s32)regs->regs[8];
+	lkmdbg_control_syscall_entry(regs, &nr, true, &skip, &retval);
 	lkmdbg_syscall_enter_broadcast_regs(regs, nr);
-	if (lkmdbg_do_el0_svc_orig)
+	if (!skip && lkmdbg_do_el0_svc_orig)
 		lkmdbg_do_el0_svc_orig(regs);
 	if (regs)
 		retval = (s64)regs->regs[0];
@@ -2610,8 +2626,11 @@ static bool lkmdbg_syscall_trace_needs_hook_fallback(u32 mode, u32 phases)
 	u32 missing_phases;
 
 	if (!(mode & (LKMDBG_SYSCALL_TRACE_MODE_EVENT |
-		      LKMDBG_SYSCALL_TRACE_MODE_STOP)))
+		      LKMDBG_SYSCALL_TRACE_MODE_STOP |
+		      LKMDBG_SYSCALL_TRACE_MODE_CONTROL)))
 		return false;
+	if (mode & LKMDBG_SYSCALL_TRACE_MODE_CONTROL)
+		return true;
 	missing_phases = phases & ~lkmdbg_syscall_trace_tracepoint_phases();
 	if (!missing_phases)
 		return false;
@@ -2746,6 +2765,9 @@ long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 
 	supported_phases = lkmdbg_syscall_trace_supported_phases();
 	if (req.mode && (req.phases & ~supported_phases))
+		return -EOPNOTSUPP;
+	if ((req.mode & LKMDBG_SYSCALL_TRACE_MODE_CONTROL) &&
+	    !lkmdbg_syscall_enter_fallback_available())
 		return -EOPNOTSUPP;
 
 #ifdef CONFIG_ARM64

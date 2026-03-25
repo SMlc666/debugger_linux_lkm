@@ -53,6 +53,12 @@ struct child_info {
 	uintptr_t file_addr;
 	uintptr_t exec_target_addr;
 	uintptr_t remote_call_addr;
+	uintptr_t remote_call_x8_addr;
+	uintptr_t remote_thread_launcher_addr;
+	uintptr_t remote_thread_start_addr;
+	uintptr_t remote_thread_tid_addr;
+	uintptr_t remote_thread_arg_addr;
+	uintptr_t remote_thread_counter_addr;
 	uintptr_t watch_addr;
 	uintptr_t watch_mmu_addr;
 	uintptr_t freeze_counters_addr;
@@ -175,12 +181,17 @@ static int set_syscall_trace(int session_fd, pid_t tid, int syscall_nr,
 			     struct lkmdbg_syscall_trace_request *reply_out);
 static int get_syscall_trace(int session_fd,
 			     struct lkmdbg_syscall_trace_request *reply_out);
+static int resolve_syscall(int session_fd, uint64_t stop_cookie,
+			   uint32_t action, int syscall_nr,
+			   const uint64_t *args, int64_t retval,
+			   struct lkmdbg_syscall_resolve_request *reply_out);
 static int set_stealth(int session_fd, uint32_t flags,
 		       struct lkmdbg_stealth_request *reply_out);
 static int get_stealth(int session_fd,
 		       struct lkmdbg_stealth_request *reply_out);
 static int child_query_nofault_residency(int cmd_fd, int resp_fd);
 static int child_ping(int cmd_fd, int resp_fd);
+static int child_trigger_syscall(int cmd_fd, int resp_fd, int64_t *retval_out);
 static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   void *buf, size_t len);
 static int child_fill_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
@@ -834,6 +845,72 @@ static int remote_call_thread(int session_fd, pid_t tid, uint64_t target_pc,
 	return 0;
 }
 
+static int remote_call_thread_ex(int session_fd, pid_t tid, uint64_t target_pc,
+				 const uint64_t *args, uint32_t arg_count,
+				 uint32_t flags, uint64_t stack_ptr,
+				 uint64_t return_pc, uint64_t x8,
+				 struct lkmdbg_remote_call_request *reply_out)
+{
+	struct lkmdbg_remote_call_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.tid = tid,
+		.flags = flags,
+		.target_pc = target_pc,
+		.arg_count = arg_count,
+		.stack_ptr = stack_ptr,
+		.return_pc = return_pc,
+		.x8 = x8,
+	};
+
+	if (arg_count > LKMDBG_REMOTE_CALL_MAX_ARGS) {
+		fprintf(stderr, "REMOTE_CALL arg_count too large: %u\n", arg_count);
+		return -1;
+	}
+
+	if (args && arg_count)
+		memcpy(req.args, args, arg_count * sizeof(args[0]));
+
+	if (ioctl(session_fd, LKMDBG_IOC_REMOTE_CALL, &req) < 0) {
+		fprintf(stderr, "REMOTE_CALL_EX failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int remote_thread_create(int session_fd, pid_t tid, uint64_t launcher_pc,
+				uint64_t start_pc, uint64_t start_arg,
+				uint64_t stack_top, uint64_t tls,
+				uint32_t flags, uint32_t timeout_ms,
+				struct lkmdbg_remote_thread_create_request *reply_out)
+{
+	struct lkmdbg_remote_thread_create_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.tid = tid,
+		.flags = flags,
+		.timeout_ms = timeout_ms,
+		.launcher_pc = launcher_pc,
+		.start_pc = start_pc,
+		.start_arg = start_arg,
+		.stack_top = stack_top,
+		.tls = tls,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_REMOTE_THREAD_CREATE, &req) < 0) {
+		fprintf(stderr, "REMOTE_THREAD_CREATE failed: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
 static int get_stop_state(int session_fd,
 			  struct lkmdbg_stop_query_request *reply_out)
 {
@@ -1278,6 +1355,34 @@ static int get_syscall_trace(int session_fd,
 	if (ioctl(session_fd, LKMDBG_IOC_GET_SYSCALL_TRACE, &req) < 0) {
 		fprintf(stderr, "GET_SYSCALL_TRACE failed: %s\n",
 			strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+
+	return 0;
+}
+
+static int resolve_syscall(int session_fd, uint64_t stop_cookie,
+			   uint32_t action, int syscall_nr,
+			   const uint64_t *args, int64_t retval,
+			   struct lkmdbg_syscall_resolve_request *reply_out)
+{
+	struct lkmdbg_syscall_resolve_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.stop_cookie = stop_cookie,
+		.action = action,
+		.syscall_nr = syscall_nr,
+		.retval = retval,
+	};
+
+	if (args)
+		memcpy(req.args, args, sizeof(req.args));
+
+	if (ioctl(session_fd, LKMDBG_IOC_RESOLVE_SYSCALL, &req) < 0) {
+		fprintf(stderr, "RESOLVE_SYSCALL failed: %s\n", strerror(errno));
 		return -1;
 	}
 
@@ -3729,6 +3834,9 @@ static int query_mincore_resident(void *addr, size_t len)
 }
 
 static volatile uint64_t child_watch_value;
+static volatile uint64_t child_remote_thread_counter;
+static volatile uint64_t child_remote_thread_arg_seen;
+static volatile pid_t child_remote_thread_tid;
 
 static void child_signal_handler(int signo)
 {
@@ -3747,6 +3855,50 @@ child_remote_call_target(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3)
 {
 	asm volatile("" ::: "memory");
 	return (a0 ^ (a1 << 1)) + (a2 * 3U) + (a3 ^ 0x13579BDF2468ACE0ULL);
+}
+
+static __attribute__((noinline)) uint64_t
+child_remote_call_x8_target(uint64_t marker)
+{
+	uint64_t x8_value;
+
+	asm volatile("mov %0, x8" : "=r"(x8_value));
+	return x8_value ^ marker;
+}
+
+static void *child_remote_thread_start(void *arg)
+{
+	child_remote_thread_arg_seen = (uint64_t)(uintptr_t)arg;
+	child_remote_thread_tid = (pid_t)syscall(SYS_gettid);
+	__sync_fetch_and_add(&child_remote_thread_counter, 1);
+	return NULL;
+}
+
+static __attribute__((noinline)) int64_t
+child_remote_thread_launcher(uint64_t start_pc, uint64_t start_arg,
+			     uint64_t stack_top, uint64_t tls)
+{
+	pthread_t thread;
+	void *(*start_fn)(void *) = (void *(*)(void *))(uintptr_t)start_pc;
+	int i;
+
+	(void)stack_top;
+	(void)tls;
+
+	child_remote_thread_tid = 0;
+	child_remote_thread_arg_seen = 0;
+	if (pthread_create(&thread, NULL, start_fn,
+			   (void *)(uintptr_t)start_arg) != 0)
+		return -1;
+	pthread_detach(thread);
+
+	for (i = 0; i < 100000; i++) {
+		if (child_remote_thread_tid > 0)
+			return child_remote_thread_tid;
+		sched_yield();
+	}
+
+	return -2;
 }
 
 static void *child_spawn_thread_main(void *arg)
@@ -3900,6 +4052,14 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	info.file_addr = (uintptr_t)file_map;
 	info.exec_target_addr = (uintptr_t)child_exec_target;
 	info.remote_call_addr = (uintptr_t)child_remote_call_target;
+	info.remote_call_x8_addr = (uintptr_t)child_remote_call_x8_target;
+	info.remote_thread_launcher_addr =
+		(uintptr_t)child_remote_thread_launcher;
+	info.remote_thread_start_addr = (uintptr_t)child_remote_thread_start;
+	info.remote_thread_tid_addr = (uintptr_t)&child_remote_thread_tid;
+	info.remote_thread_arg_addr = (uintptr_t)&child_remote_thread_arg_seen;
+	info.remote_thread_counter_addr =
+		(uintptr_t)&child_remote_thread_counter;
 	info.watch_addr = (uintptr_t)&child_watch_value;
 	info.watch_mmu_addr = (uintptr_t)mmu_watch_map;
 	info.freeze_counters_addr = (uintptr_t)freeze_counters;
@@ -3944,9 +4104,16 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 				return 2;
 			break;
 		case CHILD_OP_TRIGGER_SYSCALL:
-			if (syscall(SYS_getppid) < 0)
+		{
+			int64_t retval = syscall(SYS_getppid);
+
+			if (retval < 0)
+				return 2;
+			if (write_full(resp_fd, &retval, sizeof(retval)) !=
+			    (ssize_t)sizeof(retval))
 				return 2;
 			break;
+		}
 		case CHILD_OP_PING:
 			resident = 0;
 			if (write_full(resp_fd, &resident, sizeof(resident)) !=
@@ -4037,6 +4204,45 @@ static int child_ping(int cmd_fd, int resp_fd)
 		return -1;
 	}
 
+	return 0;
+}
+
+static int child_trigger_syscall(int cmd_fd, int resp_fd, int64_t *retval_out)
+{
+	struct child_cmd cmd = {
+		.op = CHILD_OP_TRIGGER_SYSCALL,
+	};
+	int64_t retval;
+
+	if (write_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
+		fprintf(stderr, "failed to send child syscall trigger\n");
+		return -1;
+	}
+
+	if (read_full(resp_fd, &retval, sizeof(retval)) !=
+	    (ssize_t)sizeof(retval)) {
+		fprintf(stderr, "failed to read child syscall retval\n");
+		return -1;
+	}
+
+	if (retval_out)
+		*retval_out = retval;
+
+	return 0;
+}
+
+static int child_read_syscall_result(int resp_fd, int64_t *retval_out)
+{
+	int64_t retval;
+
+	if (read_full(resp_fd, &retval, sizeof(retval)) !=
+	    (ssize_t)sizeof(retval)) {
+		fprintf(stderr, "failed to read child syscall completion\n");
+		return -1;
+	}
+
+	if (retval_out)
+		*retval_out = retval;
 	return 0;
 }
 
@@ -5784,6 +5990,7 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 				pid_t child)
 {
 	struct lkmdbg_syscall_trace_request trace_req;
+	struct lkmdbg_syscall_resolve_request resolve_req;
 	struct lkmdbg_event_record event;
 	struct lkmdbg_stop_query_request stop_req;
 	const uint32_t stop_phases[] = {
@@ -5793,11 +6000,13 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 	const uint32_t nr = SYS_getppid;
 	const pid_t parent_pid = getpid();
 	const int event_timeout_ms = 5000;
+	int64_t syscall_retval;
 	uint32_t supported_phases;
 	size_t stop_idx;
 	int trace_active = 0;
 
 	memset(&trace_req, 0, sizeof(trace_req));
+	memset(&resolve_req, 0, sizeof(resolve_req));
 	memset(&stop_req, 0, sizeof(stop_req));
 
 	if (drain_session_events(session_fd) < 0)
@@ -5887,8 +6096,14 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 
 	if (child_ping(cmd_fd, resp_fd) < 0)
 		goto fail;
-	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SYSCALL) < 0)
+	if (child_trigger_syscall(cmd_fd, resp_fd, &syscall_retval) < 0)
 		goto fail;
+	if (syscall_retval != parent_pid) {
+		fprintf(stderr,
+			"child syscall retval mismatch got=%" PRId64 " expected=%d\n",
+			syscall_retval, parent_pid);
+		goto fail;
+	}
 
 	if (supported_phases & LKMDBG_SYSCALL_TRACE_PHASE_ENTER) {
 		if (wait_for_syscall_event(session_fd,
@@ -5984,10 +6199,101 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 				(int64_t)stop_req.stop.value1);
 			goto fail;
 		}
-		if (continue_target_and_wait_for_user_loop(session_fd,
-							   stop_req.stop.cookie,
-							   cmd_fd, resp_fd) < 0)
+		if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
+				    NULL) < 0)
 			goto fail;
+		if (child_read_syscall_result(resp_fd, &syscall_retval) < 0)
+			goto fail;
+		if (syscall_retval != parent_pid) {
+			fprintf(stderr,
+				"syscall stop completion mismatch got=%" PRId64 " expected=%d\n",
+				syscall_retval, parent_pid);
+			goto fail;
+		}
+	}
+
+	if (trace_req.flags & LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_CONTROL) {
+		if (set_syscall_trace(session_fd, child, (int)nr,
+				      LKMDBG_SYSCALL_TRACE_MODE_CONTROL,
+				      LKMDBG_SYSCALL_TRACE_PHASE_ENTER,
+				      &trace_req) < 0)
+			goto fail;
+
+		if (drain_session_events(session_fd) < 0)
+			goto fail;
+		if (child_ping(cmd_fd, resp_fd) < 0)
+			goto fail;
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SYSCALL) < 0)
+			goto fail;
+		if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+					   LKMDBG_STOP_REASON_SYSCALL,
+					   event_timeout_ms, &event) < 0)
+			goto fail;
+		if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_SYSCALL,
+				      &stop_req) < 0)
+			goto fail;
+		if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_SYSCALL_CONTROL) ||
+		    stop_req.stop.event_flags !=
+			    LKMDBG_SYSCALL_TRACE_PHASE_ENTER ||
+		    stop_req.stop.value0 != nr) {
+			fprintf(stderr,
+				"syscall control stop mismatch flags=0x%x event_flags=0x%x nr=%" PRIu64 "\n",
+				stop_req.stop.flags, stop_req.stop.event_flags,
+				(uint64_t)stop_req.stop.value0);
+			goto fail;
+		}
+		if (resolve_syscall(session_fd, stop_req.stop.cookie,
+				    LKMDBG_SYSCALL_RESOLVE_ACTION_SKIP, -1,
+				    NULL, -1234, &resolve_req) < 0)
+			goto fail;
+		if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
+				    NULL) < 0)
+			goto fail;
+		if (child_read_syscall_result(resp_fd, &syscall_retval) < 0)
+			goto fail;
+		if (syscall_retval != -1234) {
+			fprintf(stderr,
+				"syscall control skip retval mismatch got=%" PRId64 "\n",
+				syscall_retval);
+			goto fail;
+		}
+
+		if (resolve_req.backend_flags &
+		    LKMDBG_SYSCALL_RESOLVE_FLAG_NR_REWRITE_SUPPORTED) {
+			if (set_syscall_trace(session_fd, child, (int)nr,
+					      LKMDBG_SYSCALL_TRACE_MODE_CONTROL,
+					      LKMDBG_SYSCALL_TRACE_PHASE_ENTER,
+					      &trace_req) < 0)
+				goto fail;
+			if (drain_session_events(session_fd) < 0)
+				goto fail;
+			if (child_ping(cmd_fd, resp_fd) < 0)
+				goto fail;
+			if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SYSCALL) <
+			    0)
+				goto fail;
+			if (expect_stop_state(session_fd,
+					      LKMDBG_STOP_REASON_SYSCALL,
+					      &stop_req) < 0)
+				goto fail;
+			if (resolve_syscall(
+				    session_fd, stop_req.stop.cookie,
+				    LKMDBG_SYSCALL_RESOLVE_ACTION_REWRITE,
+				    SYS_getpid, NULL, 0, &resolve_req) < 0)
+				goto fail;
+			if (continue_target(session_fd, stop_req.stop.cookie, 2000,
+					    0, NULL) < 0)
+				goto fail;
+			if (child_read_syscall_result(resp_fd, &syscall_retval) <
+			    0)
+				goto fail;
+			if ((pid_t)syscall_retval != child) {
+				fprintf(stderr,
+					"syscall control rewrite retval mismatch got=%" PRId64 " expected=%d\n",
+					syscall_retval, child);
+				goto fail;
+			}
+		}
 	}
 
 	memset(&trace_req, 0, sizeof(trace_req));
@@ -6202,6 +6508,7 @@ static int verify_remote_call(int session_fd, const struct child_info *info)
 {
 	struct lkmdbg_freeze_request freeze_req;
 	struct lkmdbg_remote_call_request call_req;
+	struct lkmdbg_remote_call_request x8_call_req;
 	struct lkmdbg_thread_entry parked_entry;
 	struct lkmdbg_thread_regs_request regs_req;
 	struct lkmdbg_stop_query_request stop_req;
@@ -6214,11 +6521,15 @@ static int verify_remote_call(int session_fd, const struct child_info *info)
 		0x2222222222222222ULL,
 	};
 	uint64_t expected = remote_call_expected_value(args);
+	uint64_t x8_marker = 0x5a5aa5a5c3c33c3cULL;
+	uint64_t x8_value = 0x1122334455667788ULL;
+	uint64_t x8_expected = x8_value ^ x8_marker;
 	unsigned int i;
 	unsigned int parked_index = UINT32_MAX;
 
 	memset(&freeze_req, 0, sizeof(freeze_req));
 	memset(&call_req, 0, sizeof(call_req));
+	memset(&x8_call_req, 0, sizeof(x8_call_req));
 	memset(&parked_entry, 0, sizeof(parked_entry));
 	memset(&regs_req, 0, sizeof(regs_req));
 	memset(&stop_req, 0, sizeof(stop_req));
@@ -6319,12 +6630,165 @@ static int verify_remote_call(int session_fd, const struct child_info *info)
 		return -1;
 	}
 
+	if (remote_call_thread_ex(session_fd, tids[parked_index],
+				  info->remote_call_x8_addr, &x8_marker, 1,
+				  LKMDBG_REMOTE_CALL_FLAG_SET_X8, 0, 0,
+				  x8_value, &x8_call_req) < 0)
+		return -1;
+
 	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0)
 		return -1;
 
-	printf("selftest remote call ok tid=%d call_id=%" PRIu64 " retval=0x%" PRIx64 "\n",
+	if (wait_for_stop_event_or_state(session_fd,
+					 LKMDBG_STOP_REASON_REMOTE_CALL,
+					 5000, &event, &stop_req) < 0)
+		return -1;
+	if (stop_req.stop.value0 != x8_expected) {
+		fprintf(stderr,
+			"remote call x8 return mismatch got=0x%" PRIx64 " expected=0x%" PRIx64 "\n",
+			(uint64_t)stop_req.stop.value0, (uint64_t)x8_expected);
+		return -1;
+	}
+	if (stop_req.stop.value1 != x8_call_req.call_id) {
+		fprintf(stderr,
+			"remote call x8 id mismatch stop=0x%" PRIx64 " req=0x%" PRIx64 "\n",
+			(uint64_t)stop_req.stop.value1,
+			(uint64_t)x8_call_req.call_id);
+		return -1;
+	}
+
+	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0)
+		return -1;
+
+	printf("selftest remote call ok tid=%d call_id=%" PRIu64 " retval=0x%" PRIx64 " x8=0x%" PRIx64 "\n",
 	       tids[parked_index], (uint64_t)call_req.call_id,
-	       (uint64_t)expected);
+	       (uint64_t)expected, (uint64_t)x8_expected);
+	return 0;
+}
+
+static int verify_remote_thread_create(int session_fd,
+				       const struct child_info *info)
+{
+	struct lkmdbg_freeze_request freeze_req;
+	struct lkmdbg_remote_thread_create_request create_req;
+	struct lkmdbg_thread_entry parked_entry;
+	struct lkmdbg_stop_query_request stop_req;
+	pid_t tids[SELFTEST_FREEZE_THREADS];
+	uint64_t zero = 0;
+	uint64_t arg_value = 0xabcdef0012345678ULL;
+	uint64_t remote_arg = 0;
+	uint64_t remote_counter = 0;
+	uint32_t bytes_done = 0;
+	unsigned int i;
+	unsigned int parked_index = UINT32_MAX;
+
+	memset(&freeze_req, 0, sizeof(freeze_req));
+	memset(&create_req, 0, sizeof(create_req));
+	memset(&parked_entry, 0, sizeof(parked_entry));
+	memset(&stop_req, 0, sizeof(stop_req));
+	memset(tids, 0, sizeof(tids));
+
+	if (write_target_memory(session_fd, info->remote_thread_tid_addr, &zero,
+				sizeof(zero), &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(zero))
+		return -1;
+	if (write_target_memory(session_fd, info->remote_thread_arg_addr, &zero,
+				sizeof(zero), &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(zero))
+		return -1;
+	if (write_target_memory(session_fd, info->remote_thread_counter_addr, &zero,
+				sizeof(zero), &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(zero))
+		return -1;
+
+	if (wait_for_freeze_thread_tids(session_fd, info, tids) < 0)
+		return -1;
+	if (freeze_target_threads(session_fd, 2000, &freeze_req, 0) < 0)
+		return -1;
+	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_FREEZE, &stop_req) <
+	    0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	for (i = 0; i < info->freeze_thread_count; i++) {
+		if (find_target_thread_entry(session_fd, tids[i], &parked_entry) < 0) {
+			thaw_target_threads(session_fd, 2000, NULL, 0);
+			return -1;
+		}
+		if (!(parked_entry.flags & LKMDBG_THREAD_FLAG_FREEZE_PARKED))
+			continue;
+		parked_index = i;
+		break;
+	}
+	if (parked_index == UINT32_MAX) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	if (remote_thread_create(session_fd, tids[parked_index],
+				 info->remote_thread_launcher_addr,
+				 info->remote_thread_start_addr, arg_value, 0, 0,
+				 0, 5000, &create_req) < 0)
+		return -1;
+	if (create_req.created_tid <= 0 || create_req.result <= 0 ||
+	    !create_req.call_id || !create_req.stop_cookie) {
+		fprintf(stderr,
+			"remote thread create reply mismatch tid=%d result=%" PRId64 " call_id=%" PRIu64 " cookie=%" PRIu64 "\n",
+			create_req.created_tid, (int64_t)create_req.result,
+			(uint64_t)create_req.call_id, (uint64_t)create_req.stop_cookie);
+		return -1;
+	}
+
+	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_REMOTE_CALL,
+			      &stop_req) < 0)
+		return -1;
+	if (stop_req.stop.cookie != create_req.stop_cookie ||
+	    stop_req.stop.value0 != (uint64_t)create_req.result ||
+	    stop_req.stop.value1 != create_req.call_id) {
+		fprintf(stderr,
+			"remote thread create stop mismatch cookie=%" PRIu64 " value0=%" PRIu64 " value1=%" PRIu64 "\n",
+			(uint64_t)stop_req.stop.cookie, (uint64_t)stop_req.stop.value0,
+			(uint64_t)stop_req.stop.value1);
+		return -1;
+	}
+
+	if (read_target_memory(session_fd, info->remote_thread_tid_addr, &remote_arg,
+			       sizeof(remote_arg), &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(remote_arg))
+		return -1;
+	if ((pid_t)remote_arg != create_req.created_tid) {
+		fprintf(stderr,
+			"remote thread tid mismatch remote=%" PRIu64 " created=%d\n",
+			remote_arg, create_req.created_tid);
+		return -1;
+	}
+	if (read_target_memory(session_fd, info->remote_thread_arg_addr, &remote_arg,
+			       sizeof(remote_arg), &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(remote_arg))
+		return -1;
+	if (remote_arg != arg_value) {
+		fprintf(stderr,
+			"remote thread arg mismatch got=0x%" PRIx64 " expected=0x%" PRIx64 "\n",
+			remote_arg, arg_value);
+		return -1;
+	}
+	if (read_target_memory(session_fd, info->remote_thread_counter_addr,
+			       &remote_counter, sizeof(remote_counter),
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(remote_counter))
+		return -1;
+	if (remote_counter == 0) {
+		fprintf(stderr, "remote thread counter did not advance\n");
+		return -1;
+	}
+
+	if (continue_target(session_fd, create_req.stop_cookie, 2000, 0, NULL) <
+	    0)
+		return -1;
+
+	printf("selftest remote thread create ok parked=%d created=%d arg=0x%" PRIx64 "\n",
+	       tids[parked_index], create_req.created_tid, arg_value);
 	return 0;
 }
 
@@ -6863,6 +7327,16 @@ static int run_selftest(const char *prog)
 	}
 
 	if (verify_remote_call(session_fd, &info) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	if (verify_remote_thread_create(session_fd, &info) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
 		close(cmd_pipe[1]);

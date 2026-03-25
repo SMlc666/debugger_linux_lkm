@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 22
+#define LKMDBG_PROTO_VERSION 23
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 
@@ -39,12 +39,14 @@
 #define LKMDBG_SYSCALL_TRACE_MODE_OFF 0U
 #define LKMDBG_SYSCALL_TRACE_MODE_EVENT 0x00000001U
 #define LKMDBG_SYSCALL_TRACE_MODE_STOP 0x00000002U
+#define LKMDBG_SYSCALL_TRACE_MODE_CONTROL 0x00000004U
 
 #define LKMDBG_SYSCALL_TRACE_PHASE_ENTER 0x00000001U
 #define LKMDBG_SYSCALL_TRACE_PHASE_EXIT 0x00000002U
 
 #define LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT 0x00000001U
 #define LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_ENTRY_HOOK 0x00000002U
+#define LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_CONTROL 0x00000004U
 
 #define LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE 0x00000001U
 #define LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN 0x00000002U
@@ -80,6 +82,7 @@
 #define LKMDBG_STOP_FLAG_ASYNC 0x00000004U
 #define LKMDBG_STOP_FLAG_REARM_REQUIRED 0x00000008U
 #define LKMDBG_STOP_FLAG_REGS_VALID 0x00000010U
+#define LKMDBG_STOP_FLAG_SYSCALL_CONTROL 0x00000020U
 
 #define LKMDBG_HWPOINT_TYPE_READ 0x00000001U
 #define LKMDBG_HWPOINT_TYPE_WRITE 0x00000002U
@@ -122,6 +125,17 @@
 #define LKMDBG_CONTINUE_FLAG_REARM_HWPOINTS 0x00000001U
 
 #define LKMDBG_REMOTE_CALL_MAX_ARGS 8U
+
+#define LKMDBG_REMOTE_CALL_FLAG_SET_SP 0x00000001U
+#define LKMDBG_REMOTE_CALL_FLAG_SET_RETURN_PC 0x00000002U
+#define LKMDBG_REMOTE_CALL_FLAG_SET_X8 0x00000004U
+
+#define LKMDBG_SYSCALL_RESOLVE_ACTION_ALLOW 0U
+#define LKMDBG_SYSCALL_RESOLVE_ACTION_REWRITE 1U
+#define LKMDBG_SYSCALL_RESOLVE_ACTION_SKIP 2U
+#define LKMDBG_SYSCALL_RESOLVE_FLAG_NR_REWRITE_SUPPORTED 0x00000001U
+
+#define LKMDBG_REMOTE_THREAD_CREATE_FLAG_SET_TLS 0x00000001U
 
 #define LKMDBG_VMA_PROT_READ 0x00000001U
 #define LKMDBG_VMA_PROT_WRITE 0x00000002U
@@ -516,7 +530,43 @@ struct lkmdbg_remote_call_request {
 	__u32 reserved0;
 	__u64 args[LKMDBG_REMOTE_CALL_MAX_ARGS];
 	__u64 call_id;
+	__u64 stack_ptr;
 	__u64 return_pc;
+	__u64 x8;
+};
+
+struct lkmdbg_syscall_resolve_request {
+	__u32 version;
+	__u32 size;
+	__u64 stop_cookie;
+	__u32 action;
+	__u32 flags;
+	__s32 syscall_nr;
+	__u32 reserved0;
+	__u64 args[6];
+	__s64 retval;
+	__u32 backend_flags;
+	__u32 reserved1;
+};
+
+struct lkmdbg_remote_thread_create_request {
+	__u32 version;
+	__u32 size;
+	__s32 tid;
+	__u32 flags;
+	__u32 timeout_ms;
+	__u32 reserved0;
+	__u64 launcher_pc;
+	__u64 start_pc;
+	__u64 start_arg;
+	__u64 stack_top;
+	__u64 tls;
+	__u64 call_id;
+	__u64 return_pc;
+	__u64 stop_cookie;
+	__s64 result;
+	__s32 created_tid;
+	__u32 reserved1;
 };
 
 struct lkmdbg_page_entry {
@@ -880,5 +930,9 @@ struct lkmdbg_input_event {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x35, struct lkmdbg_input_channel_request)
 #define LKMDBG_IOC_REMOTE_CALL \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x36, struct lkmdbg_remote_call_request)
+#define LKMDBG_IOC_RESOLVE_SYSCALL \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x37, struct lkmdbg_syscall_resolve_request)
+#define LKMDBG_IOC_REMOTE_THREAD_CREATE \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x38, struct lkmdbg_remote_thread_create_request)
 
 #endif

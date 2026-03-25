@@ -139,6 +139,9 @@ The current session ioctls include:
 - `LKMDBG_IOC_QUERY_THREADS`
 - `LKMDBG_IOC_GET_REGS`
 - `LKMDBG_IOC_SET_REGS`
+- `LKMDBG_IOC_SET_SYSCALL_TRACE`
+- `LKMDBG_IOC_GET_SYSCALL_TRACE`
+- `LKMDBG_IOC_RESOLVE_SYSCALL`
 - `LKMDBG_IOC_FREEZE_THREADS`
 - `LKMDBG_IOC_THAW_THREADS`
 - `LKMDBG_IOC_GET_STOP_STATE`
@@ -148,6 +151,43 @@ The current session ioctls include:
 - `LKMDBG_IOC_QUERY_HWPOINTS`
 - `LKMDBG_IOC_REARM_HWPOINT`
 - `LKMDBG_IOC_SINGLE_STEP`
+- `LKMDBG_IOC_REMOTE_CALL`
+- `LKMDBG_IOC_REMOTE_THREAD_CREATE`
+
+Syscall tracing now has three session-fd modes:
+
+- `EVENT`: queue `LKMDBG_EVENT_TARGET_SYSCALL` records
+- `STOP`: freeze the target on enter/exit and surface a normal stop state
+- `CONTROL`: enter-only fallback-hook mode where user space resolves the
+  syscall before it runs
+
+The control flow is:
+
+- arm `LKMDBG_IOC_SET_SYSCALL_TRACE` with `LKMDBG_SYSCALL_TRACE_MODE_CONTROL`
+  and `LKMDBG_SYSCALL_TRACE_PHASE_ENTER`
+- wait for a `LKMDBG_STOP_REASON_SYSCALL` stop with
+  `LKMDBG_STOP_FLAG_SYSCALL_CONTROL`
+- issue `LKMDBG_IOC_RESOLVE_SYSCALL` with one of:
+  `ALLOW`, `SKIP`, or `REWRITE`
+- `LKMDBG_IOC_CONTINUE_TARGET` then releases the frozen target and lets the
+  intercepted syscall complete with the chosen behavior
+
+Remote call now supports optional arm64 register overrides through request
+flags:
+
+- `LKMDBG_REMOTE_CALL_FLAG_SET_SP`
+- `LKMDBG_REMOTE_CALL_FLAG_SET_RETURN_PC`
+- `LKMDBG_REMOTE_CALL_FLAG_SET_X8`
+
+`LKMDBG_IOC_REMOTE_THREAD_CREATE` is a synchronous convenience wrapper built on
+top of remote call:
+
+- user space provides a target-side launcher helper address
+- the module runs that helper on a parked frozen thread
+- it auto-continues until the launcher returns and then re-freezes at the
+  normal remote-call stop
+- the ioctl returns the launcher result, created tid, remote-call id, and stop
+  cookie
 
 Memory transfer requests now use a single batched shape:
 
@@ -167,6 +207,7 @@ Current session events include:
 - `LKMDBG_EVENT_TARGET_EXEC`
 - `LKMDBG_EVENT_TARGET_EXIT`
 - `LKMDBG_EVENT_TARGET_SIGNAL`
+- `LKMDBG_EVENT_TARGET_SYSCALL`
 - `LKMDBG_EVENT_TARGET_STOP`
 
 Execution and watchpoints now have two backends behind the existing session fd
@@ -233,6 +274,15 @@ sudo ./tools/lkmdbg_mem_test write <pid> <remote_addr_hex> <ascii_data>
 sudo ./tools/lkmdbg_mem_test hwadd <pid> <tid> rwx <addr_hex> <len> mmu
 sudo ./tools/lkmdbg_mem_test hwlist <pid>
 ```
+
+The current `selftest` path exercises:
+
+- batched target memory read/write and partial-progress accounting
+- signal, syscall event/stop/control flows
+- hardware and MMU break/watchpoints
+- single-step stop delivery
+- remote call, `x8` override, and remote thread create
+- stealth controls and event queue behavior
 
 ## Android GKI note
 

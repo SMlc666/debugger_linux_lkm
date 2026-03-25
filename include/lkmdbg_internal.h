@@ -28,6 +28,7 @@
 #define LKMDBG_HOOK_NAME_MAX 32
 
 struct mm_struct;
+struct pt_regs;
 struct seq_file;
 struct task_struct;
 struct vm_area_struct;
@@ -180,6 +181,22 @@ struct lkmdbg_remote_call_state {
 	bool park_work_queued;
 };
 
+struct lkmdbg_syscall_control_state {
+	wait_queue_head_t waitq;
+	struct lkmdbg_regs_arm64 regs;
+	pid_t tgid;
+	pid_t tid;
+	s32 syscall_nr;
+	s64 retval;
+	u64 args[6];
+	u32 action;
+	u32 backend_flags;
+	bool active;
+	bool resolved;
+	bool resume;
+	bool abort;
+};
+
 int lkmdbg_disable_kprobe_blacklist(void);
 int lkmdbg_cfi_bypass(void);
 
@@ -190,6 +207,7 @@ struct lkmdbg_session {
 	wait_queue_head_t readq;
 	wait_queue_head_t async_waitq;
 	wait_queue_head_t remote_call_waitq;
+	wait_queue_head_t stop_waitq;
 	u64 session_id;
 	u64 ioctl_calls;
 	u64 event_seq;
@@ -232,6 +250,7 @@ struct lkmdbg_session {
 	struct lkmdbg_stop_state stop_state;
 	struct lkmdbg_stop_state pending_stop;
 	struct lkmdbg_remote_call_state remote_call;
+	struct lkmdbg_syscall_control_state syscall_control;
 	struct lkmdbg_event_record events[LKMDBG_SESSION_EVENT_CAPACITY];
 };
 
@@ -380,17 +399,27 @@ long lkmdbg_set_signal_config(struct lkmdbg_session *session, void __user *argp)
 long lkmdbg_get_signal_config(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_get_syscall_trace(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_resolve_syscall(struct lkmdbg_session *session, void __user *argp);
+int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
+				 bool nr_rewrite_supported, bool *skip_out,
+				 s64 *retval_out);
 long lkmdbg_get_stop_state(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_continue_target(struct lkmdbg_session *session, void __user *argp);
+int lkmdbg_continue_target_internal(struct lkmdbg_session *session,
+				    u64 stop_cookie, u32 timeout_ms, u32 flags,
+				    struct lkmdbg_continue_request *reply_out);
+int lkmdbg_wait_for_stop_state(struct lkmdbg_session *session, u32 reason,
+			       u64 value1, u32 timeout_ms,
+			       struct lkmdbg_stop_state *stop_out);
 void lkmdbg_session_commit_stop(struct lkmdbg_session *session, u32 reason,
 				pid_t tgid, pid_t tid, u32 event_flags,
 				u32 stop_flags, u64 value0, u64 value1,
 				const struct lkmdbg_regs_arm64 *regs);
-void lkmdbg_session_request_async_stop(struct lkmdbg_session *session,
-				       u32 reason, pid_t tgid, pid_t tid,
-				       u32 event_flags, u32 stop_flags,
-				       u64 value0, u64 value1,
-				       const struct lkmdbg_regs_arm64 *regs);
+int lkmdbg_session_request_async_stop(struct lkmdbg_session *session,
+				      u32 reason, pid_t tgid, pid_t tid,
+				      u32 event_flags, u32 stop_flags,
+				      u64 value0, u64 value1,
+				      const struct lkmdbg_regs_arm64 *regs);
 void lkmdbg_session_clear_stop(struct lkmdbg_session *session);
 int lkmdbg_thread_ctrl_init(void);
 void lkmdbg_thread_ctrl_exit(void);
@@ -405,6 +434,8 @@ int lkmdbg_prepare_continue_hwpoints(struct lkmdbg_session *session,
 				     u32 flags);
 long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_remote_call(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_remote_thread_create(struct lkmdbg_session *session,
+				 void __user *argp);
 u32 lkmdbg_remote_call_thread_flags(struct lkmdbg_session *session, pid_t tid);
 int lkmdbg_remote_call_prepare_continue(struct lkmdbg_session *session,
 					const struct lkmdbg_stop_state *stop);
