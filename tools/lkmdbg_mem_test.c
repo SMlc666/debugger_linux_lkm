@@ -6776,6 +6776,45 @@ static int verify_remote_call(int session_fd, const struct child_info *info)
 		return -1;
 	}
 
+	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0)
+		return -1;
+
+	memset(&freeze_req, 0, sizeof(freeze_req));
+	memset(&stop_req, 0, sizeof(stop_req));
+	memset(&parked_entry, 0, sizeof(parked_entry));
+	parked_index = UINT32_MAX;
+
+	if (freeze_target_threads(session_fd, 2000, &freeze_req, 0) < 0)
+		return -1;
+	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_FREEZE, &stop_req) <
+	    0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	for (i = 0; i < info->freeze_thread_count; i++) {
+		if (find_target_thread_entry(session_fd, tids[i], &parked_entry) < 0) {
+			thaw_target_threads(session_fd, 2000, NULL, 0);
+			return -1;
+		}
+		if (!(parked_entry.flags & LKMDBG_THREAD_FLAG_FREEZE_PARKED))
+			continue;
+		parked_index = i;
+		break;
+	}
+
+	if (parked_index == UINT32_MAX) {
+		fprintf(stderr,
+			"no parked thread available for second remote call\n");
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
+	if (drain_session_events(session_fd) < 0) {
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+
 	if (remote_call_thread_ex(session_fd, tids[parked_index],
 				  info->remote_call_x8_addr, &x8_marker, 1,
 				  LKMDBG_REMOTE_CALL_FLAG_SET_X8, 0, 0,
