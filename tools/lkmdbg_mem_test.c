@@ -6315,10 +6315,12 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 			goto fail;
 		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SYSCALL) < 0)
 			goto fail;
-		if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-					   LKMDBG_STOP_REASON_SYSCALL,
-					   event_timeout_ms, &event) < 0) {
-			fprintf(stderr, "syscall stop event missing phase=0x%x\n",
+		if (wait_for_stop_event_or_state(session_fd,
+						 LKMDBG_STOP_REASON_SYSCALL,
+						 event_timeout_ms, &event,
+						 &stop_req) < 0) {
+			fprintf(stderr,
+				"syscall stop event/state missing phase=0x%x\n",
 				stop_phase);
 			goto fail;
 		}
@@ -6331,9 +6333,6 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 				(uint64_t)event.value0, (int64_t)event.value1);
 			goto fail;
 		}
-		if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_SYSCALL,
-				      &stop_req) < 0)
-			goto fail;
 		if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
 		    !(stop_req.stop.flags & LKMDBG_STOP_FLAG_REGS_VALID) ||
 		    stop_req.stop.tgid != child || stop_req.stop.tid != child ||
@@ -6374,12 +6373,10 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 			goto fail;
 		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SYSCALL) < 0)
 			goto fail;
-		if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-					   LKMDBG_STOP_REASON_SYSCALL,
-					   event_timeout_ms, &event) < 0)
-			goto fail;
-		if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_SYSCALL,
-				      &stop_req) < 0)
+		if (wait_for_stop_event_or_state(session_fd,
+						 LKMDBG_STOP_REASON_SYSCALL,
+						 event_timeout_ms, &event,
+						 &stop_req) < 0)
 			goto fail;
 		if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_SYSCALL_CONTROL) ||
 		    stop_req.stop.event_flags !=
@@ -6421,9 +6418,9 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 			if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SYSCALL) <
 			    0)
 				goto fail;
-			if (expect_stop_state(session_fd,
-					      LKMDBG_STOP_REASON_SYSCALL,
-					      &stop_req) < 0)
+			if (wait_for_stop_event_or_state(
+				    session_fd, LKMDBG_STOP_REASON_SYSCALL,
+				    event_timeout_ms, NULL, &stop_req) < 0)
 				goto fail;
 			if (resolve_syscall(
 				    session_fd, stop_req.stop.cookie,
