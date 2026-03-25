@@ -146,8 +146,7 @@ static u32 lkmdbg_input_device_flags_from_dev(struct input_dev *dev)
 static void lkmdbg_input_copy_string_nofault(char *dst, size_t dst_size,
 					     const char *src)
 {
-	size_t i;
-	char ch = '\0';
+	long copied;
 
 	if (!dst || !dst_size)
 		return;
@@ -156,14 +155,9 @@ static void lkmdbg_input_copy_string_nofault(char *dst, size_t dst_size,
 	if (!src)
 		return;
 
-	for (i = 0; i + 1 < dst_size; i++) {
-		if (probe_kernel_read(&ch, src + i, sizeof(ch)))
-			break;
-		dst[i] = ch;
-		if (!ch)
-			return;
-	}
-
+	copied = strncpy_from_kernel_nofault(dst, src, dst_size - 1);
+	if (copied < 0)
+		return;
 	dst[dst_size - 1] = '\0';
 }
 
