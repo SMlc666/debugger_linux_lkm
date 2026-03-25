@@ -18,6 +18,7 @@ RUN apt-get update && \
         libc6-dev-arm64-cross \
         libelf-dev \
         libssl-dev \
+        python3 \
         qemu-system-arm \
         socat \
         tar \
