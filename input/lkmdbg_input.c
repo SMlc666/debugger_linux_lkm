@@ -143,22 +143,20 @@ static u32 lkmdbg_input_device_flags_from_dev(struct input_dev *dev)
 	return flags;
 }
 
-static void lkmdbg_input_copy_string_nofault(char *dst, size_t dst_size,
-					     const char *src)
+static void lkmdbg_input_snapshot_string(char *dst, size_t dst_size,
+					 const char *src)
 {
-	long copied;
+	const char *snapshot;
 
 	if (!dst || !dst_size)
 		return;
 
 	memset(dst, 0, dst_size);
-	if (!src)
+	snapshot = READ_ONCE(src);
+	if (!snapshot)
 		return;
 
-	copied = strncpy_from_kernel_nofault(dst, src, dst_size - 1);
-	if (copied < 0)
-		return;
-	dst[dst_size - 1] = '\0';
+	strscpy(dst, snapshot, dst_size);
 }
 
 static void lkmdbg_input_fill_device_entry(
@@ -867,12 +865,12 @@ static int lkmdbg_input_register_device(struct device *dev)
 	device->product = input_dev->id.product;
 	device->version_id = input_dev->id.version;
 	device->flags = lkmdbg_input_device_flags_from_dev(input_dev);
-	lkmdbg_input_copy_string_nofault(device->name, sizeof(device->name),
-					 input_dev->name);
-	lkmdbg_input_copy_string_nofault(device->phys, sizeof(device->phys),
-					 input_dev->phys);
-	lkmdbg_input_copy_string_nofault(device->uniq, sizeof(device->uniq),
-					 input_dev->uniq);
+	lkmdbg_input_snapshot_string(device->name, sizeof(device->name),
+				     input_dev->name);
+	lkmdbg_input_snapshot_string(device->phys, sizeof(device->phys),
+				     input_dev->phys);
+	lkmdbg_input_snapshot_string(device->uniq, sizeof(device->uniq),
+				     input_dev->uniq);
 	get_device(dev);
 	device->dev_ref_held = true;
 
