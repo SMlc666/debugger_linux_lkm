@@ -2766,9 +2766,14 @@ long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 	supported_phases = lkmdbg_syscall_trace_supported_phases();
 	if (req.mode && (req.phases & ~supported_phases))
 		return -EOPNOTSUPP;
+#ifdef CONFIG_ARM64
 	if ((req.mode & LKMDBG_SYSCALL_TRACE_MODE_CONTROL) &&
 	    !lkmdbg_syscall_enter_fallback_available())
 		return -EOPNOTSUPP;
+#else
+	if (req.mode & LKMDBG_SYSCALL_TRACE_MODE_CONTROL)
+		return -EOPNOTSUPP;
+#endif
 
 #ifdef CONFIG_ARM64
 	mutex_lock(&session->lock);
