@@ -1,12 +1,6 @@
 name: ci-image
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/docker/ci/Dockerfile
-      - .github/workflows/ci-image.yml
   workflow_dispatch:
   schedule:
     - cron: '0 3 * * 1'
