@@ -318,7 +318,8 @@ jobs:
             -smp 2 \
             -m 1024 \
             -nographic \
-            -device virtio-keyboard-pci \
+            -nic none \
+            -device virtio-keyboard-pci,rombar=0 \
             -kernel "$KERNEL_IMAGE" \
             -initrd "$INITRAMFS" \
             -append "console=ttyAMA0 rdinit=/init panic=-1" \
@@ -421,6 +422,7 @@ jobs:
             -smp 2 \
             -m 1024 \
             -nographic \
+            -nic none \
             -kernel "$KERNEL_IMAGE" \
             -initrd "$INITRAMFS" \
             -append "console=ttyAMA0 rdinit=/init panic=-1 lkmdbg.hook_soak_only lkmdbg.proc_version_repeats=50 lkmdbg.seq_read_repeats=50" \
