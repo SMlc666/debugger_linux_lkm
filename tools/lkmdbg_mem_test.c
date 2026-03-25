@@ -5786,11 +5786,15 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 	struct lkmdbg_syscall_trace_request trace_req;
 	struct lkmdbg_event_record event;
 	struct lkmdbg_stop_query_request stop_req;
+	const uint32_t stop_phases[] = {
+		LKMDBG_SYSCALL_TRACE_PHASE_ENTER,
+		LKMDBG_SYSCALL_TRACE_PHASE_EXIT,
+	};
 	const uint32_t nr = SYS_getppid;
 	const pid_t parent_pid = getpid();
 	const int event_timeout_ms = 5000;
 	uint32_t supported_phases;
-	uint32_t stop_phase;
+	size_t stop_idx;
 	int trace_active = 0;
 
 	memset(&trace_req, 0, sizeof(trace_req));
@@ -5914,69 +5918,77 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 		}
 	}
 
-	stop_phase = (supported_phases & LKMDBG_SYSCALL_TRACE_PHASE_ENTER) ?
-			     LKMDBG_SYSCALL_TRACE_PHASE_ENTER :
-			     LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
-	if (set_syscall_trace(session_fd, child, (int)nr,
-			      LKMDBG_SYSCALL_TRACE_MODE_STOP,
-			      stop_phase,
-			      &trace_req) < 0)
-		goto fail;
-	if (trace_req.tid != child || trace_req.syscall_nr != (int)nr ||
-	    trace_req.mode != LKMDBG_SYSCALL_TRACE_MODE_STOP ||
-	    trace_req.phases != stop_phase ||
-	    trace_req.supported_phases != supported_phases) {
-		fprintf(stderr,
-			"syscall stop config mismatch tid=%d nr=%d mode=0x%x phases=0x%x supported=0x%x\n",
-			trace_req.tid, trace_req.syscall_nr, trace_req.mode,
-			trace_req.phases, trace_req.supported_phases);
-		goto fail;
-	}
+	for (stop_idx = 0;
+	     stop_idx < sizeof(stop_phases) / sizeof(stop_phases[0]);
+	     stop_idx++) {
+		const uint32_t stop_phase = stop_phases[stop_idx];
+		const uint64_t expected_retval =
+			stop_phase == LKMDBG_SYSCALL_TRACE_PHASE_ENTER ? 0 :
+							       (uint64_t)parent_pid;
 
-	if (drain_session_events(session_fd) < 0)
-		goto fail;
-	if (child_ping(cmd_fd, resp_fd) < 0)
-		goto fail;
-	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SYSCALL) < 0)
-		goto fail;
-	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
-				   LKMDBG_STOP_REASON_SYSCALL,
-				   event_timeout_ms, &event) < 0) {
-		fprintf(stderr, "syscall stop event missing\n");
-		goto fail;
+		if (!(supported_phases & stop_phase))
+			continue;
+
+		if (set_syscall_trace(session_fd, child, (int)nr,
+				      LKMDBG_SYSCALL_TRACE_MODE_STOP,
+				      stop_phase,
+				      &trace_req) < 0)
+			goto fail;
+		if (trace_req.tid != child || trace_req.syscall_nr != (int)nr ||
+		    trace_req.mode != LKMDBG_SYSCALL_TRACE_MODE_STOP ||
+		    trace_req.phases != stop_phase ||
+		    trace_req.supported_phases != supported_phases) {
+			fprintf(stderr,
+				"syscall stop config mismatch tid=%d nr=%d mode=0x%x phases=0x%x supported=0x%x\n",
+				trace_req.tid, trace_req.syscall_nr, trace_req.mode,
+				trace_req.phases, trace_req.supported_phases);
+			goto fail;
+		}
+
+		if (drain_session_events(session_fd) < 0)
+			goto fail;
+		if (child_ping(cmd_fd, resp_fd) < 0)
+			goto fail;
+		if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SYSCALL) < 0)
+			goto fail;
+		if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_STOP,
+					   LKMDBG_STOP_REASON_SYSCALL,
+					   event_timeout_ms, &event) < 0) {
+			fprintf(stderr, "syscall stop event missing phase=0x%x\n",
+				stop_phase);
+			goto fail;
+		}
+		if (event.tgid != child || event.tid != child ||
+		    event.flags != stop_phase || event.value0 != nr ||
+		    event.value1 != expected_retval) {
+			fprintf(stderr,
+				"syscall stop event mismatch tgid=%d tid=%d flags=0x%x nr=%" PRIu64 " retval=%" PRId64 "\n",
+				event.tgid, event.tid, event.flags,
+				(uint64_t)event.value0, (int64_t)event.value1);
+			goto fail;
+		}
+		if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_SYSCALL,
+				      &stop_req) < 0)
+			goto fail;
+		if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
+		    !(stop_req.stop.flags & LKMDBG_STOP_FLAG_REGS_VALID) ||
+		    stop_req.stop.tgid != child || stop_req.stop.tid != child ||
+		    stop_req.stop.event_flags != stop_phase ||
+		    stop_req.stop.value0 != nr ||
+		    stop_req.stop.value1 != expected_retval) {
+			fprintf(stderr,
+				"syscall stop state mismatch flags=0x%x tgid=%d tid=%d event_flags=0x%x nr=%" PRIu64 " retval=%" PRId64 "\n",
+				stop_req.stop.flags, stop_req.stop.tgid,
+				stop_req.stop.tid, stop_req.stop.event_flags,
+				(uint64_t)stop_req.stop.value0,
+				(int64_t)stop_req.stop.value1);
+			goto fail;
+		}
+		if (continue_target_and_wait_for_user_loop(session_fd,
+							   stop_req.stop.cookie,
+							   cmd_fd, resp_fd) < 0)
+			goto fail;
 	}
-	if (event.tgid != child || event.tid != child ||
-	    event.flags != stop_phase || event.value0 != nr ||
-	    event.value1 != (uint64_t)(stop_phase ==
-					       LKMDBG_SYSCALL_TRACE_PHASE_ENTER ?
-					       0 : parent_pid)) {
-		fprintf(stderr,
-			"syscall stop event mismatch tgid=%d tid=%d flags=0x%x nr=%" PRIu64 " retval=%" PRId64 "\n",
-			event.tgid, event.tid, event.flags, (uint64_t)event.value0,
-			(int64_t)event.value1);
-		goto fail;
-	}
-	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_SYSCALL,
-			      &stop_req) < 0)
-		goto fail;
-	if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
-	    !(stop_req.stop.flags & LKMDBG_STOP_FLAG_REGS_VALID) ||
-	    stop_req.stop.tgid != child || stop_req.stop.tid != child ||
-	    stop_req.stop.event_flags != stop_phase ||
-	    stop_req.stop.value0 != nr ||
-	    stop_req.stop.value1 !=
-		    (uint64_t)(stop_phase ==
-					       LKMDBG_SYSCALL_TRACE_PHASE_ENTER ?
-					       0 : parent_pid)) {
-		fprintf(stderr,
-			"syscall stop state mismatch flags=0x%x tgid=%d tid=%d event_flags=0x%x nr=%" PRIu64 " retval=%" PRId64 "\n",
-			stop_req.stop.flags, stop_req.stop.tgid, stop_req.stop.tid,
-			stop_req.stop.event_flags, (uint64_t)stop_req.stop.value0,
-			(int64_t)stop_req.stop.value1);
-		goto fail;
-	}
-	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0)
-		goto fail;
 
 	memset(&trace_req, 0, sizeof(trace_req));
 	if (set_syscall_trace(session_fd, 0, -1, LKMDBG_SYSCALL_TRACE_MODE_OFF, 0,

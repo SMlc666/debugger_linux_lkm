@@ -794,6 +794,24 @@ int main(void)
 			qemu_check(strstr(report_buf,
 					  "report.exposure.debugfs_dir=visible") != NULL,
 				   "missing_report_debugfs_dir");
+			qemu_check(strstr(report_buf,
+					  "report.bootstrap.proc_open_successes=") != NULL,
+				   "missing_report_proc_open_successes");
+			qemu_check(strstr(report_buf,
+					  "report.exposure.sysfs_holders=") != NULL,
+				   "missing_report_sysfs_holders");
+			qemu_check(strstr(report_buf,
+					  "report.exposure.sysfs_sections=") != NULL,
+				   "missing_report_sysfs_sections");
+			qemu_check(strstr(report_buf,
+					  "report.exposure.debugfs_status=visible") != NULL,
+				   "missing_report_debugfs_status");
+			qemu_check(strstr(report_buf,
+					  "report.exposure.debugfs_hooks=visible") != NULL,
+				   "missing_report_debugfs_hooks");
+			qemu_check(strstr(report_buf,
+					  "report.exposure.kallsyms_symbols=") != NULL,
+				   "missing_report_kallsyms_symbols");
 			qemu_run_tool(mem_test_argv);
 			qemu_run_tool(mmu_test_argv);
 			qemu_run_input_smoke();

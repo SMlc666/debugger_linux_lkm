@@ -14,8 +14,12 @@
 #define TARGET_PATH "/proc/version"
 #define MODULE_NAME "lkmdbg"
 #define DEBUGFS_DIR "/sys/kernel/debug/lkmdbg"
+#define DEBUGFS_STATUS_PATH "/sys/kernel/debug/lkmdbg/status"
+#define DEBUGFS_HOOKS_PATH "/sys/kernel/debug/lkmdbg/hooks"
 #define SYSFS_MODULE_DIR "/sys/module/lkmdbg"
 #define SYSFS_MODULE_PARAMS_DIR "/sys/module/lkmdbg/parameters"
+#define SYSFS_MODULE_HOLDERS_DIR "/sys/module/lkmdbg/holders"
+#define SYSFS_MODULE_SECTIONS_DIR "/sys/module/lkmdbg/sections"
 
 enum probe_state {
 	PROBE_STATE_HIDDEN = 0,
@@ -296,14 +300,25 @@ static void print_report(const struct lkmdbg_status_reply *status,
 	enum probe_state proc_modules_state;
 	enum probe_state sysfs_module_state;
 	enum probe_state sysfs_params_state;
+	enum probe_state sysfs_holders_state;
+	enum probe_state sysfs_sections_state;
 	enum probe_state debugfs_state;
+	enum probe_state debugfs_status_state;
+	enum probe_state debugfs_hooks_state;
 	enum probe_state kallsyms_state;
+	enum probe_state kallsyms_symbols_state;
 
 	proc_modules_state = probe_file_contains("/proc/modules", MODULE_NAME " ");
 	sysfs_module_state = probe_path_exists(SYSFS_MODULE_DIR);
 	sysfs_params_state = probe_path_exists(SYSFS_MODULE_PARAMS_DIR);
+	sysfs_holders_state = probe_path_exists(SYSFS_MODULE_HOLDERS_DIR);
+	sysfs_sections_state = probe_path_exists(SYSFS_MODULE_SECTIONS_DIR);
 	debugfs_state = probe_path_exists(DEBUGFS_DIR);
+	debugfs_status_state = probe_path_exists(DEBUGFS_STATUS_PATH);
+	debugfs_hooks_state = probe_path_exists(DEBUGFS_HOOKS_PATH);
 	kallsyms_state = probe_file_contains("/proc/kallsyms", " [" MODULE_NAME "]");
+	kallsyms_symbols_state =
+		probe_file_contains("/proc/kallsyms", " lkmdbg_");
 	taint_ok = read_u64_file("/proc/sys/kernel/tainted", &taint) == 0;
 
 	printf("session_id=%" PRIu64 "\n", (uint64_t)status->session_id);
@@ -317,16 +332,28 @@ static void print_report(const struct lkmdbg_status_reply *status,
 			      sizeof(supported_buf)));
 	printf("report.bootstrap.proc_version_hook=%s\n",
 	       status->hook_active ? "active" : "inactive");
+	printf("report.bootstrap.proc_open_successes=%" PRIu64 "\n",
+	       (uint64_t)status->open_successes);
 	printf("report.exposure.proc_modules=%s\n",
 	       describe_probe_state(proc_modules_state));
 	printf("report.exposure.sysfs_module=%s\n",
 	       describe_probe_state(sysfs_module_state));
 	printf("report.exposure.sysfs_parameters=%s\n",
 	       describe_probe_state(sysfs_params_state));
+	printf("report.exposure.sysfs_holders=%s\n",
+	       describe_probe_state(sysfs_holders_state));
+	printf("report.exposure.sysfs_sections=%s\n",
+	       describe_probe_state(sysfs_sections_state));
 	printf("report.exposure.debugfs_dir=%s\n",
 	       describe_probe_state(debugfs_state));
+	printf("report.exposure.debugfs_status=%s\n",
+	       describe_probe_state(debugfs_status_state));
+	printf("report.exposure.debugfs_hooks=%s\n",
+	       describe_probe_state(debugfs_hooks_state));
 	printf("report.exposure.kallsyms_module=%s\n",
 	       describe_probe_state(kallsyms_state));
+	printf("report.exposure.kallsyms_symbols=%s\n",
+	       describe_probe_state(kallsyms_symbols_state));
 	if (taint_ok)
 		printf("report.exposure.kernel_tainted=%" PRIu64 "\n", taint);
 	else
