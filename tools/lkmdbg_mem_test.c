@@ -157,6 +157,7 @@ enum {
 	CHILD_OP_READ_REMOTE = 8,
 	CHILD_OP_FILL_REMOTE = 9,
 	CHILD_OP_TRIGGER_SYSCALL = 10,
+	CHILD_OP_PING = 11,
 };
 
 static int get_stop_state(int session_fd,
@@ -179,6 +180,7 @@ static int set_stealth(int session_fd, uint32_t flags,
 static int get_stealth(int session_fd,
 		       struct lkmdbg_stealth_request *reply_out);
 static int child_query_nofault_residency(int cmd_fd, int resp_fd);
+static int child_ping(int cmd_fd, int resp_fd);
 static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   void *buf, size_t len);
 static int child_fill_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
@@ -664,7 +666,10 @@ static int add_hwpoint_ex(int session_fd, pid_t tid, uint64_t addr,
 	};
 
 	if (ioctl(session_fd, LKMDBG_IOC_ADD_HWPOINT, &req) < 0) {
-		fprintf(stderr, "ADD_HWPOINT failed: %s\n", strerror(errno));
+		fprintf(stderr,
+			"ADD_HWPOINT failed: %s tid=%d addr=0x%" PRIx64 " type=0x%x len=%u flags=0x%x trigger=%" PRIu64 " actions=0x%x\n",
+			strerror(errno), tid, addr, type, len, flags,
+			(uint64_t)trigger_hit_count, action_flags);
 		return -1;
 	}
 
@@ -3942,6 +3947,12 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 			if (syscall(SYS_getppid) < 0)
 				return 2;
 			break;
+		case CHILD_OP_PING:
+			resident = 0;
+			if (write_full(resp_fd, &resident, sizeof(resident)) !=
+			    (ssize_t)sizeof(resident))
+				return 2;
+			break;
 		case CHILD_OP_READ_REMOTE:
 			if (!cmd.addr || !cmd.length ||
 			    cmd.length > SELFTEST_LARGE_MAP_LEN)
@@ -4009,6 +4020,26 @@ static int child_query_nofault_residency(int cmd_fd, int resp_fd)
 	return resident;
 }
 
+static int child_ping(int cmd_fd, int resp_fd)
+{
+	struct child_cmd cmd = {
+		.op = CHILD_OP_PING,
+	};
+	int ack;
+
+	if (write_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
+		fprintf(stderr, "failed to send child ping\n");
+		return -1;
+	}
+
+	if (read_full(resp_fd, &ack, sizeof(ack)) != (ssize_t)sizeof(ack)) {
+		fprintf(stderr, "failed to read child ping ack\n");
+		return -1;
+	}
+
+	return 0;
+}
+
 static int send_child_command(int cmd_fd, uint32_t op)
 {
 	struct child_cmd cmd = {
@@ -4021,6 +4052,16 @@ static int send_child_command(int cmd_fd, uint32_t op)
 	}
 
 	return 0;
+}
+
+static int continue_target_and_wait_for_user_loop(int session_fd,
+						  uint64_t cookie, int cmd_fd,
+						  int resp_fd)
+{
+	if (continue_target(session_fd, cookie, 2000, 0, NULL) < 0)
+		return -1;
+
+	return child_ping(cmd_fd, resp_fd);
 }
 
 static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
@@ -5160,8 +5201,8 @@ static int query_hwpoint_entry_by_id(int session_fd, uint64_t id,
 	return -1;
 }
 
-static int verify_runtime_events(int session_fd, int cmd_fd, pid_t child,
-				 const struct child_info *info)
+static int verify_runtime_events(int session_fd, int cmd_fd, int resp_fd,
+				 pid_t child, const struct child_info *info)
 {
 	struct lkmdbg_hwpoint_request bp_req;
 	struct lkmdbg_hwpoint_request mmu_req;
@@ -5296,7 +5337,9 @@ static int verify_runtime_events(int session_fd, int cmd_fd, pid_t child,
 			stop_req.stop.event_flags);
 		goto signal_fail;
 	}
-	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0)
+	if (continue_target_and_wait_for_user_loop(session_fd,
+						   stop_req.stop.cookie, cmd_fd,
+						   resp_fd) < 0)
 		goto signal_fail;
 
 signal_clear:
@@ -5364,7 +5407,9 @@ breakpoint_checks:
 		remove_hwpoint(session_fd, bp_req.id);
 		return -1;
 	}
-	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0) {
+	if (continue_target_and_wait_for_user_loop(session_fd,
+						   stop_req.stop.cookie, cmd_fd,
+						   resp_fd) < 0) {
 		remove_hwpoint(session_fd, bp_req.id);
 		return -1;
 	}
@@ -5416,7 +5461,9 @@ breakpoint_checks:
 		remove_hwpoint(session_fd, mmu_req.id);
 		return -1;
 	}
-	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0) {
+	if (continue_target_and_wait_for_user_loop(session_fd,
+						   stop_req.stop.cookie, cmd_fd,
+						   resp_fd) < 0) {
 		remove_hwpoint(session_fd, mmu_req.id);
 		return -1;
 	}
@@ -5484,7 +5531,9 @@ breakpoint_checks:
 		remove_hwpoint(session_fd, mmu_req.id);
 		return -1;
 	}
-	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0) {
+	if (continue_target_and_wait_for_user_loop(session_fd,
+						   stop_req.stop.cookie, cmd_fd,
+						   resp_fd) < 0) {
 		remove_hwpoint(session_fd, mmu_req.id);
 		return -1;
 	}
@@ -5537,8 +5586,9 @@ breakpoint_checks:
 			remove_hwpoint(session_fd, threshold_req.id);
 			return -1;
 		}
-		if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
-				    NULL) < 0) {
+		if (continue_target_and_wait_for_user_loop(session_fd,
+							   stop_req.stop.cookie,
+							   cmd_fd, resp_fd) < 0) {
 			remove_hwpoint(session_fd, threshold_req.id);
 			return -1;
 		}
@@ -5661,8 +5711,9 @@ breakpoint_checks:
 			remove_hwpoint(session_fd, mmu_skip_req.id);
 			return -1;
 		}
-		if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
-				    NULL) < 0) {
+		if (continue_target_and_wait_for_user_loop(session_fd,
+							   stop_req.stop.cookie,
+							   cmd_fd, resp_fd) < 0) {
 			remove_hwpoint(session_fd, mmu_skip_req.id);
 			return -1;
 		}
@@ -5709,6 +5760,9 @@ breakpoint_checks:
 		return -1;
 	} else if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
 				   NULL) < 0) {
+		remove_hwpoint(session_fd, wp_req.id);
+		return -1;
+	} else if (child_ping(cmd_fd, resp_fd) < 0) {
 		remove_hwpoint(session_fd, wp_req.id);
 		return -1;
 	}
@@ -6749,7 +6803,8 @@ static int run_selftest(const char *prog)
 		return 1;
 	}
 
-	if (verify_runtime_events(session_fd, cmd_pipe[1], child, &info) < 0) {
+	if (verify_runtime_events(session_fd, cmd_pipe[1], resp_pipe[0], child,
+				  &info) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
 		close(cmd_pipe[1]);
