@@ -4479,6 +4479,38 @@ static int find_target_thread_entry(int session_fd, pid_t tid,
 	return -1;
 }
 
+static int find_first_parked_thread(int session_fd,
+				    struct lkmdbg_thread_entry *entry_out)
+{
+	struct lkmdbg_thread_entry entries[THREAD_QUERY_BATCH];
+	int32_t cursor = 0;
+
+	for (;;) {
+		struct lkmdbg_thread_query_request reply;
+		uint32_t i;
+
+		if (query_target_threads(session_fd, cursor, entries,
+					 THREAD_QUERY_BATCH, &reply) < 0)
+			return -1;
+
+		for (i = 0; i < reply.entries_filled; i++) {
+			if (!(entries[i].flags & LKMDBG_THREAD_FLAG_FREEZE_PARKED))
+				continue;
+
+			if (entry_out)
+				*entry_out = entries[i];
+			return 0;
+		}
+
+		if (reply.done)
+			break;
+		cursor = reply.next_tid;
+	}
+
+	fprintf(stderr, "no parked frozen thread found in QUERY_THREADS\n");
+	return -1;
+}
+
 static int verify_thread_query(int session_fd, pid_t child,
 			       const struct child_info *info, const pid_t *tids)
 {
@@ -4816,6 +4848,8 @@ static const char *describe_syscall_trace_mode(uint32_t mode, char *buf,
 		append_flag_name(buf, buf_size, "event");
 	if (mode & LKMDBG_SYSCALL_TRACE_MODE_STOP)
 		append_flag_name(buf, buf_size, "stop");
+	if (mode & LKMDBG_SYSCALL_TRACE_MODE_CONTROL)
+		append_flag_name(buf, buf_size, "control");
 	if (!buf[0])
 		snprintf(buf, buf_size, "off");
 
@@ -4831,6 +4865,8 @@ static const char *describe_syscall_trace_flags(uint32_t flags, char *buf,
 		append_flag_name(buf, buf_size, "tracepoint");
 	if (flags & LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_ENTRY_HOOK)
 		append_flag_name(buf, buf_size, "entry_hook");
+	if (flags & LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_CONTROL)
+		append_flag_name(buf, buf_size, "backend_control");
 	if (!buf[0])
 		snprintf(buf, buf_size, "none");
 
@@ -4846,6 +4882,34 @@ static const char *describe_syscall_trace_phases(uint32_t phases, char *buf,
 		append_flag_name(buf, buf_size, "enter");
 	if (phases & LKMDBG_SYSCALL_TRACE_PHASE_EXIT)
 		append_flag_name(buf, buf_size, "exit");
+	if (!buf[0])
+		snprintf(buf, buf_size, "none");
+
+	return buf;
+}
+
+static const char *describe_syscall_resolve_action(uint32_t action, char *buf,
+						   size_t buf_size)
+{
+	if (action == LKMDBG_SYSCALL_RESOLVE_ACTION_ALLOW)
+		snprintf(buf, buf_size, "allow");
+	else if (action == LKMDBG_SYSCALL_RESOLVE_ACTION_REWRITE)
+		snprintf(buf, buf_size, "rewrite");
+	else if (action == LKMDBG_SYSCALL_RESOLVE_ACTION_SKIP)
+		snprintf(buf, buf_size, "skip");
+	else
+		snprintf(buf, buf_size, "unknown");
+
+	return buf;
+}
+
+static const char *describe_syscall_resolve_flags(uint32_t flags, char *buf,
+						  size_t buf_size)
+{
+	buf[0] = '\0';
+
+	if (flags & LKMDBG_SYSCALL_RESOLVE_FLAG_NR_REWRITE_SUPPORTED)
+		append_flag_name(buf, buf_size, "nr_rewrite");
 	if (!buf[0])
 		snprintf(buf, buf_size, "none");
 
@@ -5290,25 +5354,53 @@ static int find_hwpoint_id(int session_fd, uint64_t id)
 
 static int parse_syscall_trace_mode(const char *arg, uint32_t *mode_out)
 {
+	char *copy;
+	char *token;
+	char *saveptr = NULL;
+	char *endp = NULL;
+	uint32_t mode = 0;
+
 	if (strcmp(arg, "off") == 0 || strcmp(arg, "0") == 0) {
 		*mode_out = LKMDBG_SYSCALL_TRACE_MODE_OFF;
 		return 0;
 	}
-	if (strcmp(arg, "event") == 0) {
-		*mode_out = LKMDBG_SYSCALL_TRACE_MODE_EVENT;
-		return 0;
+
+	copy = strdup(arg);
+	if (!copy)
+		return -1;
+
+	for (token = strtok_r(copy, ",+|", &saveptr); token;
+	     token = strtok_r(NULL, ",+|", &saveptr)) {
+		if (strcmp(token, "event") == 0) {
+			mode |= LKMDBG_SYSCALL_TRACE_MODE_EVENT;
+			continue;
+		}
+		if (strcmp(token, "stop") == 0) {
+			mode |= LKMDBG_SYSCALL_TRACE_MODE_STOP;
+			continue;
+		}
+		if (strcmp(token, "control") == 0) {
+			mode |= LKMDBG_SYSCALL_TRACE_MODE_CONTROL;
+			continue;
+		}
+		if (strcmp(token, "both") == 0) {
+			mode |= LKMDBG_SYSCALL_TRACE_MODE_EVENT |
+				LKMDBG_SYSCALL_TRACE_MODE_STOP;
+			continue;
+		}
+		free(copy);
+		goto numeric;
 	}
-	if (strcmp(arg, "stop") == 0) {
-		*mode_out = LKMDBG_SYSCALL_TRACE_MODE_STOP;
-		return 0;
-	}
-	if (strcmp(arg, "both") == 0 || strcmp(arg, "event+stop") == 0 ||
-	    strcmp(arg, "stop+event") == 0) {
-		*mode_out = LKMDBG_SYSCALL_TRACE_MODE_EVENT |
-			    LKMDBG_SYSCALL_TRACE_MODE_STOP;
-		return 0;
-	}
-	return -1;
+
+	free(copy);
+	*mode_out = mode;
+	return 0;
+
+numeric:
+	*mode_out = (uint32_t)strtoul(arg, &endp, 0);
+	if (*endp != '\0')
+		return -1;
+	return 0;
 }
 
 static int parse_syscall_trace_phases(const char *arg, uint32_t *phases_out)
@@ -5328,6 +5420,43 @@ static int parse_syscall_trace_phases(const char *arg, uint32_t *phases_out)
 		return 0;
 	}
 	return -1;
+}
+
+static int parse_syscall_resolve_action(const char *arg, uint32_t *action_out)
+{
+	if (strcmp(arg, "allow") == 0) {
+		*action_out = LKMDBG_SYSCALL_RESOLVE_ACTION_ALLOW;
+		return 0;
+	}
+	if (strcmp(arg, "skip") == 0) {
+		*action_out = LKMDBG_SYSCALL_RESOLVE_ACTION_SKIP;
+		return 0;
+	}
+	if (strcmp(arg, "rewrite") == 0) {
+		*action_out = LKMDBG_SYSCALL_RESOLVE_ACTION_REWRITE;
+		return 0;
+	}
+	return -1;
+}
+
+static int parse_u64_value(const char *arg, uint64_t *value_out)
+{
+	char *endp;
+
+	*value_out = strtoull(arg, &endp, 0);
+	if (*endp != '\0')
+		return -1;
+	return 0;
+}
+
+static int parse_s64_value(const char *arg, int64_t *value_out)
+{
+	char *endp;
+
+	*value_out = strtoll(arg, &endp, 0);
+	if (*endp != '\0')
+		return -1;
+	return 0;
 }
 
 static int parse_stealth_flags(const char *arg, uint32_t *flags_out)
@@ -6792,6 +6921,154 @@ static int verify_remote_thread_create(int session_fd,
 	return 0;
 }
 
+static int run_remote_call_workflow(int session_fd, uint64_t target_pc,
+				    const uint64_t *args, uint32_t arg_count,
+				    uint32_t flags, uint64_t stack_ptr,
+				    uint64_t return_pc, uint64_t x8)
+{
+	struct lkmdbg_freeze_request freeze_req;
+	struct lkmdbg_stop_query_request stop_req;
+	struct lkmdbg_event_record event;
+	struct lkmdbg_thread_entry parked_entry;
+	struct lkmdbg_remote_call_request call_req;
+	uint64_t freeze_cookie = 0;
+	int remote_stop_active = 0;
+	int ret = -1;
+
+	memset(&freeze_req, 0, sizeof(freeze_req));
+	memset(&stop_req, 0, sizeof(stop_req));
+	memset(&event, 0, sizeof(event));
+	memset(&parked_entry, 0, sizeof(parked_entry));
+	memset(&call_req, 0, sizeof(call_req));
+
+	if (freeze_target_threads(session_fd, 2000, &freeze_req, 0) < 0)
+		goto out;
+	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_FREEZE, &stop_req) <
+	    0)
+		goto out;
+	freeze_cookie = stop_req.stop.cookie;
+
+	if (find_first_parked_thread(session_fd, &parked_entry) < 0)
+		goto out;
+	if (drain_session_events(session_fd) < 0)
+		goto out;
+
+	if (remote_call_thread_ex(session_fd, parked_entry.tid, target_pc, args,
+				  arg_count, flags, stack_ptr, return_pc, x8,
+				  &call_req) < 0)
+		goto out;
+	if (continue_target(session_fd, freeze_cookie, 2000, 0, NULL) < 0)
+		goto out;
+	freeze_cookie = 0;
+
+	if (wait_for_stop_event_or_state(session_fd,
+					 LKMDBG_STOP_REASON_REMOTE_CALL,
+					 5000, &event, &stop_req) < 0)
+		goto out;
+	remote_stop_active = 1;
+
+	printf("remote_call.tid=%d\n", parked_entry.tid);
+	printf("remote_call.call_id=%" PRIu64 "\n", (uint64_t)call_req.call_id);
+	printf("remote_call.target_pc=0x%" PRIx64 "\n",
+	       (uint64_t)target_pc);
+	printf("remote_call.retval=0x%" PRIx64 "\n",
+	       (uint64_t)stop_req.stop.value0);
+	printf("remote_call.stop_cookie=%" PRIu64 "\n",
+	       (uint64_t)stop_req.stop.cookie);
+	printf("remote_call.stop_pc=0x%" PRIx64 "\n",
+	       (uint64_t)stop_req.stop.regs.pc);
+	printf("remote_call.stop_value1=0x%" PRIx64 "\n",
+	       (uint64_t)stop_req.stop.value1);
+
+	if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0, NULL) < 0)
+		goto out;
+
+	remote_stop_active = 0;
+	ret = 0;
+
+out:
+	if (ret < 0) {
+		if (remote_stop_active)
+			continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
+					NULL);
+		else if (freeze_cookie)
+			continue_target(session_fd, freeze_cookie, 2000, 0, NULL);
+	}
+	return ret;
+}
+
+static int run_remote_thread_create_workflow(int session_fd,
+					     uint64_t launcher_pc,
+					     uint64_t start_pc,
+					     uint64_t start_arg,
+					     uint64_t stack_top,
+					     uint64_t tls,
+					     uint32_t flags)
+{
+	struct lkmdbg_freeze_request freeze_req;
+	struct lkmdbg_stop_query_request stop_req;
+	struct lkmdbg_event_record event;
+	struct lkmdbg_thread_entry parked_entry;
+	struct lkmdbg_remote_thread_create_request create_req;
+	uint64_t freeze_cookie = 0;
+	int remote_stop_active = 0;
+	int ret = -1;
+
+	memset(&freeze_req, 0, sizeof(freeze_req));
+	memset(&stop_req, 0, sizeof(stop_req));
+	memset(&event, 0, sizeof(event));
+	memset(&parked_entry, 0, sizeof(parked_entry));
+	memset(&create_req, 0, sizeof(create_req));
+
+	if (freeze_target_threads(session_fd, 5000, &freeze_req, 0) < 0)
+		goto out;
+	if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_FREEZE, &stop_req) <
+	    0)
+		goto out;
+	freeze_cookie = stop_req.stop.cookie;
+
+	if (find_first_parked_thread(session_fd, &parked_entry) < 0)
+		goto out;
+
+	if (remote_thread_create(session_fd, parked_entry.tid, launcher_pc,
+				 start_pc, start_arg, stack_top, tls, flags,
+				 5000, &create_req) < 0)
+		goto out;
+
+	freeze_cookie = 0;
+	if (wait_for_stop_event_or_state(session_fd,
+					 LKMDBG_STOP_REASON_REMOTE_CALL,
+					 5000, &event, &stop_req) < 0)
+		goto out;
+	remote_stop_active = 1;
+
+	printf("remote_thread.tid=%d\n", parked_entry.tid);
+	printf("remote_thread.created_tid=%d\n", create_req.created_tid);
+	printf("remote_thread.result=%" PRId64 "\n",
+	       (int64_t)create_req.result);
+	printf("remote_thread.call_id=%" PRIu64 "\n",
+	       (uint64_t)create_req.call_id);
+	printf("remote_thread.stop_cookie=%" PRIu64 "\n",
+	       (uint64_t)create_req.stop_cookie);
+
+	if (continue_target(session_fd, create_req.stop_cookie, 2000, 0, NULL) <
+	    0)
+		goto out;
+
+	remote_stop_active = 0;
+	ret = 0;
+
+out:
+	if (ret < 0) {
+		if (remote_stop_active)
+			continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
+					NULL);
+		else if (freeze_cookie)
+			continue_target(session_fd, freeze_cookie, 2000, 0, NULL);
+	}
+	return ret;
+}
+
 static void usage(const char *prog)
 {
 	fprintf(stderr,
@@ -6811,8 +7088,12 @@ static void usage(const char *prog)
 		"  %s step <pid> <tid>\n"
 		"  %s freeze <pid> [timeout_ms]\n"
 		"  %s thaw <pid> [timeout_ms]\n"
-		"  %s sysset <pid> <off|event|stop|both> <enter|exit|both> [tid] [syscall_nr]\n"
+		"  %s sysset <pid> <off|event|stop|control|event+stop|event+control> <enter|exit|both> [tid] [syscall_nr]\n"
 		"  %s sysget <pid>\n"
+		"  %s sysresolve <pid> <allow|skip|rewrite> [retval|new_syscall_nr] [arg0 ... arg5]\n"
+		"  %s rcall <pid> <target_pc_hex> [arg0 ... arg7]\n"
+		"  %s rcallx8 <pid> <target_pc_hex> <x8_hex> [arg0 ... arg7]\n"
+		"  %s rthread <pid> <launcher_pc_hex> <start_pc_hex> <arg_hex> <stack_top_hex> [tls_hex]\n"
 		"  %s stealthset <pid> <none|debugfs|modulehide|debugfs,modulehide>\n"
 		"  %s stealthget <pid>\n"
 		"  %s events <pid> [max_events] [timeout_ms]\n"
@@ -6832,7 +7113,7 @@ static void usage(const char *prog)
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog, prog);
+		prog, prog, prog, prog, prog, prog);
 }
 
 static int run_selftest(const char *prog)
@@ -7585,7 +7866,24 @@ int main(int argc, char **argv)
 	int syscall_trace_nr = -1;
 	uint32_t syscall_trace_mode = 0;
 	uint32_t syscall_trace_phases = 0;
+	uint32_t syscall_resolve_action = 0;
+	int syscall_resolve_have_action = 0;
+	int syscall_resolve_nr = -1;
+	int64_t syscall_resolve_retval = 0;
+	uint64_t syscall_resolve_args[6] = { 0 };
+	uint32_t syscall_resolve_arg_count = 0;
 	uint32_t stealth_flags = 0;
+	uint64_t remote_call_pc = 0;
+	uint64_t remote_call_x8 = 0;
+	uint64_t remote_call_args[LKMDBG_REMOTE_CALL_MAX_ARGS] = { 0 };
+	uint32_t remote_call_arg_count = 0;
+	uint32_t remote_call_flags = 0;
+	uint64_t remote_thread_launcher = 0;
+	uint64_t remote_thread_start = 0;
+	uint64_t remote_thread_arg = 0;
+	uint64_t remote_thread_stack = 0;
+	uint64_t remote_thread_tls = 0;
+	uint32_t remote_thread_flags = 0;
 	unsigned int max_events = EVENT_READ_BATCH;
 
 	if (argc == 2 && strcmp(argv[1], "selftest") == 0)
@@ -7748,6 +8046,129 @@ int main(int argc, char **argv)
 			syscall_trace_phases = 0;
 			syscall_trace_nr = -1;
 			tid = 0;
+		}
+	}
+
+	if (strcmp(argv[1], "sysresolve") == 0) {
+		uint32_t i;
+		int argi = 4;
+
+		if (argc < 4) {
+			usage(argv[0]);
+			return 1;
+		}
+		if (parse_syscall_resolve_action(argv[3], &syscall_resolve_action) <
+		    0) {
+			fprintf(stderr, "invalid syscall resolve action: %s\n",
+				argv[3]);
+			return 1;
+		}
+		syscall_resolve_have_action = 1;
+
+		if (syscall_resolve_action == LKMDBG_SYSCALL_RESOLVE_ACTION_SKIP) {
+			if (argc < 5) {
+				usage(argv[0]);
+				return 1;
+			}
+			if (parse_s64_value(argv[4], &syscall_resolve_retval) < 0) {
+				fprintf(stderr, "invalid skip retval: %s\n",
+					argv[4]);
+				return 1;
+			}
+			argi = 5;
+		} else if (syscall_resolve_action ==
+			   LKMDBG_SYSCALL_RESOLVE_ACTION_REWRITE) {
+			if (argc < 5) {
+				usage(argv[0]);
+				return 1;
+			}
+			syscall_resolve_nr = (int)strtol(argv[4], &endp, 0);
+			if (*endp != '\0' || syscall_resolve_nr < 0) {
+				fprintf(stderr, "invalid rewrite syscall nr: %s\n",
+					argv[4]);
+				return 1;
+			}
+			argi = 5;
+			syscall_resolve_arg_count = (uint32_t)(argc - argi);
+			if (syscall_resolve_arg_count > 6) {
+				fprintf(stderr,
+					"too many syscall args: %u (max 6)\n",
+					syscall_resolve_arg_count);
+				return 1;
+			}
+			for (i = 0; i < syscall_resolve_arg_count; i++) {
+				if (parse_u64_value(argv[argi + (int)i],
+						    &syscall_resolve_args[i]) <
+				    0) {
+					fprintf(stderr,
+						"invalid syscall arg: %s\n",
+						argv[argi + (int)i]);
+					return 1;
+				}
+			}
+		}
+	}
+
+	if (strcmp(argv[1], "rcall") == 0 || strcmp(argv[1], "rcallx8") == 0) {
+		uint32_t i;
+		int argi;
+
+		if ((strcmp(argv[1], "rcall") == 0 && argc < 4) ||
+		    (strcmp(argv[1], "rcallx8") == 0 && argc < 5)) {
+			usage(argv[0]);
+			return 1;
+		}
+		if (parse_u64_value(argv[3], &remote_call_pc) < 0) {
+			fprintf(stderr, "invalid remote call pc: %s\n", argv[3]);
+			return 1;
+		}
+		argi = 4;
+		if (strcmp(argv[1], "rcallx8") == 0) {
+			if (parse_u64_value(argv[4], &remote_call_x8) < 0) {
+				fprintf(stderr, "invalid remote call x8: %s\n",
+					argv[4]);
+				return 1;
+			}
+			remote_call_flags |= LKMDBG_REMOTE_CALL_FLAG_SET_X8;
+			argi = 5;
+		}
+		remote_call_arg_count = (uint32_t)(argc - argi);
+		if (remote_call_arg_count > LKMDBG_REMOTE_CALL_MAX_ARGS) {
+			fprintf(stderr, "too many remote call args: %u (max %u)\n",
+				remote_call_arg_count,
+				LKMDBG_REMOTE_CALL_MAX_ARGS);
+			return 1;
+		}
+		for (i = 0; i < remote_call_arg_count; i++) {
+			if (parse_u64_value(argv[argi + (int)i],
+					    &remote_call_args[i]) < 0) {
+				fprintf(stderr, "invalid remote call arg: %s\n",
+					argv[argi + (int)i]);
+				return 1;
+			}
+		}
+	}
+
+	if (strcmp(argv[1], "rthread") == 0) {
+		if (argc < 7) {
+			usage(argv[0]);
+			return 1;
+		}
+		if (parse_u64_value(argv[3], &remote_thread_launcher) < 0 ||
+		    parse_u64_value(argv[4], &remote_thread_start) < 0 ||
+		    parse_u64_value(argv[5], &remote_thread_arg) < 0 ||
+		    parse_u64_value(argv[6], &remote_thread_stack) < 0) {
+			fprintf(stderr, "invalid remote thread arguments\n");
+			return 1;
+		}
+		if (argc >= 8) {
+			if (parse_u64_value(argv[7], &remote_thread_tls) < 0) {
+				fprintf(stderr, "invalid remote thread tls: %s\n",
+					argv[7]);
+				return 1;
+			}
+			remote_thread_flags |=
+				LKMDBG_REMOTE_THREAD_CREATE_FLAG_SET_TLS;
 		}
 	}
 
@@ -8228,6 +8649,92 @@ int main(int argc, char **argv)
 		       describe_syscall_trace_phases(reply.supported_phases,
 						     phase_buf,
 						     sizeof(phase_buf)));
+	} else if (strcmp(argv[1], "sysresolve") == 0) {
+		struct lkmdbg_stop_query_request stop_req;
+		struct lkmdbg_syscall_resolve_request reply;
+		uint64_t args[6] = { 0 };
+		char action_buf[16];
+		char flags_buf[32];
+		uint32_t i;
+
+		memset(&stop_req, 0, sizeof(stop_req));
+		memset(&reply, 0, sizeof(reply));
+		if (!syscall_resolve_have_action) {
+			close(session_fd);
+			return 1;
+		}
+		if (get_stop_state(session_fd, &stop_req) < 0) {
+			close(session_fd);
+			return 1;
+		}
+		if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_ACTIVE) ||
+		    stop_req.stop.reason != LKMDBG_STOP_REASON_SYSCALL ||
+		    !(stop_req.stop.flags & LKMDBG_STOP_FLAG_SYSCALL_CONTROL)) {
+			fprintf(stderr,
+				"current stop is not a controllable syscall stop\n");
+			close(session_fd);
+			return 1;
+		}
+
+		if (syscall_resolve_action ==
+		    LKMDBG_SYSCALL_RESOLVE_ACTION_REWRITE) {
+			if (!(stop_req.stop.flags & LKMDBG_STOP_FLAG_REGS_VALID)) {
+				fprintf(stderr,
+					"rewrite requires valid stop registers\n");
+				close(session_fd);
+				return 1;
+			}
+			for (i = 0; i < 6; i++)
+				args[i] = stop_req.stop.regs.regs[i];
+			for (i = 0; i < syscall_resolve_arg_count; i++)
+				args[i] = syscall_resolve_args[i];
+		}
+
+		if (resolve_syscall(session_fd, stop_req.stop.cookie,
+				    syscall_resolve_action, syscall_resolve_nr,
+				    syscall_resolve_action ==
+						    LKMDBG_SYSCALL_RESOLVE_ACTION_REWRITE
+					    ? args
+					    : NULL,
+				    syscall_resolve_retval, &reply) < 0) {
+			close(session_fd);
+			return 1;
+		}
+
+		printf("syscall_resolve.stop_cookie=%" PRIu64 "\n",
+		       (uint64_t)reply.stop_cookie);
+		printf("syscall_resolve.action=%u(%s)\n", reply.action,
+		       describe_syscall_resolve_action(reply.action, action_buf,
+						       sizeof(action_buf)));
+		printf("syscall_resolve.syscall_nr=%d\n", reply.syscall_nr);
+		printf("syscall_resolve.retval=%" PRId64 "\n",
+		       (int64_t)reply.retval);
+		printf("syscall_resolve.backend_flags=0x%x(%s)\n",
+		       reply.backend_flags,
+		       describe_syscall_resolve_flags(reply.backend_flags,
+						      flags_buf,
+						      sizeof(flags_buf)));
+	} else if (strcmp(argv[1], "rcall") == 0 ||
+		   strcmp(argv[1], "rcallx8") == 0) {
+		if (run_remote_call_workflow(session_fd, remote_call_pc,
+					     remote_call_args,
+					     remote_call_arg_count,
+					     remote_call_flags, 0, 0,
+					     remote_call_x8) < 0) {
+			close(session_fd);
+			return 1;
+		}
+	} else if (strcmp(argv[1], "rthread") == 0) {
+		if (run_remote_thread_create_workflow(session_fd,
+						      remote_thread_launcher,
+						      remote_thread_start,
+						      remote_thread_arg,
+						      remote_thread_stack,
+						      remote_thread_tls,
+						      remote_thread_flags) < 0) {
+			close(session_fd);
+			return 1;
+		}
 	} else if (strcmp(argv[1], "stealthset") == 0) {
 		struct lkmdbg_stealth_request reply;
 		char flags_buf[48];

@@ -20,6 +20,7 @@
 #define SYSFS_MODULE_PARAMS_DIR "/sys/module/lkmdbg/parameters"
 #define SYSFS_MODULE_HOLDERS_DIR "/sys/module/lkmdbg/holders"
 #define SYSFS_MODULE_SECTIONS_DIR "/sys/module/lkmdbg/sections"
+#define PROC_BUS_INPUT_DEVICES_PATH "/proc/bus/input/devices"
 
 enum probe_state {
 	PROBE_STATE_HIDDEN = 0,
@@ -307,6 +308,7 @@ static void print_report(const struct lkmdbg_status_reply *status,
 	enum probe_state debugfs_hooks_state;
 	enum probe_state kallsyms_state;
 	enum probe_state kallsyms_symbols_state;
+	enum probe_state input_devices_state;
 
 	proc_modules_state = probe_file_contains("/proc/modules", MODULE_NAME " ");
 	sysfs_module_state = probe_path_exists(SYSFS_MODULE_DIR);
@@ -319,6 +321,8 @@ static void print_report(const struct lkmdbg_status_reply *status,
 	kallsyms_state = probe_file_contains("/proc/kallsyms", " [" MODULE_NAME "]");
 	kallsyms_symbols_state =
 		probe_file_contains("/proc/kallsyms", " lkmdbg_");
+	input_devices_state =
+		probe_file_contains(PROC_BUS_INPUT_DEVICES_PATH, MODULE_NAME);
 	taint_ok = read_u64_file("/proc/sys/kernel/tainted", &taint) == 0;
 
 	printf("session_id=%" PRIu64 "\n", (uint64_t)status->session_id);
@@ -354,6 +358,8 @@ static void print_report(const struct lkmdbg_status_reply *status,
 	       describe_probe_state(kallsyms_state));
 	printf("report.exposure.kallsyms_symbols=%s\n",
 	       describe_probe_state(kallsyms_symbols_state));
+	printf("report.exposure.proc_bus_input_devices=%s\n",
+	       describe_probe_state(input_devices_state));
 	if (taint_ok)
 		printf("report.exposure.kernel_tainted=%" PRIu64 "\n", taint);
 	else

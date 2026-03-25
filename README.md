@@ -127,6 +127,14 @@ sudo ./tools/lkmdbg_stealth_ctl hide
 sudo ./tools/lkmdbg_stealth_ctl restore
 ```
 
+`report` also checks the current user-visible exposure surface, including:
+
+- `/proc/modules`
+- `/sys/module/lkmdbg*`
+- `/sys/kernel/debug/lkmdbg*`
+- `/proc/kallsyms`
+- `/proc/bus/input/devices`
+
 The current session ioctls include:
 
 - `LKMDBG_IOC_GET_STATUS`
@@ -172,6 +180,15 @@ The control flow is:
 - `LKMDBG_IOC_CONTINUE_TARGET` then releases the frozen target and lets the
   intercepted syscall complete with the chosen behavior
 
+The helper tool now exposes the same flow directly:
+
+```bash
+sudo ./tools/lkmdbg_mem_test sysset <pid> control enter [tid] [syscall_nr]
+sudo ./tools/lkmdbg_mem_test stop <pid>
+sudo ./tools/lkmdbg_mem_test sysresolve <pid> allow
+sudo ./tools/lkmdbg_mem_test cont <pid>
+```
+
 Remote call now supports optional arm64 register overrides through request
 flags:
 
@@ -188,6 +205,15 @@ top of remote call:
   normal remote-call stop
 - the ioctl returns the launcher result, created tid, remote-call id, and stop
   cookie
+
+The helper tool also provides end-to-end wrappers that freeze, pick a parked
+thread, run the operation, print the result, and resume the target:
+
+```bash
+sudo ./tools/lkmdbg_mem_test rcall <pid> <target_pc_hex> [arg0 ... arg7]
+sudo ./tools/lkmdbg_mem_test rcallx8 <pid> <target_pc_hex> <x8_hex> [arg0 ... arg7]
+sudo ./tools/lkmdbg_mem_test rthread <pid> <launcher_pc_hex> <start_pc_hex> <arg_hex> <stack_top_hex> [tls_hex]
+```
 
 Memory transfer requests now use a single batched shape:
 
