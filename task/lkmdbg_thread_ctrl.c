@@ -1994,6 +1994,7 @@ static long lkmdbg_invoke_syscall_inner_replacement(
 	struct pt_regs *regs, syscall_fn_t syscall_fn)
 {
 	bool skip = false;
+	s64 control_ret = 0;
 	long ret = 0;
 	s32 nr = -1;
 
@@ -2001,10 +2002,12 @@ static long lkmdbg_invoke_syscall_inner_replacement(
 
 	if (regs)
 		nr = (s32)syscall_get_nr(current, regs);
-	lkmdbg_control_syscall_entry(regs, &nr, false, &skip, &ret);
+	lkmdbg_control_syscall_entry(regs, &nr, false, &skip, &control_ret);
 	lkmdbg_syscall_enter_broadcast_regs(regs, nr);
 	if (!skip && lkmdbg_invoke_syscall_inner_orig)
 		ret = lkmdbg_invoke_syscall_inner_orig(regs, syscall_fn);
+	else if (skip)
+		ret = (long)control_ret;
 	lkmdbg_syscall_exit_broadcast_regs(regs, nr, ret);
 
 	if (atomic_dec_and_test(&lkmdbg_syscall_enter_inflight))
