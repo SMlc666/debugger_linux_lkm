@@ -152,6 +152,28 @@ static int create_test_memfd(const char *name)
 	return -1;
 }
 
+static int64_t child_raw_syscall0(long nr)
+{
+#if defined(__aarch64__)
+	register long x8 __asm__("x8") = nr;
+	register long x0 __asm__("x0");
+
+	__asm__ volatile("svc #0"
+			 : "=r"(x0)
+			 : "r"(x8)
+			 : "memory");
+	return (int64_t)x0;
+#else
+	long ret;
+
+	errno = 0;
+	ret = syscall(nr);
+	if (ret == -1 && errno)
+		return -(int64_t)errno;
+	return (int64_t)ret;
+#endif
+}
+
 enum {
 	CHILD_OP_QUERY_NOFAULT = 1,
 	CHILD_OP_EXIT = 2,
@@ -4105,10 +4127,8 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 			break;
 		case CHILD_OP_TRIGGER_SYSCALL:
 		{
-			int64_t retval = syscall(SYS_getppid);
+			int64_t retval = child_raw_syscall0(SYS_getppid);
 
-			if (retval < 0)
-				return 2;
 			if (write_full(resp_fd, &retval, sizeof(retval)) !=
 			    (ssize_t)sizeof(retval))
 				return 2;
