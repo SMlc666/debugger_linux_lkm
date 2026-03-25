@@ -151,6 +151,26 @@ jobs:
           path: ${{ env.KERNEL_OUT_DIR }}
           key: ${{ runner.os }}-qemu-arm64-kernel-out-${{ matrix.cache_suffix }}-v4
 
+      - name: Inspect restored QEMU kernel cache
+        id: qemu-kernel-cache-state
+        run: |
+          IMAGE_PATH="$KERNEL_OUT_DIR/arch/arm64/boot/Image"
+          SYMVERS_PATH="$KERNEL_OUT_DIR/Module.symvers"
+          CONFIG_PATH="$KERNEL_OUT_DIR/.config"
+          if [ -f "$IMAGE_PATH" ] && [ -f "$SYMVERS_PATH" ] && [ -f "$CONFIG_PATH" ]; then
+            echo "cache_complete=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "cache_complete=false" >>"$GITHUB_OUTPUT"
+          fi
+          if [ "${{ steps.qemu-kernel-cache.outputs.cache-hit }}" = "true" ] && \
+             [ -f "$IMAGE_PATH" ] && \
+             [ -f "$SYMVERS_PATH" ] && \
+             [ -f "$CONFIG_PATH" ]; then
+            echo "reuse_kernel=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "reuse_kernel=false" >>"$GITHUB_OUTPUT"
+          fi
+
       - name: Fetch upstream Linux
         run: |
           git clone --depth=1 --branch "$KERNEL_REF" "$KERNEL_REPO" \
@@ -168,9 +188,7 @@ jobs:
             CC="aarch64-linux-gnu-gcc"
             HOSTCC="gcc"
           )
-          if [ ! -f "$OUT_DIR/arch/arm64/boot/Image" ] || \
-             [ ! -f "$OUT_DIR/Module.symvers" ] || \
-             [ "${{ steps.qemu-kernel-cache.outputs.cache-hit }}" != "true" ]; then
+          if [ "${{ steps.qemu-kernel-cache-state.outputs.reuse_kernel }}" != "true" ]; then
             make "${COMMON_ARGS[@]}" defconfig
             "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
               -e DEBUG_FS \
@@ -195,6 +213,19 @@ jobs:
             CC="aarch64-linux-gnu-gcc" \
             HOSTCC="gcc" \
             -j"$(nproc)" modules
+
+      - name: Verify rebuilt QEMU kernel cache
+        id: qemu-kernel-cache-verify
+        if: always()
+        run: |
+          IMAGE_PATH="$KERNEL_OUT_DIR/arch/arm64/boot/Image"
+          SYMVERS_PATH="$KERNEL_OUT_DIR/Module.symvers"
+          CONFIG_PATH="$KERNEL_OUT_DIR/.config"
+          if [ -f "$IMAGE_PATH" ] && [ -f "$SYMVERS_PATH" ] && [ -f "$CONFIG_PATH" ]; then
+            echo "cache_complete=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "cache_complete=false" >>"$GITHUB_OUTPUT"
+          fi
 
       - name: Build QEMU initramfs
         run: |
@@ -257,7 +288,7 @@ jobs:
           if-no-files-found: error
 
       - name: Save QEMU kernel output cache
-        if: always()
+        if: success() && steps.qemu-kernel-cache-state.outputs.reuse_kernel != 'true' && steps.qemu-kernel-cache-verify.outputs.cache_complete == 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.KERNEL_OUT_DIR }}
