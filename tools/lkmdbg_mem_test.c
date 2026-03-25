@@ -5780,7 +5780,8 @@ signal_fail:
 	return -1;
 }
 
-static int verify_syscall_trace(int session_fd, int cmd_fd, pid_t child)
+static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
+				pid_t child)
 {
 	struct lkmdbg_syscall_trace_request trace_req;
 	struct lkmdbg_event_record event;
@@ -5880,6 +5881,8 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, pid_t child)
 		goto fail;
 	}
 
+	if (child_ping(cmd_fd, resp_fd) < 0)
+		goto fail;
 	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SYSCALL) < 0)
 		goto fail;
 
@@ -5931,6 +5934,8 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, pid_t child)
 	}
 
 	if (drain_session_events(session_fd) < 0)
+		goto fail;
+	if (child_ping(cmd_fd, resp_fd) < 0)
 		goto fail;
 	if (send_child_command(cmd_fd, CHILD_OP_TRIGGER_SYSCALL) < 0)
 		goto fail;
@@ -6814,7 +6819,8 @@ static int run_selftest(const char *prog)
 		return 1;
 	}
 
-	if (verify_syscall_trace(session_fd, cmd_pipe[1], child) < 0) {
+	if (verify_syscall_trace(session_fd, cmd_pipe[1], resp_pipe[0], child) <
+	    0) {
 		close(session_fd);
 		close(info_pipe[0]);
 		close(cmd_pipe[1]);
