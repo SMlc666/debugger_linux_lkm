@@ -76,7 +76,16 @@ static pte_t *lkmdbg_lookup_kernel_pte(unsigned long addr)
 static phys_addr_t lkmdbg_text_phys_base(void *addr)
 {
 	unsigned long base = (unsigned long)addr & PAGE_MASK;
+	pte_t *ptep;
+	pte_t pte;
 	struct page *page;
+
+	ptep = lkmdbg_lookup_kernel_pte(base);
+	if (ptep) {
+		pte = READ_ONCE(*ptep);
+		if (pte_present(pte))
+			return ((phys_addr_t)pte_pfn(pte)) << PAGE_SHIFT;
+	}
 
 	if (is_vmalloc_addr((const void *)base)) {
 		page = vmalloc_to_page((const void *)base);
@@ -129,20 +138,20 @@ static int lkmdbg_write_text_insn(void *addr, u32 insn)
 	if (!lkmdbg_symbols.flush_icache_range)
 		return -ENOENT;
 
-	ret = lkmdbg_alias_map_page(addr, &alias_addr);
-	if (ret)
-		return ret;
-
-	/*
-	 * Use raw stores through the writable alias mapping for both code and
-	 * literal slots in the trampoline sequence. Some arm64 patch helpers
-	 * may reject or transform non-instruction words.
-	 */
-	WRITE_ONCE(*(u32 *)alias_addr, insn);
+	if (lkmdbg_symbols.aarch64_insn_patch_text_nosync) {
+		ret = lkmdbg_symbols.aarch64_insn_patch_text_nosync(addr, insn);
+		if (ret)
+			return ret;
+	} else {
+		ret = lkmdbg_alias_map_page(addr, &alias_addr);
+		if (ret)
+			return ret;
+		WRITE_ONCE(*(u32 *)alias_addr, insn);
+		lkmdbg_alias_unmap_page();
+	}
 
 	lkmdbg_symbols.flush_icache_range((unsigned long)addr,
 					  (unsigned long)addr + sizeof(insn));
-	lkmdbg_alias_unmap_page();
 	return 0;
 }
 
