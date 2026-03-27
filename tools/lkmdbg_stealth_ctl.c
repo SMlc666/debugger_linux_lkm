@@ -207,6 +207,17 @@ numeric:
 	return 0;
 }
 
+static uint32_t compute_report_flags(uint32_t supported_flags)
+{
+	uint32_t flags = 0;
+
+	if (supported_flags & LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN)
+		flags |= LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN;
+	if (supported_flags & LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN)
+		flags |= LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN;
+	return flags;
+}
+
 static void print_usage(const char *prog)
 {
 	fprintf(stderr,
@@ -380,10 +391,14 @@ int main(int argc, char **argv)
 {
 	struct lkmdbg_status_reply status;
 	struct lkmdbg_stealth_request stealth;
+	struct lkmdbg_stealth_request orig_stealth;
+	struct lkmdbg_stealth_request applied_stealth;
 	const char *cmd;
 	uint32_t flags = 0;
+	uint32_t report_flags = 0;
 	int session_fd;
 	int ret = 1;
+	bool need_restore = false;
 
 	if (argc < 2) {
 		print_usage(argv[0]);
@@ -419,10 +434,22 @@ int main(int argc, char **argv)
 
 	memset(&status, 0, sizeof(status));
 	memset(&stealth, 0, sizeof(stealth));
+	memset(&orig_stealth, 0, sizeof(orig_stealth));
+	memset(&applied_stealth, 0, sizeof(applied_stealth));
 
-	if (strcmp(cmd, "show") == 0 || strcmp(cmd, "report") == 0) {
+	if (strcmp(cmd, "show") == 0) {
 		if (get_stealth(session_fd, &stealth) < 0)
 			goto out;
+		if (get_status(session_fd, &status) < 0)
+			goto out;
+	} else if (strcmp(cmd, "report") == 0) {
+		if (get_stealth(session_fd, &orig_stealth) < 0)
+			goto out;
+		report_flags = compute_report_flags(orig_stealth.supported_flags);
+		if (set_stealth(session_fd, report_flags, &applied_stealth) < 0)
+			goto out;
+		need_restore = true;
+		stealth = applied_stealth;
 		if (get_status(session_fd, &status) < 0)
 			goto out;
 	} else {
@@ -439,6 +466,14 @@ int main(int argc, char **argv)
 	ret = 0;
 
 out:
+	if (need_restore &&
+	    set_stealth(session_fd, orig_stealth.flags, NULL) < 0) {
+		fprintf(stderr,
+			"warning: failed to restore stealth flags to 0x%x\n",
+			orig_stealth.flags);
+		if (ret == 0)
+			ret = 1;
+	}
 	close(session_fd);
 	return ret;
 }
