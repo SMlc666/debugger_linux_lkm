@@ -28,11 +28,7 @@ static bool lkmdbg_owner_proc_hidden_enabled;
 
 static void *lkmdbg_lookup_has_pid_permissions(void)
 {
-	if (!lkmdbg_symbols.kallsyms_lookup_name)
-		return NULL;
-
-	return (void *)
-		lkmdbg_symbols.kallsyms_lookup_name("has_pid_permissions");
+	return (void *)lkmdbg_lookup_runtime_symbol_any("has_pid_permissions");
 }
 
 static ssize_t lkmdbg_seq_read_replacement(struct file *file, char __user *buf,

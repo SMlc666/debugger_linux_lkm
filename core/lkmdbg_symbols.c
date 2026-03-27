@@ -23,6 +23,11 @@ static unsigned long lkmdbg_lookup_runtime_symbol(const char *name)
 	return addr;
 }
 
+unsigned long lkmdbg_lookup_runtime_symbol_any(const char *name)
+{
+	return lkmdbg_lookup_runtime_symbol(name);
+}
+
 static int lkmdbg_resolve_runtime_symbols(void)
 {
 	static struct kprobe kp = {
