@@ -783,16 +783,17 @@ int main(void)
 			printf("%s", report_buf);
 			fflush(stdout);
 			qemu_check(strstr(report_buf,
-					  "report.stealth.flags=0x1(debugfs)") != NULL,
+					  "report.stealth.flags=0x6(modulehide,sysfshide)") !=
+					   NULL,
 				   "missing_report_stealth_flags");
 			qemu_check(strstr(report_buf,
-					  "report.exposure.proc_modules=visible") != NULL,
+					  "report.exposure.proc_modules=hidden") != NULL,
 				   "missing_report_proc_modules");
 			qemu_check(strstr(report_buf,
-					  "report.exposure.sysfs_module=visible") != NULL,
+					  "report.exposure.sysfs_module=hidden") != NULL,
 				   "missing_report_sysfs_module");
 			qemu_check(strstr(report_buf,
-					  "report.exposure.debugfs_dir=visible") != NULL,
+					  "report.exposure.debugfs_dir=hidden") != NULL,
 				   "missing_report_debugfs_dir");
 			qemu_check(strstr(report_buf,
 					  "report.bootstrap.proc_open_successes=") != NULL,
@@ -804,10 +805,10 @@ int main(void)
 					  "report.exposure.sysfs_sections=") != NULL,
 				   "missing_report_sysfs_sections");
 			qemu_check(strstr(report_buf,
-					  "report.exposure.debugfs_status=visible") != NULL,
+					  "report.exposure.debugfs_status=hidden") != NULL,
 				   "missing_report_debugfs_status");
 			qemu_check(strstr(report_buf,
-					  "report.exposure.debugfs_hooks=visible") != NULL,
+					  "report.exposure.debugfs_hooks=hidden") != NULL,
 				   "missing_report_debugfs_hooks");
 			qemu_check(strstr(report_buf,
 					  "report.exposure.kallsyms_symbols=") != NULL,
