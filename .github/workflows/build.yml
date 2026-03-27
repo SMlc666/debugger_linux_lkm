@@ -149,7 +149,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.KERNEL_OUT_DIR }}
-          key: ${{ runner.os }}-qemu-arm64-kernel-out-${{ matrix.cache_suffix }}-v4
+          key: ${{ runner.os }}-qemu-arm64-kernel-out-${{ matrix.cache_suffix }}-v5
           restore-keys: |
             ${{ runner.os }}-qemu-arm64-kernel-out-${{ matrix.cache_suffix }}-
 
@@ -312,7 +312,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ env.KERNEL_OUT_DIR }}
-          key: ${{ runner.os }}-qemu-arm64-kernel-out-${{ matrix.cache_suffix }}-v4
+          key: ${{ runner.os }}-qemu-arm64-kernel-out-${{ matrix.cache_suffix }}-v5
 
   qemu-arm64-smoke:
     runs-on: ubuntu-24.04
