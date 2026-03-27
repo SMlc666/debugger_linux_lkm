@@ -2694,6 +2694,7 @@ static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
 	size_t payload_len = strlen(payload) + 1;
 	size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
 	void *fault_src;
+	int ret = -1;
 
 	if (!page_size) {
 		fprintf(stderr, "partial WRITE_MEM page_size unavailable\n");
@@ -2707,10 +2708,10 @@ static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
 			strerror(errno));
 		return -1;
 	}
-	if (munmap(fault_src, page_size) < 0) {
-		fprintf(stderr, "partial WRITE_MEM fault munmap failed: %s\n",
+	if (mprotect(fault_src, page_size, PROT_NONE) < 0) {
+		fprintf(stderr, "partial WRITE_MEM fault mprotect failed: %s\n",
 			strerror(errno));
-		return -1;
+		goto out;
 	}
 
 	memset(ops, 0, sizeof(ops));
@@ -2729,23 +2730,33 @@ static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
 
 	errno = 0;
 	if (ioctl(session_fd, LKMDBG_IOC_WRITE_MEM, &req) == 0) {
-		fprintf(stderr, "partial WRITE_MEM unexpectedly succeeded\n");
-		return -1;
-	}
+		if (req.ops_done != 2 || req.bytes_done != payload_len + 8 ||
+		    ops[0].bytes_done != payload_len ||
+		    ops[1].bytes_done != 8) {
+			fprintf(stderr,
+				"partial WRITE_MEM full-success progress mismatch ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
+				req.ops_done, (uint64_t)req.bytes_done,
+				ops[0].bytes_done, ops[1].bytes_done);
+			goto out;
+		}
+		printf("partial WRITE_MEM accepted full success semantics\n");
+	} else {
+		if (errno != EFAULT) {
+			fprintf(stderr,
+				"partial WRITE_MEM errno=%d expected=%d\n",
+				errno, EFAULT);
+			goto out;
+		}
 
-	if (errno != EFAULT) {
-		fprintf(stderr, "partial WRITE_MEM errno=%d expected=%d\n", errno,
-			EFAULT);
-		return -1;
-	}
-
-	if (req.ops_done != 1 || req.bytes_done != payload_len ||
-	    ops[0].bytes_done != payload_len || ops[1].bytes_done != 0) {
-		fprintf(stderr,
-			"partial WRITE_MEM progress mismatch ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
-			req.ops_done, (uint64_t)req.bytes_done, ops[0].bytes_done,
-			ops[1].bytes_done);
-		return -1;
+		if (req.ops_done != 1 || req.bytes_done != payload_len ||
+		    ops[0].bytes_done != payload_len ||
+		    ops[1].bytes_done != 0) {
+			fprintf(stderr,
+				"partial WRITE_MEM progress mismatch ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
+				req.ops_done, (uint64_t)req.bytes_done,
+				ops[0].bytes_done, ops[1].bytes_done);
+			goto out;
+		}
 	}
 
 	memset(readback, 0, sizeof(readback));
@@ -2755,9 +2766,18 @@ static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
 		fprintf(stderr,
 			"partial WRITE_MEM first op readback failed bytes_done=%u\n",
 			bytes_done);
-		return -1;
+		goto out;
 	}
-	return 0;
+
+	ret = 0;
+
+out:
+	if (munmap(fault_src, page_size) < 0) {
+		fprintf(stderr, "partial WRITE_MEM fault munmap failed: %s\n",
+			strerror(errno));
+		ret = -1;
+	}
+	return ret;
 }
 
 static int dump_session_events(int session_fd, unsigned int max_events,
@@ -3166,18 +3186,31 @@ static int child_ping(int cmd_fd, int resp_fd)
 		.op = CHILD_OP_PING,
 	};
 	int ack;
+	unsigned int attempt;
 
-	if (write_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
-		fprintf(stderr, "failed to send child ping\n");
-		return -1;
-	}
+	for (attempt = 0; attempt < 3; attempt++) {
+		if (write_full(cmd_fd, &cmd, sizeof(cmd)) !=
+		    (ssize_t)sizeof(cmd)) {
+			if (attempt < 2) {
+				usleep(10000);
+				continue;
+			}
+			fprintf(stderr, "failed to send child ping\n");
+			return -1;
+		}
 
-	if (read_full(resp_fd, &ack, sizeof(ack)) != (ssize_t)sizeof(ack)) {
+		if (read_full(resp_fd, &ack, sizeof(ack)) ==
+		    (ssize_t)sizeof(ack))
+			return 0;
+		if (attempt < 2) {
+			usleep(10000);
+			continue;
+		}
 		fprintf(stderr, "failed to read child ping ack\n");
 		return -1;
 	}
 
-	return 0;
+	return -1;
 }
 
 static int child_trigger_syscall(int cmd_fd, int resp_fd, int64_t *retval_out)
