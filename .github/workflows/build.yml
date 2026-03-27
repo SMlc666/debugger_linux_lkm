@@ -150,26 +150,36 @@ jobs:
         with:
           path: ${{ env.KERNEL_OUT_DIR }}
           key: ${{ runner.os }}-qemu-arm64-kernel-out-${{ matrix.cache_suffix }}-v4
+          restore-keys: |
+            ${{ runner.os }}-qemu-arm64-kernel-out-${{ matrix.cache_suffix }}-
 
       - name: Inspect restored QEMU kernel cache
         id: qemu-kernel-cache-state
         run: |
+          cache_complete=false
+          reuse_kernel=false
           IMAGE_PATH="$KERNEL_OUT_DIR/arch/arm64/boot/Image"
           SYMVERS_PATH="$KERNEL_OUT_DIR/Module.symvers"
           CONFIG_PATH="$KERNEL_OUT_DIR/.config"
-          if [ -f "$IMAGE_PATH" ] && [ -f "$SYMVERS_PATH" ] && [ -f "$CONFIG_PATH" ]; then
-            echo "cache_complete=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "cache_complete=false" >>"$GITHUB_OUTPUT"
-          fi
-          if [ "${{ steps.qemu-kernel-cache.outputs.cache-hit }}" = "true" ] && \
-             [ -f "$IMAGE_PATH" ] && \
+          AUTOCONF_PATH="$KERNEL_OUT_DIR/include/generated/autoconf.h"
+          AUTO_CONF_PATH="$KERNEL_OUT_DIR/include/config/auto.conf"
+          FIXDEP_PATH="$KERNEL_OUT_DIR/scripts/basic/fixdep"
+          MODPOST_PATH="$KERNEL_OUT_DIR/scripts/mod/modpost"
+          if [ -f "$IMAGE_PATH" ] && \
              [ -f "$SYMVERS_PATH" ] && \
-             [ -f "$CONFIG_PATH" ]; then
-            echo "reuse_kernel=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "reuse_kernel=false" >>"$GITHUB_OUTPUT"
+             [ -f "$CONFIG_PATH" ] && \
+             [ -f "$AUTOCONF_PATH" ] && \
+             [ -f "$AUTO_CONF_PATH" ] && \
+             [ -x "$FIXDEP_PATH" ] && \
+             [ -x "$MODPOST_PATH" ]; then
+            cache_complete=true
+            reuse_kernel=true
           fi
+          echo "cache_complete=$cache_complete" >>"$GITHUB_OUTPUT"
+          echo "reuse_kernel=$reuse_kernel" >>"$GITHUB_OUTPUT"
+          echo "cache-hit=${{ steps.qemu-kernel-cache.outputs.cache-hit }}"
+          echo "cache-complete=$cache_complete"
+          echo "reuse-kernel=$reuse_kernel"
 
       - name: Fetch upstream Linux
         run: |
@@ -221,7 +231,17 @@ jobs:
           IMAGE_PATH="$KERNEL_OUT_DIR/arch/arm64/boot/Image"
           SYMVERS_PATH="$KERNEL_OUT_DIR/Module.symvers"
           CONFIG_PATH="$KERNEL_OUT_DIR/.config"
-          if [ -f "$IMAGE_PATH" ] && [ -f "$SYMVERS_PATH" ] && [ -f "$CONFIG_PATH" ]; then
+          AUTOCONF_PATH="$KERNEL_OUT_DIR/include/generated/autoconf.h"
+          AUTO_CONF_PATH="$KERNEL_OUT_DIR/include/config/auto.conf"
+          FIXDEP_PATH="$KERNEL_OUT_DIR/scripts/basic/fixdep"
+          MODPOST_PATH="$KERNEL_OUT_DIR/scripts/mod/modpost"
+          if [ -f "$IMAGE_PATH" ] && \
+             [ -f "$SYMVERS_PATH" ] && \
+             [ -f "$CONFIG_PATH" ] && \
+             [ -f "$AUTOCONF_PATH" ] && \
+             [ -f "$AUTO_CONF_PATH" ] && \
+             [ -x "$FIXDEP_PATH" ] && \
+             [ -x "$MODPOST_PATH" ]; then
             echo "cache_complete=true" >>"$GITHUB_OUTPUT"
           else
             echo "cache_complete=false" >>"$GITHUB_OUTPUT"
@@ -288,7 +308,7 @@ jobs:
           if-no-files-found: error
 
       - name: Save QEMU kernel output cache
-        if: success() && steps.qemu-kernel-cache-state.outputs.reuse_kernel != 'true' && steps.qemu-kernel-cache-verify.outputs.cache_complete == 'true'
+        if: steps.qemu-kernel-cache-state.outputs.reuse_kernel != 'true' && steps.qemu-kernel-cache-verify.outputs.cache_complete == 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.KERNEL_OUT_DIR }}
