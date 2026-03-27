@@ -278,7 +278,7 @@ static int lkmdbg_proc_pid_readdir_replacement(struct file *file,
 		goto out;
 	}
 
-	wrapped.ctx.actor = lkmdbg_proc_pid_readdir_actor;
+	wrapped.ctx.actor = (filldir_t)lkmdbg_proc_pid_readdir_actor;
 	wrapped.ctx.pos = ctx->pos;
 	wrapped.orig_ctx = ctx;
 	ret = orig(file, &wrapped.ctx);
