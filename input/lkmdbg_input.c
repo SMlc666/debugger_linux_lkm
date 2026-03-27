@@ -1038,6 +1038,7 @@ int lkmdbg_input_init(void)
 	lkmdbg_input_class = (struct class *)class_addr;
 	memset(&lkmdbg_input_class_interface, 0,
 	       sizeof(lkmdbg_input_class_interface));
+	lkmdbg_input_class_interface.name = "lkmdbg_input";
 	lkmdbg_input_class_interface.class = lkmdbg_input_class;
 	lkmdbg_input_class_interface.add_dev = lkmdbg_input_add_dev;
 	lkmdbg_input_class_interface.remove_dev = lkmdbg_input_remove_dev;

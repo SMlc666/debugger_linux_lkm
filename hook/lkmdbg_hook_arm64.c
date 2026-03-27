@@ -78,9 +78,12 @@ static phys_addr_t lkmdbg_text_phys_base(void *addr)
 	unsigned long base = (unsigned long)addr & PAGE_MASK;
 	struct page *page;
 
-	page = vmalloc_to_page((const void *)base);
-	if (page)
+	if (is_vmalloc_addr((const void *)base)) {
+		page = vmalloc_to_page((const void *)base);
+		if (!page)
+			return 0;
 		return page_to_phys(page);
+	}
 
 	return __pa_symbol(base);
 }
@@ -130,16 +133,12 @@ static int lkmdbg_write_text_insn(void *addr, u32 insn)
 	if (ret)
 		return ret;
 
-	if (lkmdbg_symbols.aarch64_insn_patch_text_nosync) {
-		ret = lkmdbg_symbols.aarch64_insn_patch_text_nosync(alias_addr,
-								    insn);
-		if (ret) {
-			lkmdbg_alias_unmap_page();
-			return ret;
-		}
-	} else {
-		WRITE_ONCE(*(u32 *)alias_addr, insn);
-	}
+	/*
+	 * Use raw stores through the writable alias mapping for both code and
+	 * literal slots in the trampoline sequence. Some arm64 patch helpers
+	 * may reject or transform non-instruction words.
+	 */
+	WRITE_ONCE(*(u32 *)alias_addr, insn);
 
 	lkmdbg_symbols.flush_icache_range((unsigned long)addr,
 					  (unsigned long)addr + sizeof(insn));
