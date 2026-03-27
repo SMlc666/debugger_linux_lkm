@@ -151,6 +151,28 @@ static bool lkmdbg_should_hide_owner_proc(pid_t tgid)
 	return task_tgid_nr(current) != hidden_tgid;
 }
 
+static void lkmdbg_owner_proc_d_drop(struct dentry *dentry)
+{
+	if (!dentry)
+		return;
+	d_drop(dentry);
+}
+
+static void lkmdbg_owner_proc_drop_inode_alias(struct inode *inode)
+{
+	struct dentry *alias;
+
+	if (!inode)
+		return;
+
+	alias = d_find_alias(inode);
+	if (!alias)
+		return;
+
+	lkmdbg_owner_proc_d_drop(alias);
+	dput(alias);
+}
+
 static ssize_t lkmdbg_seq_read_replacement(struct file *file, char __user *buf,
 					   size_t count, loff_t *ppos)
 {
@@ -252,6 +274,7 @@ lkmdbg_proc_pid_lookup_replacement(struct dentry *dentry, unsigned int flags)
 	    lkmdbg_parse_proc_pid_name(dentry->d_name.name, dentry->d_name.len,
 				       &tgid) &&
 	    lkmdbg_should_hide_owner_proc(tgid)) {
+		lkmdbg_owner_proc_d_drop(dentry);
 		ret = ERR_PTR(-ENOENT);
 		goto out;
 	}
@@ -342,8 +365,10 @@ static int lkmdbg_proc_pid_permission_apply_hide(struct inode *inode, int ret)
 	if (!task)
 		return ret;
 
-	if (lkmdbg_should_hide_owner_proc(task_tgid_nr(task)))
+	if (lkmdbg_should_hide_owner_proc(task_tgid_nr(task))) {
+		lkmdbg_owner_proc_drop_inode_alias(inode);
 		ret = -ENOENT;
+	}
 
 	put_task_struct(task);
 	return ret;
