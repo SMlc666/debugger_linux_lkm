@@ -1,8 +1,6 @@
 #include <errno.h>
-#include <fcntl.h>
 #include <inttypes.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/poll.h>
@@ -10,8 +8,10 @@
 #include <unistd.h>
 
 #include "../include/lkmdbg_ioctl.h"
+#include "driver/common.hpp"
+#include "driver/bridge_c.h"
 
-#define TARGET_PATH "/proc/version"
+#define fprintf lkmdbg_fprintf
 
 static void append_flag_name(char *buf, size_t buf_size, const char *name)
 {
@@ -92,6 +92,21 @@ static void print_status(const struct lkmdbg_status_reply *reply)
 				      sizeof(stealth_supported_buf)));
 }
 
+static void print_event_config(const struct lkmdbg_event_config_request *cfg)
+{
+	printf("event_config.version=%u\n", cfg->version);
+	printf("event_config.size=%u\n", cfg->size);
+	printf("event_config.flags=0x%x\n", cfg->flags);
+	printf("event_config.mask[0]=0x%016" PRIx64 "\n",
+	       (uint64_t)cfg->mask_words[0]);
+	printf("event_config.mask[1]=0x%016" PRIx64 "\n",
+	       (uint64_t)cfg->mask_words[1]);
+	printf("event_config.supported[0]=0x%016" PRIx64 "\n",
+	       (uint64_t)cfg->supported_mask_words[0]);
+	printf("event_config.supported[1]=0x%016" PRIx64 "\n",
+	       (uint64_t)cfg->supported_mask_words[1]);
+}
+
 static void print_event(const struct lkmdbg_event_record *event)
 {
 	printf("event.version=%u\n", event->version);
@@ -110,55 +125,50 @@ static void print_event(const struct lkmdbg_event_record *event)
 
 int main(void)
 {
-	struct lkmdbg_open_session_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-	};
 	struct lkmdbg_status_reply reply = { 0 };
+	struct lkmdbg_event_config_request event_cfg = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(event_cfg),
+	};
 	struct lkmdbg_event_record event = { 0 };
 	struct pollfd pfd = { 0 };
-	int proc_fd;
 	int session_fd;
 	ssize_t nread;
 
-	proc_fd = open(TARGET_PATH, O_RDONLY | O_CLOEXEC);
-	if (proc_fd < 0) {
-		fprintf(stderr, "open(%s) failed: %s\n", TARGET_PATH,
-			strerror(errno));
-		return 1;
-	}
-
-	session_fd = ioctl(proc_fd, LKMDBG_IOC_OPEN_SESSION, &req);
+	session_fd = open_session_fd();
 	if (session_fd < 0) {
-		fprintf(stderr, "OPEN_SESSION failed: %s\n", strerror(errno));
-		close(proc_fd);
 		return 1;
 	}
 
 	printf("session_fd=%d\n", session_fd);
 
-	if (ioctl(session_fd, LKMDBG_IOC_GET_STATUS, &reply) < 0) {
-		fprintf(stderr, "GET_STATUS failed: %s\n", strerror(errno));
+	if (get_status(session_fd, &reply) < 0) {
 		close(session_fd);
-		close(proc_fd);
 		return 1;
 	}
 
 	print_status(&reply);
+
+	if (ioctl(session_fd, LKMDBG_IOC_GET_EVENT_CONFIG, &event_cfg) < 0) {
+		fprintf(stderr, "GET_EVENT_CONFIG failed: %s\n",
+			strerror(errno));
+		close(session_fd);
+		return 1;
+	}
+
+	print_event_config(&event_cfg);
 
 	pfd.fd = session_fd;
 	pfd.events = POLLIN;
 	if (poll(&pfd, 1, 1000) < 0) {
 		fprintf(stderr, "poll failed: %s\n", strerror(errno));
 		close(session_fd);
-		close(proc_fd);
 		return 1;
 	}
 
 	if (!(pfd.revents & POLLIN)) {
 		fprintf(stderr, "poll timed out waiting for session event\n");
 		close(session_fd);
-		close(proc_fd);
 		return 1;
 	}
 
@@ -166,19 +176,16 @@ int main(void)
 	if (nread < 0) {
 		fprintf(stderr, "read event failed: %s\n", strerror(errno));
 		close(session_fd);
-		close(proc_fd);
 		return 1;
 	}
 	if ((size_t)nread != sizeof(event)) {
 		fprintf(stderr, "short read: %zd\n", nread);
 		close(session_fd);
-		close(proc_fd);
 		return 1;
 	}
 
 	print_event(&event);
 
 	close(session_fd);
-	close(proc_fd);
 	return 0;
 }

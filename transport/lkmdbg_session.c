@@ -21,6 +21,94 @@ static DEFINE_SPINLOCK(lkmdbg_session_list_lock);
 #define LKMDBG_SESSION_READ_BATCH 16U
 static void lkmdbg_session_stop_workfn(struct work_struct *work);
 
+static bool lkmdbg_event_mask_index(u32 type, u32 *word_index_out,
+				    u32 *bit_index_out)
+{
+	u32 bit_index;
+	u32 word_index;
+
+	if (!type)
+		return false;
+
+	bit_index = type - 1U;
+	word_index = bit_index / 64U;
+	if (word_index >= LKMDBG_EVENT_MASK_WORDS)
+		return false;
+
+	if (word_index_out)
+		*word_index_out = word_index;
+	if (bit_index_out)
+		*bit_index_out = bit_index % 64U;
+	return true;
+}
+
+static void lkmdbg_event_mask_set(u64 *mask_words, u32 type)
+{
+	u32 word_index;
+	u32 bit_index;
+
+	if (!lkmdbg_event_mask_index(type, &word_index, &bit_index))
+		return;
+
+	mask_words[word_index] |= 1ULL << bit_index;
+}
+
+static bool lkmdbg_event_mask_test(const u64 *mask_words, u32 type)
+{
+	u32 word_index;
+	u32 bit_index;
+
+	if (!lkmdbg_event_mask_index(type, &word_index, &bit_index))
+		return false;
+
+	return !!(mask_words[word_index] & (1ULL << bit_index));
+}
+
+static void lkmdbg_session_supported_event_mask(u64 *mask_words)
+{
+	memset(mask_words, 0, sizeof(u64) * LKMDBG_EVENT_MASK_WORDS);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_SESSION_OPENED);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_SESSION_RESET);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_INTERNAL_NOTICE);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_HOOK_INSTALLED);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_HOOK_REMOVED);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_HOOK_HIT);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_CLONE);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_EXEC);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_EXIT);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_SIGNAL);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_STOP);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_SYSCALL);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_MMAP);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_MUNMAP);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_MPROTECT);
+}
+
+static bool lkmdbg_session_event_type_enabled(const struct lkmdbg_session *session,
+					      u32 type)
+{
+	u64 mask_words[LKMDBG_EVENT_MASK_WORDS];
+	u32 i;
+
+	for (i = 0; i < LKMDBG_EVENT_MASK_WORDS; i++)
+		mask_words[i] = READ_ONCE(session->event_mask_words[i]);
+
+	return lkmdbg_event_mask_test(mask_words, type);
+}
+
+static bool lkmdbg_event_mask_supported(const u64 *mask_words,
+					const u64 *supported_mask_words)
+{
+	u32 i;
+
+	for (i = 0; i < LKMDBG_EVENT_MASK_WORDS; i++) {
+		if (mask_words[i] & ~supported_mask_words[i])
+			return false;
+	}
+
+	return true;
+}
+
 #ifdef CONFIG_ARM64
 static void lkmdbg_regs_arm64_export_control(struct lkmdbg_regs_arm64 *dst,
 					     const struct pt_regs *src)
@@ -164,6 +252,9 @@ static void lkmdbg_session_queue_event_locked(struct lkmdbg_session *session,
 	struct lkmdbg_event_record *event;
 	u32 slot;
 
+	if (!lkmdbg_session_event_type_enabled(session, type))
+		return;
+
 	slot = (session->event_head + session->event_count) %
 	       LKMDBG_SESSION_EVENT_CAPACITY;
 	if (session->event_count == LKMDBG_SESSION_EVENT_CAPACITY) {
@@ -209,6 +300,66 @@ void lkmdbg_session_queue_event_ex(struct lkmdbg_session *session, u32 type,
 	wake_up_interruptible(&session->readq);
 }
 
+long lkmdbg_set_event_config(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_event_config_request req;
+	u64 supported_mask_words[LKMDBG_EVENT_MASK_WORDS];
+	u32 i;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	if (req.version != LKMDBG_PROTO_VERSION || req.size != sizeof(req))
+		return -EINVAL;
+	if (req.flags || req.reserved0)
+		return -EINVAL;
+
+	lkmdbg_session_supported_event_mask(supported_mask_words);
+	if (!lkmdbg_event_mask_supported(req.mask_words, supported_mask_words))
+		return -EINVAL;
+
+	mutex_lock(&session->lock);
+	for (i = 0; i < LKMDBG_EVENT_MASK_WORDS; i++)
+		WRITE_ONCE(session->event_mask_words[i], req.mask_words[i]);
+	mutex_unlock(&session->lock);
+
+	for (i = 0; i < LKMDBG_EVENT_MASK_WORDS; i++)
+		req.supported_mask_words[i] = supported_mask_words[i];
+
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
+}
+
+long lkmdbg_get_event_config(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_event_config_request req;
+	u32 i;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	if (req.version != LKMDBG_PROTO_VERSION || req.size != sizeof(req))
+		return -EINVAL;
+	if (req.flags || req.reserved0)
+		return -EINVAL;
+
+	mutex_lock(&session->lock);
+	for (i = 0; i < LKMDBG_EVENT_MASK_WORDS; i++)
+		req.mask_words[i] = READ_ONCE(session->event_mask_words[i]);
+	mutex_unlock(&session->lock);
+
+	req.flags = 0;
+	req.reserved0 = 0;
+	lkmdbg_session_supported_event_mask(req.supported_mask_words);
+
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
+}
+
 struct lkmdbg_session *lkmdbg_session_consume_single_step(pid_t tgid,
 							  pid_t tid)
 {
@@ -243,6 +394,30 @@ void lkmdbg_session_async_put(struct lkmdbg_session *session)
 
 	if (atomic_dec_and_test(&session->async_refs))
 		wake_up_all(&session->async_waitq);
+}
+
+bool lkmdbg_session_has_target_event_type(pid_t target_tgid, u32 type)
+{
+	struct lkmdbg_session *session;
+	unsigned long irqflags;
+	bool matched = false;
+
+	if (target_tgid <= 0)
+		return false;
+
+	spin_lock_irqsave(&lkmdbg_session_list_lock, irqflags);
+	list_for_each_entry(session, &lkmdbg_session_list, node) {
+		if (READ_ONCE(session->target_tgid) != target_tgid)
+			continue;
+		if (!lkmdbg_session_event_type_enabled(session, type))
+			continue;
+
+		matched = true;
+		break;
+	}
+	spin_unlock_irqrestore(&lkmdbg_session_list_lock, irqflags);
+
+	return matched;
 }
 
 void lkmdbg_session_broadcast_event(u32 type, u64 value0, u64 value1)
@@ -1203,6 +1378,10 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_set_signal_config(session, argp);
 	case LKMDBG_IOC_GET_SIGNAL_CONFIG:
 		return lkmdbg_get_signal_config(session, argp);
+	case LKMDBG_IOC_SET_EVENT_CONFIG:
+		return lkmdbg_set_event_config(session, argp);
+	case LKMDBG_IOC_GET_EVENT_CONFIG:
+		return lkmdbg_get_event_config(session, argp);
 	case LKMDBG_IOC_SET_SYSCALL_TRACE:
 		return lkmdbg_set_syscall_trace(session, argp);
 	case LKMDBG_IOC_GET_SYSCALL_TRACE:
@@ -1306,6 +1485,7 @@ int lkmdbg_open_session(void __user *argp)
 	session->owner_tgid = current->tgid;
 	session->syscall_trace_nr = -1;
 	session->remote_call.session = session;
+	lkmdbg_session_supported_event_mask(session->event_mask_words);
 	lkmdbg_session_reset_syscall_control_locked(session);
 
 	mutex_lock(&lkmdbg_state.lock);

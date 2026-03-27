@@ -229,6 +229,7 @@ struct lkmdbg_session {
 	u64 next_remote_alloc_id;
 	struct list_head input_channels;
 	u64 next_input_channel_id;
+	u64 event_mask_words[LKMDBG_EVENT_MASK_WORDS];
 	u64 signal_mask_words[2];
 	u32 signal_flags;
 	s32 syscall_trace_tid;
@@ -312,12 +313,15 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 ssize_t lkmdbg_session_read(struct file *file, char __user *buf, size_t count,
 			   loff_t *ppos);
 __poll_t lkmdbg_session_poll(struct file *file, poll_table *wait);
+long lkmdbg_set_event_config(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_get_event_config(struct lkmdbg_session *session, void __user *argp);
 void lkmdbg_session_queue_event_ex(struct lkmdbg_session *session, u32 type,
 				   u32 code, pid_t tgid, pid_t tid, u32 flags,
 				   u64 value0, u64 value1);
 struct lkmdbg_session *lkmdbg_session_consume_single_step(pid_t tgid,
 							  pid_t tid);
 void lkmdbg_session_async_put(struct lkmdbg_session *session);
+bool lkmdbg_session_has_target_event_type(pid_t target_tgid, u32 type);
 void lkmdbg_session_broadcast_event(u32 type, u64 value0, u64 value1);
 void lkmdbg_session_broadcast_target_event(pid_t target_tgid, u32 type,
 					   u32 code, pid_t tid, u32 flags,

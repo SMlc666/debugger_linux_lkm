@@ -52,10 +52,22 @@ make KDIR=/path/to/kernel/build
 Build the user-space bootstrap test tool:
 
 ```bash
-cc -O2 -Wall -Wextra -o tools/lkmdbg_open_session tools/lkmdbg_open_session.c
+cc -O2 -Wall -Wextra -o tools/lkmdbg_open_session tools/lkmdbg_open_session.c tools/driver/bridge_c.c
 cc -O2 -Wall -Wextra -o tools/lkmdbg_stealth_ctl tools/lkmdbg_stealth_ctl.c
-cc -O2 -Wall -Wextra -pthread -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c
+cc -O2 -Wall -Wextra -pthread -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c tools/driver/bridge_c.c tools/driver/bridge_events.c tools/driver/bridge_memory.c tools/driver/bridge_control.c
 ```
+
+User-space driver code is split under `tools/driver/`:
+
+- `session.*` for session open/target/status
+- `events.*` for event config ioctls
+- `memory.*` for memory transfer ioctls
+- `driver.*` as a thin C++ facade
+- `bridge_c.*` for C session/status calls
+- `bridge_events.*` for C event queue helpers
+- `bridge_memory.*` for C memory xfer helpers
+- `bridge_control.*` for C control-path ioctls
+- `common.hpp` for shared logging/error formatting
 
 Load and inspect:
 
@@ -149,6 +161,8 @@ The current session ioctls include:
 - `LKMDBG_IOC_SET_REGS`
 - `LKMDBG_IOC_SET_SYSCALL_TRACE`
 - `LKMDBG_IOC_GET_SYSCALL_TRACE`
+- `LKMDBG_IOC_SET_EVENT_CONFIG`
+- `LKMDBG_IOC_GET_EVENT_CONFIG`
 - `LKMDBG_IOC_RESOLVE_SYSCALL`
 - `LKMDBG_IOC_FREEZE_THREADS`
 - `LKMDBG_IOC_THAW_THREADS`
@@ -234,7 +248,15 @@ Current session events include:
 - `LKMDBG_EVENT_TARGET_EXIT`
 - `LKMDBG_EVENT_TARGET_SIGNAL`
 - `LKMDBG_EVENT_TARGET_SYSCALL`
+- `LKMDBG_EVENT_TARGET_MMAP`
+- `LKMDBG_EVENT_TARGET_MUNMAP`
+- `LKMDBG_EVENT_TARGET_MPROTECT`
 - `LKMDBG_EVENT_TARGET_STOP`
+
+Event delivery is session-configurable:
+
+- `LKMDBG_IOC_GET_EVENT_CONFIG` returns the current mask and supported mask
+- `LKMDBG_IOC_SET_EVENT_CONFIG` applies a per-session event mask
 
 Execution and watchpoints now have two backends behind the existing session fd
 API:
@@ -286,14 +308,14 @@ Example bootstrap flow:
 
 ```bash
 sudo insmod lkmdbg.ko hook_proc_version=1
-cc -O2 -Wall -Wextra -o tools/lkmdbg_open_session tools/lkmdbg_open_session.c
+cc -O2 -Wall -Wextra -o tools/lkmdbg_open_session tools/lkmdbg_open_session.c tools/driver/bridge_c.c
 sudo ./tools/lkmdbg_open_session
 ```
 
 Example direct memory access flow:
 
 ```bash
-cc -O2 -Wall -Wextra -pthread -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c
+cc -O2 -Wall -Wextra -pthread -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c tools/driver/bridge_c.c tools/driver/bridge_events.c tools/driver/bridge_memory.c tools/driver/bridge_control.c
 sudo ./tools/lkmdbg_mem_test selftest
 sudo ./tools/lkmdbg_mem_test read <pid> <remote_addr_hex> <length>
 sudo ./tools/lkmdbg_mem_test write <pid> <remote_addr_hex> <ascii_data>

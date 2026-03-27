@@ -12,6 +12,9 @@
 #include <unistd.h>
 
 #include "../include/lkmdbg_ioctl.h"
+#include "driver/common.hpp"
+
+#define fprintf lkmdbg_fprintf
 
 #define TARGET_PATH "/proc/version"
 #define INPUT_QUERY_BATCH 32U

@@ -1,4 +1,5 @@
 #include <linux/errno.h>
+#include <linux/hashtable.h>
 #include <linux/hw_breakpoint.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
@@ -17,6 +18,7 @@
 #include <linux/tracepoint.h>
 #include <linux/uaccess.h>
 #include <linux/uio.h>
+#include <linux/unistd.h>
 
 #ifdef CONFIG_ARM64
 #include <asm/syscall.h>
@@ -32,6 +34,7 @@
 
 #define LKMDBG_HWPOINT_MAX_ENTRIES 64U
 #define LKMDBG_MMU_BREAKPOINT_PAGE_SIZE PAGE_SIZE
+#define LKMDBG_MM_EVENT_HASH_BITS 8
 
 struct linux_binprm;
 struct kernel_siginfo;
@@ -66,6 +69,17 @@ struct lkmdbg_hwpoint {
 	bool rearm_step_armed;
 	bool oneshot_complete;
 	atomic_t stop_latched;
+};
+
+struct lkmdbg_mm_event_pending {
+	struct hlist_node node;
+	pid_t tgid;
+	pid_t tid;
+	s32 syscall_nr;
+	u64 arg0;
+	u64 arg1;
+	u64 arg2;
+	u64 arg3;
 };
 
 #ifdef CONFIG_ARM64
@@ -126,6 +140,8 @@ static struct tracepoint *lkmdbg_trace_signal_tp;
 static struct tracepoint *lkmdbg_trace_sys_enter_tp;
 static struct tracepoint *lkmdbg_trace_sys_exit_tp;
 static bool lkmdbg_perf_disable_missing_logged;
+static DEFINE_HASHTABLE(lkmdbg_mm_event_pending_ht, LKMDBG_MM_EVENT_HASH_BITS);
+static DEFINE_SPINLOCK(lkmdbg_mm_event_pending_lock);
 #ifdef CONFIG_ARM64
 static struct lkmdbg_inline_hook *lkmdbg_syscall_enter_hook;
 static struct lkmdbg_hook_registry_entry *lkmdbg_syscall_enter_registry;
@@ -1813,6 +1829,172 @@ static int lkmdbg_rearm_hwpoint_locked(struct lkmdbg_hwpoint *entry)
 	return 0;
 }
 
+static u32 lkmdbg_mm_event_type_for_syscall(s32 syscall_nr)
+{
+	switch (syscall_nr) {
+#ifdef __NR_mmap
+	case __NR_mmap:
+		return LKMDBG_EVENT_TARGET_MMAP;
+#endif
+#ifdef __NR_munmap
+	case __NR_munmap:
+		return LKMDBG_EVENT_TARGET_MUNMAP;
+#endif
+#ifdef __NR_mprotect
+	case __NR_mprotect:
+		return LKMDBG_EVENT_TARGET_MPROTECT;
+#endif
+	default:
+		return 0;
+	}
+}
+
+static struct lkmdbg_mm_event_pending *
+lkmdbg_mm_event_pending_find_locked(pid_t tgid, pid_t tid)
+{
+	struct lkmdbg_mm_event_pending *pending;
+
+	hash_for_each_possible(lkmdbg_mm_event_pending_ht, pending, node,
+			       (u32)tid) {
+		if (pending->tid == tid && pending->tgid == tgid)
+			return pending;
+	}
+
+	return NULL;
+}
+
+static void lkmdbg_mm_event_pending_drop_task(pid_t tgid, pid_t tid)
+{
+	struct lkmdbg_mm_event_pending *pending;
+	unsigned long irqflags;
+
+	spin_lock_irqsave(&lkmdbg_mm_event_pending_lock, irqflags);
+	pending = lkmdbg_mm_event_pending_find_locked(tgid, tid);
+	if (pending)
+		hash_del(&pending->node);
+	spin_unlock_irqrestore(&lkmdbg_mm_event_pending_lock, irqflags);
+
+	kfree(pending);
+}
+
+static void lkmdbg_mm_event_pending_clear_all(void)
+{
+	struct lkmdbg_mm_event_pending *pending;
+	struct hlist_node *tmp;
+	unsigned int bucket;
+	unsigned long irqflags;
+
+	spin_lock_irqsave(&lkmdbg_mm_event_pending_lock, irqflags);
+	hash_for_each_safe(lkmdbg_mm_event_pending_ht, bucket, tmp, pending,
+			   node) {
+		hash_del(&pending->node);
+		kfree(pending);
+	}
+	spin_unlock_irqrestore(&lkmdbg_mm_event_pending_lock, irqflags);
+}
+
+static void lkmdbg_mm_event_track_sys_enter(struct pt_regs *regs, s32 syscall_nr)
+{
+	struct lkmdbg_mm_event_pending *pending;
+	u32 event_type;
+	unsigned long irqflags;
+
+	if (!regs || current->tgid <= 0 || current->pid <= 0)
+		return;
+
+	event_type = lkmdbg_mm_event_type_for_syscall(syscall_nr);
+	if (!event_type)
+		return;
+
+	if (!lkmdbg_session_has_target_event_type(current->tgid, event_type))
+		return;
+
+	spin_lock_irqsave(&lkmdbg_mm_event_pending_lock, irqflags);
+	pending =
+		lkmdbg_mm_event_pending_find_locked(current->tgid, current->pid);
+	if (!pending) {
+		pending = kzalloc(sizeof(*pending), GFP_ATOMIC);
+		if (!pending) {
+			spin_unlock_irqrestore(&lkmdbg_mm_event_pending_lock,
+					       irqflags);
+			return;
+		}
+		pending->tgid = current->tgid;
+		pending->tid = current->pid;
+		hash_add(lkmdbg_mm_event_pending_ht, &pending->node,
+			 (u32)pending->tid);
+	}
+
+	pending->syscall_nr = syscall_nr;
+	pending->arg0 = regs->regs[0];
+	pending->arg1 = regs->regs[1];
+	pending->arg2 = regs->regs[2];
+	pending->arg3 = regs->regs[3];
+	spin_unlock_irqrestore(&lkmdbg_mm_event_pending_lock, irqflags);
+}
+
+static void lkmdbg_mm_event_emit_sys_exit(struct pt_regs *regs, s32 syscall_nr,
+					  s64 retval)
+{
+	struct lkmdbg_mm_event_pending snapshot;
+	struct lkmdbg_mm_event_pending *pending;
+	u64 value0;
+	u64 value1;
+	unsigned long irqflags;
+	u32 event_type;
+	u32 code;
+	u32 flags;
+
+	if (!regs || current->tgid <= 0 || current->pid <= 0)
+		return;
+
+	event_type = lkmdbg_mm_event_type_for_syscall(syscall_nr);
+	if (!event_type)
+		return;
+
+	spin_lock_irqsave(&lkmdbg_mm_event_pending_lock, irqflags);
+	pending =
+		lkmdbg_mm_event_pending_find_locked(current->tgid, current->pid);
+	if (!pending || pending->syscall_nr != syscall_nr) {
+		spin_unlock_irqrestore(&lkmdbg_mm_event_pending_lock, irqflags);
+		return;
+	}
+
+	snapshot = *pending;
+	hash_del(&pending->node);
+	spin_unlock_irqrestore(&lkmdbg_mm_event_pending_lock, irqflags);
+	kfree(pending);
+
+	if (event_type == LKMDBG_EVENT_TARGET_MMAP) {
+		if (retval < 0)
+			return;
+		code = (u32)snapshot.arg2;
+		flags = (u32)snapshot.arg3;
+		value0 = (u64)retval;
+		value1 = snapshot.arg1;
+	} else if (event_type == LKMDBG_EVENT_TARGET_MUNMAP) {
+		if (retval)
+			return;
+		code = 0;
+		flags = 0;
+		value0 = snapshot.arg0;
+		value1 = snapshot.arg1;
+	} else if (event_type == LKMDBG_EVENT_TARGET_MPROTECT) {
+		if (retval)
+			return;
+		code = (u32)snapshot.arg2;
+		flags = 0;
+		value0 = snapshot.arg0;
+		value1 = snapshot.arg1;
+	} else {
+		return;
+	}
+
+	lkmdbg_session_broadcast_target_event(current->tgid, event_type, code,
+					      current->pid, flags, value0,
+					      value1);
+}
+
 static void lkmdbg_trace_sched_process_fork(void *data,
 					    struct task_struct *parent,
 					    struct task_struct *child)
@@ -1858,6 +2040,7 @@ static void lkmdbg_trace_sched_process_exit(void *data, struct task_struct *p)
 	if (!p)
 		return;
 
+	lkmdbg_mm_event_pending_drop_task(p->tgid, p->pid);
 	lkmdbg_session_broadcast_target_event(p->tgid, LKMDBG_EVENT_TARGET_EXIT,
 					      0, p->pid, 0,
 					      (u64)(unsigned int)p->exit_code,
@@ -1897,6 +2080,8 @@ static void lkmdbg_trace_raw_sys_enter(void *data, struct pt_regs *regs,
 	if (!regs || current->tgid <= 0 || current->pid <= 0 || id < 0)
 		return;
 
+	lkmdbg_mm_event_track_sys_enter(regs, (s32)id);
+
 #ifdef CONFIG_ARM64
 	lkmdbg_regs_arm64_export_stop(&stop_regs, regs);
 	stop_regs_ptr = &stop_regs;
@@ -1924,6 +2109,8 @@ static void lkmdbg_trace_raw_sys_exit(void *data, struct pt_regs *regs,
 	if (nr < 0)
 		return;
 
+	lkmdbg_mm_event_emit_sys_exit(regs, (s32)nr, (s64)ret);
+
 #ifdef CONFIG_ARM64
 	lkmdbg_regs_arm64_export_stop(&stop_regs, regs);
 	stop_regs_ptr = &stop_regs;
@@ -1943,6 +2130,8 @@ static void lkmdbg_syscall_enter_broadcast_regs(struct pt_regs *regs, s32 nr)
 	    READ_ONCE(lkmdbg_trace_sys_enter_registered))
 		return;
 
+	lkmdbg_mm_event_track_sys_enter(regs, nr);
+
 	lkmdbg_regs_arm64_export_stop(&stop_regs, regs);
 	stop_regs_ptr = &stop_regs;
 	lkmdbg_session_broadcast_syscall_event(
@@ -1959,6 +2148,8 @@ static void lkmdbg_syscall_exit_broadcast_regs(struct pt_regs *regs, s32 nr,
 	if (!regs || current->tgid <= 0 || current->pid <= 0 || nr < 0 ||
 	    READ_ONCE(lkmdbg_trace_sys_exit_registered))
 		return;
+
+	lkmdbg_mm_event_emit_sys_exit(regs, nr, retval);
 
 	lkmdbg_regs_arm64_export_stop(&stop_regs, regs);
 	stop_regs_ptr = &stop_regs;
@@ -2698,6 +2889,8 @@ int lkmdbg_thread_ctrl_init(void)
 {
 	int ret;
 
+	hash_init(lkmdbg_mm_event_pending_ht);
+
 #ifdef CONFIG_ARM64
 	lkmdbg_install_user_single_step_backend();
 #endif
@@ -2985,6 +3178,8 @@ void lkmdbg_thread_ctrl_exit(void)
 	lkmdbg_remote_vm_write_hook_kind =
 		LKMDBG_REMOTE_VM_WRITE_HOOK_NONE;
 #endif
+
+	lkmdbg_mm_event_pending_clear_all();
 }
 
 void lkmdbg_thread_ctrl_release(struct lkmdbg_session *session)

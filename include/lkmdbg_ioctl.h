@@ -4,9 +4,10 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 23
+#define LKMDBG_PROTO_VERSION 24
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
+#define LKMDBG_EVENT_MASK_WORDS 2U
 
 #define LKMDBG_EVENT_SESSION_OPENED 1
 #define LKMDBG_EVENT_SESSION_RESET 2
@@ -20,6 +21,9 @@
 #define LKMDBG_EVENT_TARGET_SIGNAL 35
 #define LKMDBG_EVENT_TARGET_STOP 36
 #define LKMDBG_EVENT_TARGET_SYSCALL 37
+#define LKMDBG_EVENT_TARGET_MMAP 38
+#define LKMDBG_EVENT_TARGET_MUNMAP 39
+#define LKMDBG_EVENT_TARGET_MPROTECT 40
 
 #define LKMDBG_THREAD_COMM_MAX 16
 
@@ -758,6 +762,15 @@ struct lkmdbg_signal_config_request {
 	__u32 reserved0;
 };
 
+struct lkmdbg_event_config_request {
+	__u32 version;
+	__u32 size;
+	__u64 mask_words[LKMDBG_EVENT_MASK_WORDS];
+	__u32 flags;
+	__u32 reserved0;
+	__u64 supported_mask_words[LKMDBG_EVENT_MASK_WORDS];
+};
+
 struct lkmdbg_syscall_trace_request {
 	__u32 version;
 	__u32 size;
@@ -934,5 +947,9 @@ struct lkmdbg_input_event {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x37, struct lkmdbg_syscall_resolve_request)
 #define LKMDBG_IOC_REMOTE_THREAD_CREATE \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x38, struct lkmdbg_remote_thread_create_request)
+#define LKMDBG_IOC_SET_EVENT_CONFIG \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x39, struct lkmdbg_event_config_request)
+#define LKMDBG_IOC_GET_EVENT_CONFIG \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x3A, struct lkmdbg_event_config_request)
 
 #endif
