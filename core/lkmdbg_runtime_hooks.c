@@ -121,7 +121,7 @@ static bool lkmdbg_should_hide_owner_proc(pid_t tgid)
 	if (!hidden_enabled || hidden_tgid <= 0 || tgid != hidden_tgid)
 		return false;
 
-	return task_tgid_nr(current) != hidden_tgid;
+	return true;
 }
 
 static void lkmdbg_owner_proc_d_drop(struct dentry *dentry)
