@@ -511,7 +511,7 @@ static void lkmdbg_session_stop_workfn(struct work_struct *work)
 
 	ret = lkmdbg_session_freeze_target(session, 1000, &freeze_req);
 	if (ret) {
-		pr_warn("lkmdbg: async stop freeze failed tgid=%d tid=%d reason=%u ret=%d\n",
+		lkmdbg_pr_warn("lkmdbg: async stop freeze failed tgid=%d tid=%d reason=%u ret=%d\n",
 			stop.tgid, stop.tid, stop.reason, ret);
 		lkmdbg_remote_call_fail_stop(session, &stop);
 		lkmdbg_session_fail_syscall_control(session);

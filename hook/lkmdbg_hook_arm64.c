@@ -276,12 +276,12 @@ static void lkmdbg_dump_text_words(const char *tag, void *addr, u32 words)
 
 		ret = lkmdbg_read_text_word((u8 *)addr + i * sizeof(u32), &word);
 		if (ret) {
-			pr_warn("lkmdbg: %s read failed addr=%px index=%u ret=%d\n",
+			lkmdbg_pr_warn("lkmdbg: %s read failed addr=%px index=%u ret=%d\n",
 				tag, addr, i, ret);
 			continue;
 		}
 
-		pr_warn("lkmdbg: %s addr=%px index=%u word=%08x\n",
+		lkmdbg_pr_warn("lkmdbg: %s addr=%px index=%u word=%08x\n",
 			tag, addr, i, word);
 	}
 }
@@ -306,7 +306,7 @@ static int lkmdbg_patch_target_words(void *addr, const u32 *insns, u32 words)
 			return 0;
 	}
 
-	pr_warn("lkmdbg: text patch verify failed addr=%px words=%u attempts=%d\n",
+	lkmdbg_pr_warn("lkmdbg: text patch verify failed addr=%px words=%u attempts=%d\n",
 		addr, words, LKMDBG_PATCH_VERIFY_ATTEMPTS);
 	lkmdbg_dump_text_words("text patch actual", addr, words);
 	return -EIO;
@@ -316,12 +316,12 @@ int lkmdbg_hooks_init(void)
 {
 	lkmdbg_alias_page = vmalloc(PAGE_SIZE);
 	if (!lkmdbg_alias_page) {
-		pr_warn("lkmdbg: alias patch page allocation failed\n");
+		lkmdbg_pr_warn("lkmdbg: alias patch page allocation failed\n");
 		return 0;
 	}
 
 	if (!lkmdbg_symbols.init_mm) {
-		pr_warn("lkmdbg: init_mm lookup unavailable, alias patch backend disabled\n");
+		lkmdbg_pr_warn("lkmdbg: init_mm lookup unavailable, alias patch backend disabled\n");
 		vfree(lkmdbg_alias_page);
 		lkmdbg_alias_page = NULL;
 		return 0;
@@ -329,7 +329,7 @@ int lkmdbg_hooks_init(void)
 
 	lkmdbg_alias_ptep = lkmdbg_lookup_kernel_pte((unsigned long)lkmdbg_alias_page);
 	if (!lkmdbg_alias_ptep) {
-		pr_warn("lkmdbg: alias patch pte lookup failed alias=%px\n",
+		lkmdbg_pr_warn("lkmdbg: alias patch pte lookup failed alias=%px\n",
 			lkmdbg_alias_page);
 		vfree(lkmdbg_alias_page);
 		lkmdbg_alias_page = NULL;
@@ -337,7 +337,7 @@ int lkmdbg_hooks_init(void)
 	}
 
 	lkmdbg_alias_pte = READ_ONCE(*lkmdbg_alias_ptep);
-	pr_info("lkmdbg: alias patch backend ready alias=%px pte=%px\n",
+	lkmdbg_pr_info("lkmdbg: alias patch backend ready alias=%px pte=%px\n",
 		lkmdbg_alias_page, lkmdbg_alias_ptep);
 	return 0;
 }
@@ -388,7 +388,7 @@ int lkmdbg_hook_alloc_exec(struct lkmdbg_inline_hook *hook)
 
 	ret = lkmdbg_make_page_executable(hook->exec_buf);
 	if (ret) {
-		pr_err("lkmdbg: exec buffer not executable addr=%px ret=%d\n",
+		lkmdbg_pr_err("lkmdbg: exec buffer not executable addr=%px ret=%d\n",
 		       hook->exec_buf, ret);
 		mutex_lock(&lkmdbg_state.lock);
 		lkmdbg_state.inline_hook_last_ret = ret;
@@ -399,7 +399,7 @@ int lkmdbg_hook_alloc_exec(struct lkmdbg_inline_hook *hook)
 		return ret;
 	}
 
-	pr_info("lkmdbg: exec buffer ready target=%px exec=%px\n",
+	lkmdbg_pr_info("lkmdbg: exec buffer ready target=%px exec=%px\n",
 		hook->target, hook->exec_buf);
 	return 0;
 }
@@ -486,7 +486,7 @@ int lkmdbg_hook_prepare_exec(struct lkmdbg_inline_hook *hook, void **orig_out)
 
 	ret = kp_hook_prepare(&hook->core);
 	if (ret) {
-		pr_err("lkmdbg: kp hook prepare failed target=%px origin=%px ret=%d\n",
+		lkmdbg_pr_err("lkmdbg: kp hook prepare failed target=%px origin=%px ret=%d\n",
 		       hook->target, hook->origin, (int)ret);
 		mutex_lock(&lkmdbg_state.lock);
 		lkmdbg_state.inline_hook_last_ret = -EINVAL;
@@ -535,7 +535,7 @@ int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
 			return ret;
 	}
 
-	pr_info("lkmdbg: kp hook patch backend=%s target=%px origin=%px\n",
+	lkmdbg_pr_info("lkmdbg: kp hook patch backend=%s target=%px origin=%px\n",
 		lkmdbg_alias_page ? "alias-vmalloc" : "unavailable",
 		hook->target, hook->origin);
 
@@ -552,7 +552,7 @@ int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
 				hook->core.origin_insts,
 				hook->core.tramp_insts_num);
 			if (rollback_ret)
-				pr_warn("lkmdbg: kp hook install rollback failed origin=%px ret=%d\n",
+				lkmdbg_pr_warn("lkmdbg: kp hook install rollback failed origin=%px ret=%d\n",
 					hook->origin, rollback_ret);
 		}
 
@@ -572,12 +572,12 @@ int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
 				hook->core.origin_insts,
 				hook->core.tramp_insts_num);
 			if (rollback_ret)
-				pr_warn("lkmdbg: kp hook install final rollback failed origin=%px ret=%d\n",
+				lkmdbg_pr_warn("lkmdbg: kp hook install final rollback failed origin=%px ret=%d\n",
 					hook->origin, rollback_ret);
 		}
 
 		if (ret) {
-			pr_err("lkmdbg: kp hook install failed target=%px origin=%px ret=%d\n",
+			lkmdbg_pr_err("lkmdbg: kp hook install failed target=%px origin=%px ret=%d\n",
 			       hook->target, hook->origin, ret);
 			mutex_lock(&lkmdbg_state.lock);
 			lkmdbg_state.inline_hook_last_ret = ret;
@@ -610,7 +610,7 @@ int lkmdbg_hook_patch_target(struct lkmdbg_inline_hook *hook, void **orig_out)
 	if (orig_out)
 		*orig_out = hook->exec_buf;
 
-	pr_info("lkmdbg: kp hook installed target=%px origin=%px replacement=%px trampoline=%px\n",
+	lkmdbg_pr_info("lkmdbg: kp hook installed target=%px origin=%px replacement=%px trampoline=%px\n",
 		hook->target, hook->origin, hook->replacement,
 		hook->exec_buf);
 	return 0;
@@ -635,7 +635,7 @@ int lkmdbg_hook_deactivate(struct lkmdbg_inline_hook *hook)
 					hook->core.origin_insts,
 					hook->core.tramp_insts_num);
 	if (ret)
-		pr_warn("lkmdbg: kp hook rollback failed origin=%px ret=%d\n",
+		lkmdbg_pr_warn("lkmdbg: kp hook rollback failed origin=%px ret=%d\n",
 			hook->origin, ret);
 
 	mutex_lock(&lkmdbg_hook_lock);

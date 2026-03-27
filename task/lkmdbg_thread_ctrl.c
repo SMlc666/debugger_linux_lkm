@@ -953,7 +953,7 @@ static int lkmdbg_mmu_install_page_fault_hook(void)
 		lkmdbg_do_page_fault_orig = orig_fn;
 	lkmdbg_hook_registry_mark_installed(lkmdbg_do_page_fault_registry, target,
 						orig_fn, 0);
-	pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
+	lkmdbg_pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
 		name, orig_fn, target);
 	return 0;
 }
@@ -1004,7 +1004,7 @@ static int lkmdbg_install_user_single_step_backend(void)
 		lkmdbg_do_el0_softstep_orig = orig_fn;
 		lkmdbg_hook_registry_mark_installed(
 			lkmdbg_do_el0_softstep_registry, target, orig_fn, 0);
-		pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
+		lkmdbg_pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
 			"do_el0_softstep", orig_fn, target);
 		return 0;
 	}
@@ -1302,7 +1302,7 @@ static int lkmdbg_mmu_install_process_vm_write_hook(void)
 
 	lkmdbg_hook_registry_mark_installed(lkmdbg_process_vm_write_registry,
 					    target, orig_fn, 0);
-	pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
+	lkmdbg_pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
 		name, orig_fn, target);
 	return 0;
 }
@@ -1358,7 +1358,7 @@ static int lkmdbg_mmu_install_remote_vm_write_hook(void)
 
 	lkmdbg_hook_registry_mark_installed(lkmdbg_remote_vm_write_registry,
 					    target, orig_fn, 0);
-	pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
+	lkmdbg_pr_info("lkmdbg: runtime hook active target=%s origin=%px trampoline=%px\n",
 		name, orig_fn, target);
 	return 0;
 }
@@ -1431,7 +1431,7 @@ static void lkmdbg_hwpoint_disable_stop_mode(struct lkmdbg_hwpoint *entry)
 	if (!disable_local_fn) {
 		if (!READ_ONCE(lkmdbg_perf_disable_missing_logged)) {
 			WRITE_ONCE(lkmdbg_perf_disable_missing_logged, true);
-			pr_warn("lkmdbg: perf_event_disable_local unavailable, stop-mode hwpoints remain armed\n");
+			lkmdbg_pr_warn("lkmdbg: perf_event_disable_local unavailable, stop-mode hwpoints remain armed\n");
 		}
 		return;
 	}
@@ -2621,7 +2621,7 @@ static int lkmdbg_register_trace_hooks(void)
 	register_fn = (lkmdbg_tracepoint_probe_register_fn)
 		lkmdbg_symbols.tracepoint_probe_register_sym;
 	if (!register_fn) {
-		pr_info("lkmdbg: tracepoint register helper unavailable\n");
+		lkmdbg_pr_info("lkmdbg: tracepoint register helper unavailable\n");
 		return 0;
 	}
 
@@ -2632,10 +2632,10 @@ static int lkmdbg_register_trace_hooks(void)
 		if (!ret)
 			lkmdbg_trace_fork_registered = true;
 		else
-			pr_warn("lkmdbg: sched_process_fork trace hook failed ret=%d\n",
+			lkmdbg_pr_warn("lkmdbg: sched_process_fork trace hook failed ret=%d\n",
 				ret);
 	} else {
-		pr_info("lkmdbg: sched_process_fork tracepoint unavailable\n");
+		lkmdbg_pr_info("lkmdbg: sched_process_fork tracepoint unavailable\n");
 	}
 
 	lkmdbg_trace_exec_tp = lkmdbg_find_tracepoint("sched_process_exec");
@@ -2645,10 +2645,10 @@ static int lkmdbg_register_trace_hooks(void)
 		if (!ret)
 			lkmdbg_trace_exec_registered = true;
 		else
-			pr_warn("lkmdbg: sched_process_exec trace hook failed ret=%d\n",
+			lkmdbg_pr_warn("lkmdbg: sched_process_exec trace hook failed ret=%d\n",
 				ret);
 	} else {
-		pr_info("lkmdbg: sched_process_exec tracepoint unavailable\n");
+		lkmdbg_pr_info("lkmdbg: sched_process_exec tracepoint unavailable\n");
 	}
 
 	lkmdbg_trace_exit_tp = lkmdbg_find_tracepoint("sched_process_exit");
@@ -2658,10 +2658,10 @@ static int lkmdbg_register_trace_hooks(void)
 		if (!ret)
 			lkmdbg_trace_exit_registered = true;
 		else
-			pr_warn("lkmdbg: sched_process_exit trace hook failed ret=%d\n",
+			lkmdbg_pr_warn("lkmdbg: sched_process_exit trace hook failed ret=%d\n",
 				ret);
 	} else {
-		pr_info("lkmdbg: sched_process_exit tracepoint unavailable\n");
+		lkmdbg_pr_info("lkmdbg: sched_process_exit tracepoint unavailable\n");
 	}
 
 	lkmdbg_trace_signal_tp = lkmdbg_find_tracepoint("signal_generate");
@@ -2671,10 +2671,10 @@ static int lkmdbg_register_trace_hooks(void)
 		if (!ret)
 			lkmdbg_trace_signal_registered = true;
 		else
-			pr_warn("lkmdbg: signal_generate trace hook failed ret=%d\n",
+			lkmdbg_pr_warn("lkmdbg: signal_generate trace hook failed ret=%d\n",
 				ret);
 	} else {
-		pr_info("lkmdbg: signal_generate tracepoint unavailable\n");
+		lkmdbg_pr_info("lkmdbg: signal_generate tracepoint unavailable\n");
 	}
 
 	lkmdbg_trace_sys_enter_tp = lkmdbg_find_tracepoint("sys_enter");
@@ -2684,10 +2684,10 @@ static int lkmdbg_register_trace_hooks(void)
 		if (!ret)
 			lkmdbg_trace_sys_enter_registered = true;
 		else
-			pr_warn("lkmdbg: raw sys_enter trace hook failed ret=%d\n",
+			lkmdbg_pr_warn("lkmdbg: raw sys_enter trace hook failed ret=%d\n",
 				ret);
 	} else {
-		pr_info("lkmdbg: raw sys_enter tracepoint unavailable\n");
+		lkmdbg_pr_info("lkmdbg: raw sys_enter tracepoint unavailable\n");
 	}
 
 	lkmdbg_trace_sys_exit_tp = lkmdbg_find_tracepoint("sys_exit");
@@ -2697,10 +2697,10 @@ static int lkmdbg_register_trace_hooks(void)
 		if (!ret)
 			lkmdbg_trace_sys_exit_registered = true;
 		else
-			pr_warn("lkmdbg: raw sys_exit trace hook failed ret=%d\n",
+			lkmdbg_pr_warn("lkmdbg: raw sys_exit trace hook failed ret=%d\n",
 				ret);
 	} else {
-		pr_info("lkmdbg: raw sys_exit tracepoint unavailable\n");
+		lkmdbg_pr_info("lkmdbg: raw sys_exit tracepoint unavailable\n");
 	}
 
 	return 0;
@@ -2784,7 +2784,7 @@ static int lkmdbg_install_syscall_enter_backend(void)
 
 	lkmdbg_hook_registry_mark_installed(lkmdbg_syscall_enter_registry, target,
 					    orig_fn, 0);
-	pr_info("lkmdbg: syscall fallback active target=%s origin=%px trampoline=%px\n",
+	lkmdbg_pr_info("lkmdbg: syscall fallback active target=%s origin=%px trampoline=%px\n",
 		name, orig_fn, target);
 	return 0;
 }

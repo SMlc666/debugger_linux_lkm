@@ -84,7 +84,7 @@ static void lkmdbg_remote_call_wait_park_quiesced(
 		!READ_ONCE(session->remote_call.park_work_queued),
 		msecs_to_jiffies(1000));
 	if (!timeout)
-		pr_warn("lkmdbg: remote call park work did not quiesce in time\n");
+		lkmdbg_pr_warn("lkmdbg: remote call park work did not quiesce in time\n");
 }
 
 static long lkmdbg_remote_call_copy_reply(void __user *argp,
@@ -249,7 +249,7 @@ static void lkmdbg_remote_call_breakpoint(struct perf_event *bp,
 		state->park_work_queued = false;
 		mutex_unlock(&session->lock);
 		wake_up_all(&session->remote_call_waitq);
-		pr_warn("lkmdbg: remote call park queue failed tid=%d ret=%d\n",
+		lkmdbg_pr_warn("lkmdbg: remote call park queue failed tid=%d ret=%d\n",
 			tid, ret);
 	}
 

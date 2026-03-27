@@ -82,7 +82,7 @@ static int lkmdbg_stealth_set_module_hidden(bool hidden)
 	mutex_unlock(lkmdbg_module_mutex);
 
 	if (actual_hidden != hidden) {
-		pr_warn("lkmdbg: stealth module-list state mismatch requested=%u actual=%u\n",
+		lkmdbg_pr_warn("lkmdbg: stealth module-list state mismatch requested=%u actual=%u\n",
 			hidden, actual_hidden);
 		ret = -EIO;
 	}
@@ -125,12 +125,12 @@ static int lkmdbg_stealth_set_sysfs_hidden(bool hidden)
 	mutex_unlock(lkmdbg_module_mutex);
 
 	if (!ret && actual_hidden != hidden) {
-		pr_warn("lkmdbg: stealth sysfs state mismatch requested=%u actual=%u\n",
+		lkmdbg_pr_warn("lkmdbg: stealth sysfs state mismatch requested=%u actual=%u\n",
 			hidden, actual_hidden);
 		ret = -EIO;
 	}
 	if (ret) {
-		pr_warn("lkmdbg: stealth sysfs transition failed hidden=%u ret=%d\n",
+		lkmdbg_pr_warn("lkmdbg: stealth sysfs transition failed hidden=%u ret=%d\n",
 			hidden, ret);
 	}
 
@@ -203,7 +203,7 @@ int lkmdbg_stealth_init(void)
 		module_hidden = lkmdbg_stealth_module_hidden_locked();
 		mutex_unlock(lkmdbg_module_mutex);
 		if (module_hidden)
-			pr_warn("lkmdbg: module list is already hidden at init; will restore on exit\n");
+			lkmdbg_pr_warn("lkmdbg: module list is already hidden at init; will restore on exit\n");
 	}
 	if ((supported_flags & LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN) &&
 	    lkmdbg_module_mutex) {
@@ -211,7 +211,7 @@ int lkmdbg_stealth_init(void)
 		sysfs_hidden = lkmdbg_stealth_sysfs_hidden_locked();
 		mutex_unlock(lkmdbg_module_mutex);
 		if (sysfs_hidden)
-			pr_warn("lkmdbg: sysfs module kobject is already hidden at init; will restore on exit\n");
+			lkmdbg_pr_warn("lkmdbg: sysfs module kobject is already hidden at init; will restore on exit\n");
 	}
 
 	mutex_lock(&lkmdbg_state.lock);
@@ -243,10 +243,10 @@ void lkmdbg_stealth_exit(void)
 
 	if (need_restore_sysfs &&
 	    lkmdbg_stealth_set_sysfs_hidden(false))
-		pr_warn("lkmdbg: failed to restore sysfs module visibility during exit\n");
+		lkmdbg_pr_warn("lkmdbg: failed to restore sysfs module visibility during exit\n");
 
 	if (need_restore && lkmdbg_stealth_set_module_hidden(false))
-		pr_warn("lkmdbg: failed to restore module list visibility during exit\n");
+		lkmdbg_pr_warn("lkmdbg: failed to restore module list visibility during exit\n");
 }
 
 long lkmdbg_set_stealth(struct lkmdbg_session *session, void __user *argp)

@@ -24,6 +24,11 @@ module_param(hook_seq_read, bool, 0444);
 MODULE_PARM_DESC(hook_seq_read,
 		 "Install a pass-through inline hook on seq_read and expose hit counters in debugfs");
 
+bool enable_kmsg;
+module_param(enable_kmsg, bool, 0644);
+MODULE_PARM_DESC(enable_kmsg,
+		 "Emit lkmdbg module logs into kmsg (disabled by default for stealth)");
+
 bool enable_debugfs;
 module_param(enable_debugfs, bool, 0644);
 MODULE_PARM_DESC(enable_debugfs,
@@ -84,9 +89,9 @@ static noinline __aligned(PAGE_SIZE) u64 lkmdbg_selftest_replacement(u64 value)
 
 static void lkmdbg_trace_stage(const char *stage)
 {
-	pr_emerg("lkmdbg: stage=%s hook_selftest_mode=%u hook_proc_version=%u bypass_kprobe_blacklist=%u bypass_cfi=%u\n",
-		 stage, hook_selftest_mode, hook_proc_version,
-		 bypass_kprobe_blacklist, bypass_cfi);
+	lkmdbg_pr_emerg("lkmdbg: stage=%s hook_selftest_mode=%u hook_proc_version=%u bypass_kprobe_blacklist=%u bypass_cfi=%u\n",
+			stage, hook_selftest_mode, hook_proc_version,
+			bypass_kprobe_blacklist, bypass_cfi);
 }
 
 static int lkmdbg_run_hook_selftest(void)
@@ -105,9 +110,9 @@ static int lkmdbg_run_hook_selftest(void)
 	expected = baseline ^ mask;
 
 	if (direct != baseline) {
-		pr_err("lkmdbg: hook selftest baseline mismatch direct=0x%llx model=0x%llx\n",
-		       (unsigned long long)direct,
-		       (unsigned long long)baseline);
+		lkmdbg_pr_err("lkmdbg: hook selftest baseline mismatch direct=0x%llx model=0x%llx\n",
+			      (unsigned long long)direct,
+			      (unsigned long long)baseline);
 		return -EIO;
 	}
 
@@ -216,12 +221,12 @@ static int lkmdbg_run_hook_selftest(void)
 	lkmdbg_state.hook_selftest_actual = actual;
 	mutex_unlock(&lkmdbg_state.lock);
 
-	pr_info("lkmdbg: hook selftest expected=0x%llx actual=0x%llx orig=%px target=%px replacement=%px\n",
-		(unsigned long long)expected,
-		(unsigned long long)actual,
-		lkmdbg_selftest_orig,
-		lkmdbg_selftest_target,
-		lkmdbg_selftest_replacement);
+	lkmdbg_pr_info("lkmdbg: hook selftest expected=0x%llx actual=0x%llx orig=%px target=%px replacement=%px\n",
+		       (unsigned long long)expected,
+		       (unsigned long long)actual,
+		       lkmdbg_selftest_orig,
+		       lkmdbg_selftest_target,
+		       lkmdbg_selftest_replacement);
 
 	if (actual != expected)
 		return -EIO;
@@ -282,7 +287,8 @@ static int __init lkmdbg_init(void)
 	if (hook_selftest_mode) {
 		ret = lkmdbg_run_hook_selftest();
 		if (ret) {
-			pr_err("lkmdbg: hook selftest failed ret=%d\n", ret);
+			lkmdbg_pr_err("lkmdbg: hook selftest failed ret=%d\n",
+				      ret);
 			lkmdbg_hooks_exit();
 			lkmdbg_stealth_exit();
 			lkmdbg_symbols_exit();
@@ -337,9 +343,9 @@ static int __init lkmdbg_init(void)
 	}
 	lkmdbg_trace_stage("thread_ctrl_ready");
 
-	pr_info("lkmdbg: loaded tag=%s hook_proc_version=%u hook_selftest_mode=%u hook_seq_read=%u kprobe_patched=%d cfi_patched=%d\n",
-		tag, hook_proc_version, hook_selftest_mode, hook_seq_read,
-		blacklist_patched, cfi_patched);
+	lkmdbg_pr_info("lkmdbg: loaded tag=%s hook_proc_version=%u hook_selftest_mode=%u hook_seq_read=%u kprobe_patched=%d cfi_patched=%d\n",
+		       tag, hook_proc_version, hook_selftest_mode,
+		       hook_seq_read, blacklist_patched, cfi_patched);
 	return 0;
 }
 
@@ -355,7 +361,7 @@ static void __exit lkmdbg_exit(void)
 	lkmdbg_hooks_exit();
 	lkmdbg_symbols_exit();
 	lkmdbg_debugfs_exit();
-	pr_info("lkmdbg: unloaded\n");
+	lkmdbg_pr_info("lkmdbg: unloaded\n");
 }
 
 MODULE_AUTHOR("OpenAI Codex");

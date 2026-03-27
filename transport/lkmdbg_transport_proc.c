@@ -269,7 +269,7 @@ void lkmdbg_transport_exit(void)
 				atomic_read(&proc_version_open_inflight) == 0,
 				msecs_to_jiffies(1000));
 			if (!remaining)
-				pr_warn("lkmdbg: proc_version_open hook drain timed out inflight=%d\n",
+				lkmdbg_pr_warn("lkmdbg: proc_version_open hook drain timed out inflight=%d\n",
 					atomic_read(&proc_version_open_inflight));
 		}
 

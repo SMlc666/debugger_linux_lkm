@@ -260,11 +260,36 @@ extern char *tag;
 extern bool hook_proc_version;
 extern unsigned int hook_selftest_mode;
 extern bool hook_seq_read;
+extern bool enable_kmsg;
 extern bool enable_debugfs;
 extern bool bypass_kprobe_blacklist;
 extern bool bypass_cfi;
 extern struct lkmdbg_state lkmdbg_state;
 extern struct lkmdbg_symbols lkmdbg_symbols;
+
+#define lkmdbg_pr_info(fmt, ...)                                              \
+	do {                                                                   \
+		if (READ_ONCE(enable_kmsg))                                    \
+			pr_info(fmt, ##__VA_ARGS__);                           \
+	} while (0)
+
+#define lkmdbg_pr_warn(fmt, ...)                                              \
+	do {                                                                   \
+		if (READ_ONCE(enable_kmsg))                                    \
+			pr_warn(fmt, ##__VA_ARGS__);                           \
+	} while (0)
+
+#define lkmdbg_pr_err(fmt, ...)                                               \
+	do {                                                                   \
+		if (READ_ONCE(enable_kmsg))                                    \
+			pr_err(fmt, ##__VA_ARGS__);                            \
+	} while (0)
+
+#define lkmdbg_pr_emerg(fmt, ...)                                             \
+	do {                                                                   \
+		if (READ_ONCE(enable_kmsg))                                    \
+			pr_emerg(fmt, ##__VA_ARGS__);                          \
+	} while (0)
 
 int lkmdbg_debugfs_init(void);
 void lkmdbg_debugfs_exit(void);

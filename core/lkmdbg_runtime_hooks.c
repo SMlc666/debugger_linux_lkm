@@ -86,7 +86,7 @@ static int lkmdbg_install_seq_read_hook(void)
 	lkmdbg_state.seq_read_hook_active = true;
 	mutex_unlock(&lkmdbg_state.lock);
 
-	pr_info("lkmdbg: runtime hook active target=seq_read origin=%px trampoline=%px\n",
+	lkmdbg_pr_info("lkmdbg: runtime hook active target=seq_read origin=%px trampoline=%px\n",
 		target, orig_fn);
 	return 0;
 }
@@ -107,7 +107,7 @@ int lkmdbg_runtime_hooks_init(void)
 
 	ret = lkmdbg_install_seq_read_hook();
 	if (ret)
-		pr_err("lkmdbg: runtime seq_read hook install failed ret=%d\n", ret);
+		lkmdbg_pr_err("lkmdbg: runtime seq_read hook install failed ret=%d\n", ret);
 
 	return ret;
 }
@@ -123,7 +123,7 @@ void lkmdbg_runtime_hooks_exit(void)
 				atomic_read(&lkmdbg_seq_read_inflight) == 0,
 				msecs_to_jiffies(1000));
 			if (!remaining)
-				pr_warn("lkmdbg: seq_read hook drain timed out inflight=%d\n",
+				lkmdbg_pr_warn("lkmdbg: seq_read hook drain timed out inflight=%d\n",
 					atomic_read(&lkmdbg_seq_read_inflight));
 		}
 
