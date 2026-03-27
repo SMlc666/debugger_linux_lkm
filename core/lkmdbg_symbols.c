@@ -25,6 +25,27 @@ static unsigned long lkmdbg_lookup_runtime_symbol(const char *name)
 	return addr;
 }
 
+static bool lkmdbg_symbol_prefix_match(const char *sym_name,
+				       const char *prefix)
+{
+	size_t prefix_len;
+
+	if (!sym_name || !prefix || !prefix[0])
+		return false;
+
+	prefix_len = strlen(prefix);
+	if (strncmp(sym_name, prefix, prefix_len) == 0 &&
+	    (sym_name[prefix_len] == '\0' || sym_name[prefix_len] == '.'))
+		return true;
+
+	if (strncmp(sym_name, "__pfx_", 6) != 0)
+		return false;
+
+	sym_name += 6;
+	return strncmp(sym_name, prefix, prefix_len) == 0 &&
+	       (sym_name[prefix_len] == '\0' || sym_name[prefix_len] == '.');
+}
+
 unsigned long lkmdbg_lookup_runtime_symbol_any(const char *name)
 {
 	return lkmdbg_lookup_runtime_symbol(name);
@@ -37,7 +58,6 @@ unsigned long lkmdbg_lookup_runtime_symbol_prefix(const char *prefix)
 	char *buf;
 	char line[256];
 	size_t line_len = 0;
-	size_t prefix_len;
 	unsigned long match_addr = 0;
 	ssize_t nr;
 	int i;
@@ -47,7 +67,6 @@ unsigned long lkmdbg_lookup_runtime_symbol_prefix(const char *prefix)
 	if (!lkmdbg_symbols.filp_open || !lkmdbg_symbols.filp_close)
 		return 0;
 
-	prefix_len = strlen(prefix);
 	fp = lkmdbg_symbols.filp_open("/proc/kallsyms", O_RDONLY, 0);
 	if (IS_ERR(fp))
 		return 0;
@@ -72,10 +91,13 @@ unsigned long lkmdbg_lookup_runtime_symbol_prefix(const char *prefix)
 				line[line_len] = '\0';
 				if (sscanf(line, "%lx %c %191s", &addr, &sym_type,
 					   sym_name) == 3 &&
-				    strncmp(sym_name, prefix, prefix_len) == 0 &&
-				    (sym_name[prefix_len] == '\0' ||
-				     sym_name[prefix_len] == '.')) {
-					match_addr = addr;
+				    lkmdbg_symbol_prefix_match(sym_name,
+							       prefix)) {
+					match_addr =
+						lkmdbg_lookup_runtime_symbol(
+							sym_name);
+					if (!match_addr)
+						match_addr = addr;
 					goto out_free;
 				}
 				line_len = 0;

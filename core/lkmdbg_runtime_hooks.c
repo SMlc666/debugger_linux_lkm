@@ -28,11 +28,26 @@ static bool lkmdbg_owner_proc_hidden_enabled;
 
 static void *lkmdbg_lookup_has_pid_permissions(void)
 {
+	static const char * const candidates[] = {
+		"has_pid_permissions",
+		"__pfx_has_pid_permissions",
+	};
 	unsigned long addr;
+	size_t i;
 
-	addr = lkmdbg_lookup_runtime_symbol_any("has_pid_permissions");
-	if (!addr)
-		addr = lkmdbg_lookup_runtime_symbol_prefix("has_pid_permissions");
+	for (i = 0; i < ARRAY_SIZE(candidates); i++) {
+		addr = lkmdbg_lookup_runtime_symbol_any(candidates[i]);
+		if (addr)
+			return (void *)addr;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(candidates); i++) {
+		addr = lkmdbg_lookup_runtime_symbol_prefix(candidates[i]);
+		if (addr)
+			return (void *)addr;
+	}
+
+	addr = lkmdbg_lookup_runtime_symbol_prefix("has_pid_permissions");
 	return (void *)addr;
 }
 
