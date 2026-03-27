@@ -9,6 +9,11 @@
 static struct mutex *lkmdbg_module_mutex;
 static struct list_head *lkmdbg_modules_head;
 
+static bool lkmdbg_stealth_module_hidden_locked(void)
+{
+	return list_empty(&THIS_MODULE->list);
+}
+
 static int lkmdbg_stealth_validate_request(struct lkmdbg_stealth_request *req)
 {
 	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
@@ -41,6 +46,9 @@ u32 lkmdbg_stealth_supported_flags(void)
 
 static int lkmdbg_stealth_set_module_hidden(bool hidden)
 {
+	bool actual_hidden;
+	int ret = 0;
+
 	if (!lkmdbg_module_mutex || !lkmdbg_modules_head)
 		return -EOPNOTSUPP;
 
@@ -54,13 +62,20 @@ static int lkmdbg_stealth_set_module_hidden(bool hidden)
 	} else if (list_empty(&THIS_MODULE->list)) {
 		list_add(&THIS_MODULE->list, lkmdbg_modules_head);
 	}
+	actual_hidden = lkmdbg_stealth_module_hidden_locked();
 	mutex_unlock(lkmdbg_module_mutex);
 
+	if (actual_hidden != hidden) {
+		pr_warn("lkmdbg: stealth module-list state mismatch requested=%u actual=%u\n",
+			hidden, actual_hidden);
+		ret = -EIO;
+	}
+
 	mutex_lock(&lkmdbg_state.lock);
-	lkmdbg_state.module_list_hidden = hidden;
+	lkmdbg_state.module_list_hidden = actual_hidden;
 	mutex_unlock(&lkmdbg_state.lock);
 
-	return 0;
+	return ret;
 }
 
 static int lkmdbg_stealth_apply_flags(u32 flags)
@@ -89,6 +104,7 @@ static int lkmdbg_stealth_apply_flags(u32 flags)
 int lkmdbg_stealth_init(void)
 {
 	u32 supported_flags = LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE;
+	bool module_hidden = false;
 
 	lkmdbg_module_mutex = NULL;
 	lkmdbg_modules_head = NULL;
@@ -102,8 +118,17 @@ int lkmdbg_stealth_init(void)
 				LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN;
 	}
 
+	if ((supported_flags & LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN) &&
+	    lkmdbg_module_mutex && lkmdbg_modules_head) {
+		mutex_lock(lkmdbg_module_mutex);
+		module_hidden = lkmdbg_stealth_module_hidden_locked();
+		mutex_unlock(lkmdbg_module_mutex);
+		if (module_hidden)
+			pr_warn("lkmdbg: module list is already hidden at init; will restore on exit\n");
+	}
+
 	mutex_lock(&lkmdbg_state.lock);
-	lkmdbg_state.module_list_hidden = false;
+	lkmdbg_state.module_list_hidden = module_hidden;
 	lkmdbg_state.stealth_supported_flags = supported_flags;
 	mutex_unlock(&lkmdbg_state.lock);
 
@@ -112,8 +137,17 @@ int lkmdbg_stealth_init(void)
 
 void lkmdbg_stealth_exit(void)
 {
-	if (READ_ONCE(lkmdbg_state.module_list_hidden))
-		lkmdbg_stealth_set_module_hidden(false);
+	bool need_restore = READ_ONCE(lkmdbg_state.module_list_hidden);
+
+	if (!need_restore &&
+	    lkmdbg_module_mutex && lkmdbg_modules_head) {
+		mutex_lock(lkmdbg_module_mutex);
+		need_restore = lkmdbg_stealth_module_hidden_locked();
+		mutex_unlock(lkmdbg_module_mutex);
+	}
+
+	if (need_restore && lkmdbg_stealth_set_module_hidden(false))
+		pr_warn("lkmdbg: failed to restore module list visibility during exit\n");
 }
 
 long lkmdbg_set_stealth(struct lkmdbg_session *session, void __user *argp)
