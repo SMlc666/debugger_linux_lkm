@@ -1926,10 +1926,17 @@ static void lkmdbg_mm_event_track_sys_enter(struct pt_regs *regs, s32 syscall_nr
 	}
 
 	pending->syscall_nr = syscall_nr;
+#ifdef CONFIG_ARM64
 	pending->arg0 = regs->regs[0];
 	pending->arg1 = regs->regs[1];
 	pending->arg2 = regs->regs[2];
 	pending->arg3 = regs->regs[3];
+#else
+	pending->arg0 = 0;
+	pending->arg1 = 0;
+	pending->arg2 = 0;
+	pending->arg3 = 0;
+#endif
 	spin_unlock_irqrestore(&lkmdbg_mm_event_pending_lock, irqflags);
 }
 
