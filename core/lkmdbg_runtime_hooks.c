@@ -454,9 +454,9 @@ int lkmdbg_runtime_hook_set_owner_proc_hidden(pid_t owner_tgid, bool hidden)
 	if (ret)
 		return ret;
 
+	lkmdbg_owner_proc_drop_cached_pid_dentry(owner_tgid);
 	WRITE_ONCE(lkmdbg_owner_proc_hidden_tgid, owner_tgid);
 	WRITE_ONCE(lkmdbg_owner_proc_hidden_enabled, true);
-	lkmdbg_owner_proc_drop_cached_pid_dentry(owner_tgid);
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.owner_proc_hidden = true;
