@@ -312,6 +312,7 @@ void lkmdbg_stealth_session_release(pid_t owner_tgid);
 int lkmdbg_symbols_init(void);
 void lkmdbg_symbols_exit(void);
 unsigned long lkmdbg_lookup_runtime_symbol_any(const char *name);
+unsigned long lkmdbg_lookup_runtime_symbol_prefix(const char *prefix);
 
 int lkmdbg_hook_registry_debugfs_show(struct seq_file *m);
 struct lkmdbg_hook_registry_entry *

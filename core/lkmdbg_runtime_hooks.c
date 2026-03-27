@@ -28,7 +28,12 @@ static bool lkmdbg_owner_proc_hidden_enabled;
 
 static void *lkmdbg_lookup_has_pid_permissions(void)
 {
-	return (void *)lkmdbg_lookup_runtime_symbol_any("has_pid_permissions");
+	unsigned long addr;
+
+	addr = lkmdbg_lookup_runtime_symbol_any("has_pid_permissions");
+	if (!addr)
+		addr = lkmdbg_lookup_runtime_symbol_prefix("has_pid_permissions");
+	return (void *)addr;
 }
 
 static ssize_t lkmdbg_seq_read_replacement(struct file *file, char __user *buf,
