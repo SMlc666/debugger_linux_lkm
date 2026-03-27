@@ -144,6 +144,8 @@ static const char *describe_flags(uint32_t flags, char *buf, size_t buf_size)
 		append_flag_name(buf, buf_size, "debugfs");
 	if (flags & LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN)
 		append_flag_name(buf, buf_size, "modulehide");
+	if (flags & LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN)
+		append_flag_name(buf, buf_size, "sysfshide");
 	if (!buf[0])
 		snprintf(buf, buf_size, "none");
 	return buf;
@@ -185,6 +187,11 @@ static int parse_flags(const char *arg, uint32_t *flags_out)
 			flags |= LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN;
 			continue;
 		}
+		if (strcmp(token, "sysfshide") == 0 ||
+		    strcmp(token, "sysfs_hidden") == 0) {
+			flags |= LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN;
+			continue;
+		}
 		free(copy);
 		goto numeric;
 	}
@@ -206,7 +213,7 @@ static void print_usage(const char *prog)
 		"usage:\n"
 		"  %s show\n"
 		"  %s report\n"
-		"  %s set <none|hide|debugfs|modulehide|debugfs,modulehide>\n"
+		"  %s set <none|hide|debugfs|modulehide|sysfshide|debugfs,modulehide,sysfshide>\n"
 		"  %s hide\n"
 		"  %s restore\n",
 		prog, prog, prog, prog, prog);

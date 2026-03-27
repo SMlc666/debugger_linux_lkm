@@ -84,6 +84,8 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 		stealth_flags |= LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE;
 	if (lkmdbg_state.module_list_hidden)
 		stealth_flags |= LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN;
+	if (lkmdbg_state.sysfs_module_hidden)
+		stealth_flags |= LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN;
 	mutex_unlock(&lkmdbg_state.lock);
 
 	hwpoint_callback_total = atomic64_read(&lkmdbg_state.hwpoint_callback_total);

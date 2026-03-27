@@ -125,8 +125,9 @@ Current stealth controls are intentionally narrow:
 
 - `debugfs` visibility can be toggled on or off at runtime
 - module-list hide only removes `lkmdbg` from `/proc/modules` and `lsmod`
-- sysfs/kobject visibility is not hidden yet
+- optional `sysfshide` removes the module kobject from `/sys/module/lkmdbg`
 - module-list hide is only accepted when the `/proc/version` hook is active, so there is still a restore path
+- `sysfshide` is also only accepted when the `/proc/version` hook is active, so there is still a restore path
 
 Example stealth flow:
 

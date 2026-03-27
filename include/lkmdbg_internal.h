@@ -62,6 +62,7 @@ struct lkmdbg_state {
 	bool debugfs_active;
 	bool proc_version_hook_active;
 	bool module_list_hidden;
+	bool sysfs_module_hidden;
 	bool hook_selftest_enabled;
 	bool hook_selftest_exec_pool_ready;
 	bool hook_selftest_exec_allocated;
