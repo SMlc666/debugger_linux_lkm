@@ -146,17 +146,26 @@ static u32 lkmdbg_input_device_flags_from_dev(struct input_dev *dev)
 static void lkmdbg_input_snapshot_string(char *dst, size_t dst_size,
 					 const char *src)
 {
-	const char *snapshot;
+	size_t max_copy;
 
 	if (!dst || !dst_size)
 		return;
 
 	memset(dst, 0, dst_size);
-	snapshot = READ_ONCE(src);
-	if (!snapshot)
+	src = READ_ONCE(src);
+	if (!src)
 		return;
 
-	strscpy(dst, snapshot, dst_size);
+	max_copy = dst_size - 1;
+	if (!max_copy)
+		return;
+
+	if (copy_from_kernel_nofault(dst, src, max_copy)) {
+		memset(dst, 0, dst_size);
+		return;
+	}
+
+	dst[dst_size - 1] = '\0';
 }
 
 static void lkmdbg_input_fill_device_entry(
@@ -1038,9 +1047,6 @@ int lkmdbg_input_init(void)
 	lkmdbg_input_class = (struct class *)class_addr;
 	memset(&lkmdbg_input_class_interface, 0,
 	       sizeof(lkmdbg_input_class_interface));
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 4, 0)
-	lkmdbg_input_class_interface.name = "lkmdbg_input";
-#endif
 	lkmdbg_input_class_interface.class = lkmdbg_input_class;
 	lkmdbg_input_class_interface.add_dev = lkmdbg_input_add_dev;
 	lkmdbg_input_class_interface.remove_dev = lkmdbg_input_remove_dev;
