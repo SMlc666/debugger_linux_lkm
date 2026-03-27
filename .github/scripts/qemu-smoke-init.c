@@ -1,5 +1,7 @@
 #define _GNU_SOURCE
 
+#include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
@@ -13,6 +15,7 @@
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/poll.h>
+#include <sys/prctl.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -40,7 +43,11 @@
 #define QEMU_INPUT_HOST_TIMEOUT_MS 15000
 #define QEMU_INPUT_IDLE_TIMEOUT_MS 250
 #define QEMU_INPUT_INJECT_TIMEOUT_MS 1000
+#define QEMU_PROC_EXPOSURE_SAMPLE_US 20000
+#define QEMU_PROC_EXPOSURE_LIFETIME_US 700000
 #define QEMU_INPUT_DEVICES_PATH "/proc/bus/input/devices"
+
+static int qemu_open_session(void);
 
 static void qemu_poweroff(void)
 {
@@ -105,6 +112,262 @@ static void qemu_read_file(const char *path, char *buf, size_t size)
 
 	buf[nr] = '\0';
 	close(fd);
+}
+
+struct qemu_proc_exposure_stats {
+	unsigned int samples;
+	unsigned int enum_hits;
+	unsigned int direct_hits;
+	unsigned int comm_hits;
+	unsigned int cmdline_hits;
+};
+
+static bool qemu_str_is_decimal(const char *s)
+{
+	size_t i;
+
+	if (!s || !s[0])
+		return false;
+
+	for (i = 0; s[i]; i++) {
+		if (!isdigit((unsigned char)s[i]))
+			return false;
+	}
+
+	return true;
+}
+
+static bool qemu_try_read_file(const char *path, char *buf, size_t size)
+{
+	int fd;
+	ssize_t nr;
+
+	if (!buf || size == 0)
+		return false;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return false;
+
+	nr = read(fd, buf, size - 1);
+	close(fd);
+	if (nr < 0)
+		return false;
+
+	buf[nr] = '\0';
+	return true;
+}
+
+static void qemu_sample_proc_exposure(pid_t pid, const char *comm_needle,
+				      const char *cmdline_needle,
+				      struct qemu_proc_exposure_stats *stats)
+{
+	char path[64];
+	char text[256];
+	bool enum_hit = false;
+	bool direct_hit = false;
+	bool comm_hit = false;
+	bool cmdline_hit = false;
+	DIR *dir;
+	struct dirent *ent;
+
+	if (!stats || pid <= 0)
+		return;
+
+	dir = opendir("/proc");
+	if (dir) {
+		while ((ent = readdir(dir)) != NULL) {
+			long v;
+			char *endp;
+
+			if (!qemu_str_is_decimal(ent->d_name))
+				continue;
+			v = strtol(ent->d_name, &endp, 10);
+			if (*endp != '\0')
+				continue;
+			if ((pid_t)v == pid) {
+				enum_hit = true;
+				break;
+			}
+		}
+		closedir(dir);
+	}
+
+	snprintf(path, sizeof(path), "/proc/%d/status", pid);
+	if (qemu_try_read_file(path, text, sizeof(text)))
+		direct_hit = true;
+
+	snprintf(path, sizeof(path), "/proc/%d/comm", pid);
+	if (qemu_try_read_file(path, text, sizeof(text)) && comm_needle &&
+	    strstr(text, comm_needle) != NULL)
+		comm_hit = true;
+
+	snprintf(path, sizeof(path), "/proc/%d/cmdline", pid);
+	if (qemu_try_read_file(path, text, sizeof(text)) && cmdline_needle &&
+	    strstr(text, cmdline_needle) != NULL)
+		cmdline_hit = true;
+
+	stats->samples++;
+	if (enum_hit)
+		stats->enum_hits++;
+	if (direct_hit)
+		stats->direct_hits++;
+	if (comm_hit)
+		stats->comm_hits++;
+	if (cmdline_hit)
+		stats->cmdline_hits++;
+}
+
+static bool qemu_run_proc_exposure_phase(const char *phase,
+					 const char *comm_name,
+					 bool enable_owner_hide,
+					 struct qemu_proc_exposure_stats *stats)
+{
+	int ready_pipe[2];
+	pid_t child;
+	int status = 0;
+	unsigned char ready_code = 0xff;
+	bool hide_enabled = false;
+
+	if (pipe(ready_pipe) != 0)
+		qemu_fail("pipe_proc_exposure_%s errno=%d", phase, errno);
+
+	child = fork();
+	if (child < 0)
+		qemu_fail("fork_proc_exposure_%s errno=%d", phase, errno);
+
+	if (child == 0) {
+		int session_fd = -1;
+		struct lkmdbg_stealth_request req = {
+			.version = LKMDBG_PROTO_VERSION,
+			.size = sizeof(req),
+		};
+		uint32_t old_flags = 0;
+
+		close(ready_pipe[0]);
+		if (comm_name)
+			prctl(PR_SET_NAME, comm_name, 0, 0, 0);
+
+		if (enable_owner_hide) {
+			session_fd = qemu_open_session();
+			if (ioctl(session_fd, LKMDBG_IOC_GET_STEALTH, &req) != 0) {
+				ready_code = 1;
+				(void)write(ready_pipe[1], &ready_code, 1);
+				_exit(3);
+			}
+			old_flags = req.flags;
+			if (!(req.supported_flags &
+			      LKMDBG_STEALTH_FLAG_OWNER_PROC_HIDDEN)) {
+				ready_code = 2;
+				(void)write(ready_pipe[1], &ready_code, 1);
+				close(session_fd);
+				_exit(0);
+			}
+			req.flags = old_flags | LKMDBG_STEALTH_FLAG_OWNER_PROC_HIDDEN;
+			if (ioctl(session_fd, LKMDBG_IOC_SET_STEALTH, &req) != 0) {
+				ready_code = 1;
+				(void)write(ready_pipe[1], &ready_code, 1);
+				close(session_fd);
+				_exit(4);
+			}
+			hide_enabled = true;
+		}
+
+		ready_code = 0;
+		(void)write(ready_pipe[1], &ready_code, 1);
+		usleep(QEMU_PROC_EXPOSURE_LIFETIME_US);
+
+		if (hide_enabled) {
+			req.flags = old_flags;
+			(void)ioctl(session_fd, LKMDBG_IOC_SET_STEALTH, &req);
+			close(session_fd);
+		}
+		close(ready_pipe[1]);
+		_exit(0);
+	}
+
+	close(ready_pipe[1]);
+	if (read(ready_pipe[0], &ready_code, 1) != 1) {
+		close(ready_pipe[0]);
+		qemu_fail("read_proc_exposure_ready_%s errno=%d", phase, errno);
+	}
+	close(ready_pipe[0]);
+
+	if (ready_code == 2) {
+		if (waitpid(child, &status, 0) < 0)
+			qemu_fail("waitpid_proc_exposure_%s errno=%d", phase, errno);
+		qemu_check(WIFEXITED(status), "proc_exposure_signal_%s status=%d",
+			   phase, status);
+		return false;
+	}
+	qemu_check(ready_code == 0, "proc_exposure_setup_fail_%s code=%u", phase,
+		   (unsigned int)ready_code);
+
+	memset(stats, 0, sizeof(*stats));
+	for (;;) {
+		pid_t waited;
+
+		qemu_sample_proc_exposure(child, comm_name, "/init", stats);
+		usleep(QEMU_PROC_EXPOSURE_SAMPLE_US);
+
+		waited = waitpid(child, &status, WNOHANG);
+		if (waited < 0)
+			qemu_fail("waitpid_proc_exposure_%s errno=%d", phase, errno);
+		if (waited == child)
+			break;
+	}
+
+	qemu_check(WIFEXITED(status), "proc_exposure_child_signal_%s status=%d",
+		   phase, status);
+	qemu_check(WEXITSTATUS(status) == 0,
+		   "proc_exposure_child_exit_%s status=%d", phase,
+		   WEXITSTATUS(status));
+	return true;
+}
+
+static void qemu_report_user_proc_exposure(void)
+{
+	struct qemu_proc_exposure_stats baseline_stats;
+	struct qemu_proc_exposure_stats hidden_stats;
+	bool hidden_ran;
+
+	qemu_run_proc_exposure_phase("baseline", "lkmdbg-base", false,
+				     &baseline_stats);
+	printf("LKMDBG_QEMU_PROC_EXPOSURE phase=baseline samples=%u enum_hits=%u direct_hits=%u comm_hits=%u cmdline_hits=%u\n",
+	       baseline_stats.samples, baseline_stats.enum_hits,
+	       baseline_stats.direct_hits, baseline_stats.comm_hits,
+	       baseline_stats.cmdline_hits);
+	fflush(stdout);
+	qemu_check(baseline_stats.samples > 0, "proc_exposure_no_samples_baseline");
+	qemu_check(baseline_stats.enum_hits > 0 || baseline_stats.direct_hits > 0,
+		   "proc_exposure_baseline_not_visible");
+
+	hidden_ran = qemu_run_proc_exposure_phase("ownerhide", "lkmdbg-hide",
+						  true, &hidden_stats);
+	if (!hidden_ran) {
+		printf("LKMDBG_QEMU_PROC_EXPOSURE phase=ownerhide skip=unsupported\n");
+		fflush(stdout);
+		return;
+	}
+
+	printf("LKMDBG_QEMU_PROC_EXPOSURE phase=ownerhide samples=%u enum_hits=%u direct_hits=%u comm_hits=%u cmdline_hits=%u\n",
+	       hidden_stats.samples, hidden_stats.enum_hits,
+	       hidden_stats.direct_hits, hidden_stats.comm_hits,
+	       hidden_stats.cmdline_hits);
+	fflush(stdout);
+
+	qemu_check(hidden_stats.enum_hits == 0,
+		   "proc_exposure_ownerhide_enum_hits=%u",
+		   hidden_stats.enum_hits);
+	qemu_check(hidden_stats.direct_hits == 0,
+		   "proc_exposure_ownerhide_direct_hits=%u",
+		   hidden_stats.direct_hits);
+	qemu_check(hidden_stats.comm_hits == 0,
+		   "proc_exposure_ownerhide_comm_hits=%u",
+		   hidden_stats.comm_hits);
+	qemu_check(hidden_stats.cmdline_hits == 0,
+		   "proc_exposure_ownerhide_cmdline_hits=%u",
+		   hidden_stats.cmdline_hits);
 }
 
 static const char *qemu_cmdline(void)
@@ -816,6 +1079,7 @@ int main(void)
 			qemu_run_tool(mem_test_argv);
 			qemu_run_tool(mmu_test_argv);
 			qemu_run_input_smoke();
+			qemu_report_user_proc_exposure();
 			printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
 			       qemu_read_status_u64("hwpoint_callback_total="),
 			       qemu_read_status_u64("breakpoint_callback_total="),

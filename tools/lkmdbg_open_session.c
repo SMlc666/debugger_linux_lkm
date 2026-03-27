@@ -45,6 +45,8 @@ static const char *describe_stealth_flags(uint32_t flags, char *buf,
 		append_flag_name(buf, buf_size, "modulehide");
 	if (flags & LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN)
 		append_flag_name(buf, buf_size, "sysfshide");
+	if (flags & LKMDBG_STEALTH_FLAG_OWNER_PROC_HIDDEN)
+		append_flag_name(buf, buf_size, "ownerprochide");
 	if (!buf[0])
 		snprintf(buf, buf_size, "none");
 	return buf;

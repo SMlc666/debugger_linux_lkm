@@ -21,6 +21,25 @@ static DEFINE_SPINLOCK(lkmdbg_session_list_lock);
 #define LKMDBG_SESSION_READ_BATCH 16U
 static void lkmdbg_session_stop_workfn(struct work_struct *work);
 
+static bool lkmdbg_session_owner_active(pid_t owner_tgid)
+{
+	struct lkmdbg_session *session;
+	bool active = false;
+
+	if (owner_tgid <= 0)
+		return false;
+
+	spin_lock(&lkmdbg_session_list_lock);
+	list_for_each_entry(session, &lkmdbg_session_list, node) {
+		if (READ_ONCE(session->owner_tgid) == owner_tgid) {
+			active = true;
+			break;
+		}
+	}
+	spin_unlock(&lkmdbg_session_list_lock);
+	return active;
+}
+
 static bool lkmdbg_event_mask_index(u32 type, u32 *word_index_out,
 				    u32 *bit_index_out)
 {
@@ -1187,6 +1206,7 @@ long lkmdbg_continue_target(struct lkmdbg_session *session, void __user *argp)
 static int lkmdbg_session_release(struct inode *inode, struct file *file)
 {
 	struct lkmdbg_session *session = file->private_data;
+	pid_t owner_tgid;
 
 	(void)inode;
 
@@ -1209,6 +1229,9 @@ static int lkmdbg_session_release(struct inode *inode, struct file *file)
 	lkmdbg_thread_ctrl_release(session);
 	lkmdbg_session_freeze_release(session);
 	wait_event(session->async_waitq, atomic_read(&session->async_refs) == 0);
+	owner_tgid = session->owner_tgid;
+	if (!lkmdbg_session_owner_active(owner_tgid))
+		lkmdbg_stealth_session_release(owner_tgid);
 
 	mutex_lock(&lkmdbg_state.lock);
 	if (lkmdbg_state.active_sessions > 0)

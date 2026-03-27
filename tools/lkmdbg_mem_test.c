@@ -3919,6 +3919,8 @@ static const char *describe_stealth_flags(uint32_t flags, char *buf,
 		append_flag_name(buf, buf_size, "modulehide");
 	if (flags & LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN)
 		append_flag_name(buf, buf_size, "sysfshide");
+	if (flags & LKMDBG_STEALTH_FLAG_OWNER_PROC_HIDDEN)
+		append_flag_name(buf, buf_size, "ownerprochide");
 	if (!buf[0])
 		snprintf(buf, buf_size, "none");
 
@@ -4486,6 +4488,12 @@ static int parse_stealth_flags(const char *arg, uint32_t *flags_out)
 		if (strcmp(token, "sysfshide") == 0 ||
 		    strcmp(token, "sysfs_hidden") == 0) {
 			flags |= LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN;
+			continue;
+		}
+		if (strcmp(token, "ownerprochide") == 0 ||
+		    strcmp(token, "owner_proc_hidden") == 0 ||
+		    strcmp(token, "ownerhide") == 0) {
+			flags |= LKMDBG_STEALTH_FLAG_OWNER_PROC_HIDDEN;
 			continue;
 		}
 		free(copy);
@@ -6129,7 +6137,7 @@ static void usage(const char *prog)
 		"  %s rcall <pid> <target_pc_hex> [arg0 ... arg7]\n"
 		"  %s rcallx8 <pid> <target_pc_hex> <x8_hex> [arg0 ... arg7]\n"
 		"  %s rthread <pid> <launcher_pc_hex> <start_pc_hex> <arg_hex> <stack_top_hex> [tls_hex]\n"
-		"  %s stealthset <pid> <none|debugfs|modulehide|sysfshide|debugfs,modulehide,sysfshide>\n"
+		"  %s stealthset <pid> <none|debugfs|modulehide|sysfshide|ownerprochide|debugfs,modulehide,sysfshide,ownerprochide>\n"
 		"  %s stealthget <pid>\n"
 		"  %s events <pid> [max_events] [timeout_ms]\n"
 		"  %s vmas <pid>\n"

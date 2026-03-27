@@ -22,6 +22,7 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	u64 inline_hook_last_replacement;
 	u64 inline_hook_last_trampoline;
 	u64 seq_read_hook_hits;
+	u64 owner_proc_hide_hook_hits;
 	u64 hwpoint_callback_total;
 	u64 breakpoint_callback_total;
 	u64 watchpoint_callback_total;
@@ -41,6 +42,9 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	bool selftest_exec_ready;
 	bool selftest_installed;
 	bool seq_read_hook_active;
+	bool owner_proc_hidden;
+	bool owner_proc_hide_hook_active;
+	pid_t owner_proc_hidden_tgid;
 	pid_t hwpoint_last_tgid;
 	pid_t hwpoint_last_tid;
 	u32 hwpoint_last_reason;
@@ -48,6 +52,7 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	int selftest_ret;
 	int inline_hook_last_ret;
 	int seq_read_hook_last_ret;
+	int owner_proc_hide_hook_last_ret;
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.status_reads++;
@@ -86,6 +91,13 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 		stealth_flags |= LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN;
 	if (lkmdbg_state.sysfs_module_hidden)
 		stealth_flags |= LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN;
+	if (lkmdbg_state.owner_proc_hidden)
+		stealth_flags |= LKMDBG_STEALTH_FLAG_OWNER_PROC_HIDDEN;
+	owner_proc_hidden = lkmdbg_state.owner_proc_hidden;
+	owner_proc_hidden_tgid = lkmdbg_state.owner_proc_hidden_tgid;
+	owner_proc_hide_hook_active = lkmdbg_state.owner_proc_hide_hook_active;
+	owner_proc_hide_hook_hits = lkmdbg_state.owner_proc_hide_hook_hits;
+	owner_proc_hide_hook_last_ret = lkmdbg_state.owner_proc_hide_hook_last_ret;
 	mutex_unlock(&lkmdbg_state.lock);
 
 	hwpoint_callback_total = atomic64_read(&lkmdbg_state.hwpoint_callback_total);
@@ -162,6 +174,14 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	seq_printf(m, "seq_read_hook_hits=%llu\n",
 		   (unsigned long long)seq_read_hook_hits);
 	seq_printf(m, "seq_read_hook_last_ret=%d\n", seq_read_hook_last_ret);
+	seq_printf(m, "owner_proc_hidden=%u\n", owner_proc_hidden);
+	seq_printf(m, "owner_proc_hidden_tgid=%d\n", owner_proc_hidden_tgid);
+	seq_printf(m, "owner_proc_hide_hook_active=%u\n",
+		   owner_proc_hide_hook_active);
+	seq_printf(m, "owner_proc_hide_hook_hits=%llu\n",
+		   (unsigned long long)owner_proc_hide_hook_hits);
+	seq_printf(m, "owner_proc_hide_hook_last_ret=%d\n",
+		   owner_proc_hide_hook_last_ret);
 	seq_printf(m, "hwpoint_callback_total=%llu\n",
 		   (unsigned long long)hwpoint_callback_total);
 	seq_printf(m, "breakpoint_callback_total=%llu\n",

@@ -63,6 +63,11 @@ struct lkmdbg_state {
 	bool proc_version_hook_active;
 	bool module_list_hidden;
 	bool sysfs_module_hidden;
+	bool owner_proc_hidden;
+	pid_t owner_proc_hidden_tgid;
+	bool owner_proc_hide_hook_active;
+	u64 owner_proc_hide_hook_hits;
+	int owner_proc_hide_hook_last_ret;
 	bool hook_selftest_enabled;
 	bool hook_selftest_exec_pool_ready;
 	bool hook_selftest_exec_allocated;
@@ -302,6 +307,7 @@ u32 lkmdbg_stealth_current_flags(void);
 u32 lkmdbg_stealth_supported_flags(void);
 long lkmdbg_set_stealth(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_get_stealth(struct lkmdbg_session *session, void __user *argp);
+void lkmdbg_stealth_session_release(pid_t owner_tgid);
 
 int lkmdbg_symbols_init(void);
 void lkmdbg_symbols_exit(void);
@@ -319,6 +325,8 @@ void lkmdbg_hook_registry_unregister(struct lkmdbg_hook_registry_entry *entry,
 
 int lkmdbg_runtime_hooks_init(void);
 void lkmdbg_runtime_hooks_exit(void);
+bool lkmdbg_runtime_hook_owner_proc_hide_supported(void);
+int lkmdbg_runtime_hook_set_owner_proc_hidden(pid_t owner_tgid, bool hidden);
 
 int lkmdbg_transport_init(void);
 void lkmdbg_transport_exit(void);

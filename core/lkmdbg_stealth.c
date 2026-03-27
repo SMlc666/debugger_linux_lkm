@@ -43,6 +43,8 @@ u32 lkmdbg_stealth_current_flags(void)
 		flags |= LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN;
 	if (lkmdbg_state.sysfs_module_hidden)
 		flags |= LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN;
+	if (lkmdbg_state.owner_proc_hidden)
+		flags |= LKMDBG_STEALTH_FLAG_OWNER_PROC_HIDDEN;
 	mutex_unlock(&lkmdbg_state.lock);
 
 	return flags;
@@ -141,12 +143,16 @@ static int lkmdbg_stealth_set_sysfs_hidden(bool hidden)
 	return ret;
 }
 
-static int lkmdbg_stealth_apply_flags(u32 flags)
+static int lkmdbg_stealth_apply_flags(struct lkmdbg_session *session, u32 flags)
 {
 	u32 old_flags;
+	pid_t old_owner_tgid;
 	int ret;
 
 	old_flags = lkmdbg_stealth_current_flags();
+	mutex_lock(&lkmdbg_state.lock);
+	old_owner_tgid = lkmdbg_state.owner_proc_hidden_tgid;
+	mutex_unlock(&lkmdbg_state.lock);
 
 	ret = lkmdbg_debugfs_set_visible(!!(flags &
 					    LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE));
@@ -168,6 +174,22 @@ static int lkmdbg_stealth_apply_flags(u32 flags)
 			!!(old_flags & LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN));
 		lkmdbg_debugfs_set_visible(!!(old_flags &
 					      LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE));
+		return ret;
+	}
+
+	ret = lkmdbg_runtime_hook_set_owner_proc_hidden(
+		session ? session->owner_tgid : 0,
+		!!(flags & LKMDBG_STEALTH_FLAG_OWNER_PROC_HIDDEN));
+	if (ret) {
+		lkmdbg_stealth_set_sysfs_hidden(
+			!!(old_flags & LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN));
+		lkmdbg_stealth_set_module_hidden(
+			!!(old_flags & LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN));
+		lkmdbg_debugfs_set_visible(!!(old_flags &
+					      LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE));
+		lkmdbg_runtime_hook_set_owner_proc_hidden(
+			old_owner_tgid,
+			!!(old_flags & LKMDBG_STEALTH_FLAG_OWNER_PROC_HIDDEN));
 		return ret;
 	}
 
@@ -196,6 +218,8 @@ int lkmdbg_stealth_init(void)
 		lkmdbg_module_kobj_parent = THIS_MODULE->mkobj.kobj.parent;
 		supported_flags |= LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN;
 	}
+	if (lkmdbg_runtime_hook_owner_proc_hide_supported())
+		supported_flags |= LKMDBG_STEALTH_FLAG_OWNER_PROC_HIDDEN;
 
 	if ((supported_flags & LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN) &&
 	    lkmdbg_module_mutex && lkmdbg_modules_head) {
@@ -217,6 +241,8 @@ int lkmdbg_stealth_init(void)
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.module_list_hidden = module_hidden;
 	lkmdbg_state.sysfs_module_hidden = sysfs_hidden;
+	lkmdbg_state.owner_proc_hidden = false;
+	lkmdbg_state.owner_proc_hidden_tgid = 0;
 	lkmdbg_state.stealth_supported_flags = supported_flags;
 	mutex_unlock(&lkmdbg_state.lock);
 
@@ -227,6 +253,7 @@ void lkmdbg_stealth_exit(void)
 {
 	bool need_restore = READ_ONCE(lkmdbg_state.module_list_hidden);
 	bool need_restore_sysfs = READ_ONCE(lkmdbg_state.sysfs_module_hidden);
+	bool need_restore_owner = READ_ONCE(lkmdbg_state.owner_proc_hidden);
 
 	if (!need_restore &&
 	    lkmdbg_module_mutex && lkmdbg_modules_head) {
@@ -247,14 +274,16 @@ void lkmdbg_stealth_exit(void)
 
 	if (need_restore && lkmdbg_stealth_set_module_hidden(false))
 		lkmdbg_pr_warn("lkmdbg: failed to restore module list visibility during exit\n");
+
+	if (need_restore_owner &&
+	    lkmdbg_runtime_hook_set_owner_proc_hidden(0, false))
+		lkmdbg_pr_warn("lkmdbg: failed to restore owner process visibility during exit\n");
 }
 
 long lkmdbg_set_stealth(struct lkmdbg_session *session, void __user *argp)
 {
 	struct lkmdbg_stealth_request req;
 	long ret;
-
-	(void)session;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
 		return -EFAULT;
@@ -263,7 +292,7 @@ long lkmdbg_set_stealth(struct lkmdbg_session *session, void __user *argp)
 	if (ret)
 		return ret;
 
-	ret = lkmdbg_stealth_apply_flags(req.flags);
+	ret = lkmdbg_stealth_apply_flags(session, req.flags);
 	if (ret)
 		return ret;
 
@@ -295,4 +324,17 @@ long lkmdbg_get_stealth(struct lkmdbg_session *session, void __user *argp)
 		return -EFAULT;
 
 	return 0;
+}
+
+void lkmdbg_stealth_session_release(pid_t owner_tgid)
+{
+	if (owner_tgid <= 0)
+		return;
+
+	if (!READ_ONCE(lkmdbg_state.owner_proc_hidden))
+		return;
+	if (READ_ONCE(lkmdbg_state.owner_proc_hidden_tgid) != owner_tgid)
+		return;
+
+	lkmdbg_runtime_hook_set_owner_proc_hidden(0, false);
 }
