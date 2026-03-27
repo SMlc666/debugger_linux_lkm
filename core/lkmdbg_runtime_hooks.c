@@ -6,6 +6,7 @@
 #include <linux/module.h>
 #include <linux/sched/signal.h>
 #include <linux/types.h>
+#include <linux/version.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
 #include <linux/mount.h>
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
@@ -51,6 +52,12 @@ struct lkmdbg_ownerhide_dir_context {
 	struct dir_context ctx;
 	struct dir_context *orig_ctx;
 };
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
+#define LKMDBG_FILLDIR_RET bool
+#else
+#define LKMDBG_FILLDIR_RET int
+#endif
 
 static void *lkmdbg_lookup_runtime_symbol_variants(const char *name)
 {
@@ -264,10 +271,10 @@ out:
 	return ret;
 }
 
-static int lkmdbg_proc_pid_readdir_actor(struct dir_context *ctx,
-					 const char *name, int namelen,
-					 loff_t offset, u64 ino,
-					 unsigned int d_type)
+static LKMDBG_FILLDIR_RET
+lkmdbg_proc_pid_readdir_actor(struct dir_context *ctx, const char *name,
+			      int namelen, loff_t offset, u64 ino,
+			      unsigned int d_type)
 {
 	struct lkmdbg_ownerhide_dir_context *wrapped =
 		container_of(ctx, struct lkmdbg_ownerhide_dir_context, ctx);
@@ -306,7 +313,7 @@ static int lkmdbg_proc_pid_readdir_replacement(struct file *file,
 		goto out;
 	}
 
-	wrapped.ctx.actor = (filldir_t)lkmdbg_proc_pid_readdir_actor;
+	wrapped.ctx.actor = lkmdbg_proc_pid_readdir_actor;
 	wrapped.ctx.pos = ctx->pos;
 	wrapped.orig_ctx = ctx;
 	ret = orig(file, &wrapped.ctx);
