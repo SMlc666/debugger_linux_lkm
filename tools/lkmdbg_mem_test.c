@@ -6935,6 +6935,11 @@ int main(int argc, char **argv)
 	uint32_t remote_thread_flags = 0;
 	unsigned int max_events = EVENT_READ_BATCH;
 
+	if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+		fprintf(stderr, "failed to ignore SIGPIPE\n");
+		return 1;
+	}
+
 	if (argc == 2 && strcmp(argv[1], "selftest") == 0)
 		return run_selftest(argv[0]);
 
