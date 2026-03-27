@@ -76,22 +76,47 @@ static pte_t *lkmdbg_lookup_kernel_pte(unsigned long addr)
 static phys_addr_t lkmdbg_text_phys_base(void *addr)
 {
 	unsigned long base = (unsigned long)addr & PAGE_MASK;
+	pgd_t *pgdp;
+	p4d_t *p4dp;
+	pud_t *pudp;
+	pmd_t *pmdp;
 	pte_t *ptep;
 	pte_t pte;
-	struct page *page;
 
-	ptep = lkmdbg_lookup_kernel_pte(base);
-	if (ptep) {
-		pte = READ_ONCE(*ptep);
-		if (pte_present(pte))
-			return ((phys_addr_t)pte_pfn(pte)) << PAGE_SHIFT;
-	}
+	if (lkmdbg_symbols.init_mm) {
+		pgdp = pgd_offset(lkmdbg_symbols.init_mm, base);
+		if (!pgd_none(*pgdp) && !pgd_bad(*pgdp)) {
+			p4dp = p4d_offset(pgdp, base);
+			if (!p4d_none(*p4dp) && !p4d_bad(*p4dp)) {
+				pudp = pud_offset(p4dp, base);
+				if (!pud_none(*pudp) && !pud_bad(*pudp)) {
+					if (pud_sect(*pudp))
+						return (((phys_addr_t)pud_pfn(*pudp))
+							<< PAGE_SHIFT) |
+						       (base & (PUD_SIZE - 1));
 
-	if (is_vmalloc_addr((const void *)base)) {
-		page = vmalloc_to_page((const void *)base);
-		if (!page)
-			return 0;
-		return page_to_phys(page);
+					pmdp = pmd_offset(pudp, base);
+					if (!pmd_none(*pmdp) &&
+					    !pmd_bad(*pmdp)) {
+						if (pmd_sect(*pmdp))
+							return (((phys_addr_t)
+								 pmd_pfn(*pmdp))
+								<< PAGE_SHIFT) |
+							       (base &
+								(PMD_SIZE - 1));
+
+						ptep = pte_offset_kernel(pmdp, base);
+						pte = READ_ONCE(*ptep);
+						if (pte_present(pte))
+							return (((phys_addr_t)
+								 pte_pfn(pte))
+								<< PAGE_SHIFT) |
+							       (base &
+								~PAGE_MASK);
+					}
+				}
+			}
+		}
 	}
 
 	return __pa_symbol(base);
