@@ -4,14 +4,10 @@
 #include <linux/fs.h>
 #include <linux/jiffies.h>
 #include <linux/module.h>
+#include <linux/namei.h>
 #include <linux/sched/signal.h>
 #include <linux/types.h>
 #include <linux/version.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
-#include <linux/mount.h>
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-#include <linux/user_namespace.h>
-#endif
 
 #include "lkmdbg_internal.h"
 
@@ -30,19 +26,6 @@ static struct lkmdbg_inline_hook *lkmdbg_proc_pid_readdir_hook;
 static struct lkmdbg_hook_registry_entry *lkmdbg_proc_pid_readdir_registry;
 static int (*lkmdbg_proc_pid_readdir_orig)(struct file *file,
 					   struct dir_context *ctx);
-static struct lkmdbg_inline_hook *lkmdbg_proc_pid_permission_hook;
-static struct lkmdbg_hook_registry_entry *lkmdbg_proc_pid_permission_registry;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
-typedef int (*lkmdbg_proc_pid_permission_fn)(struct mnt_idmap *idmap,
-					     struct inode *inode, int mask);
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-typedef int (*lkmdbg_proc_pid_permission_fn)(
-	struct user_namespace *mnt_userns, struct inode *inode, int mask);
-#else
-typedef int (*lkmdbg_proc_pid_permission_fn)(struct inode *inode, int mask);
-#endif
-static lkmdbg_proc_pid_permission_fn lkmdbg_proc_pid_permission_orig;
-static struct task_struct *(*lkmdbg_get_proc_task_orig)(const struct inode *inode);
 static atomic_t lkmdbg_owner_proc_hide_inflight = ATOMIC_INIT(0);
 static DECLARE_WAIT_QUEUE_HEAD(lkmdbg_owner_proc_hide_waitq);
 static pid_t lkmdbg_owner_proc_hidden_tgid;
@@ -104,16 +87,6 @@ static void *lkmdbg_lookup_proc_pid_readdir(void)
 	return lkmdbg_lookup_runtime_symbol_variants("proc_pid_readdir");
 }
 
-static void *lkmdbg_lookup_proc_pid_permission(void)
-{
-	return lkmdbg_lookup_runtime_symbol_variants("proc_pid_permission");
-}
-
-static void *lkmdbg_lookup_get_proc_task(void)
-{
-	return lkmdbg_lookup_runtime_symbol_variants("get_proc_task");
-}
-
 static bool lkmdbg_parse_proc_pid_name(const char *name, int len, pid_t *tgid)
 {
 	unsigned int value = 0;
@@ -158,19 +131,23 @@ static void lkmdbg_owner_proc_d_drop(struct dentry *dentry)
 	d_drop(dentry);
 }
 
-static void lkmdbg_owner_proc_drop_inode_alias(struct inode *inode)
+static void lkmdbg_owner_proc_drop_cached_pid_dentry(pid_t tgid)
 {
-	struct dentry *alias;
+	char proc_path[48];
+	struct path path;
+	int n;
 
-	if (!inode)
+	if (tgid <= 0)
 		return;
 
-	alias = d_find_alias(inode);
-	if (!alias)
+	n = scnprintf(proc_path, sizeof(proc_path), "/proc/%d", tgid);
+	if (n <= 0 || n >= sizeof(proc_path))
 		return;
 
-	lkmdbg_owner_proc_d_drop(alias);
-	dput(alias);
+	if (!kern_path(proc_path, LOOKUP_FOLLOW, &path)) {
+		lkmdbg_owner_proc_d_drop(path.dentry);
+		path_put(&path);
+	}
 }
 
 static ssize_t lkmdbg_seq_read_replacement(struct file *file, char __user *buf,
@@ -354,147 +331,22 @@ out:
 	return ret;
 }
 
-static int lkmdbg_proc_pid_permission_apply_hide(struct inode *inode, int ret)
-{
-	struct task_struct *task;
-
-	if (ret || !inode || !lkmdbg_get_proc_task_orig)
-		return ret;
-
-	task = lkmdbg_get_proc_task_orig(inode);
-	if (!task)
-		return ret;
-
-	if (lkmdbg_should_hide_owner_proc(task_tgid_nr(task))) {
-		lkmdbg_owner_proc_drop_inode_alias(inode);
-		ret = -ENOENT;
-	}
-
-	put_task_struct(task);
-	return ret;
-}
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
-static int lkmdbg_proc_pid_permission_replacement(struct mnt_idmap *idmap,
-						  struct inode *inode,
-						  int mask)
-{
-	struct lkmdbg_hook_registry_entry *registry;
-	lkmdbg_proc_pid_permission_fn orig;
-	int ret;
-
-	atomic_inc(&lkmdbg_owner_proc_hide_inflight);
-
-	registry = READ_ONCE(lkmdbg_proc_pid_permission_registry);
-	if (registry)
-		lkmdbg_hook_registry_note_hit(registry);
-
-	orig = READ_ONCE(lkmdbg_proc_pid_permission_orig);
-	if (!orig)
-		ret = -ENOENT;
-	else
-		ret = orig(idmap, inode, mask);
-
-	ret = lkmdbg_proc_pid_permission_apply_hide(inode, ret);
-
-	if (atomic_dec_and_test(&lkmdbg_owner_proc_hide_inflight))
-		wake_up_all(&lkmdbg_owner_proc_hide_waitq);
-
-	mutex_lock(&lkmdbg_state.lock);
-	lkmdbg_state.owner_proc_hide_hook_hits++;
-	lkmdbg_state.owner_proc_hide_hook_last_ret = ret;
-	mutex_unlock(&lkmdbg_state.lock);
-	return ret;
-}
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-static int lkmdbg_proc_pid_permission_replacement(
-	struct user_namespace *mnt_userns, struct inode *inode, int mask)
-{
-	struct lkmdbg_hook_registry_entry *registry;
-	lkmdbg_proc_pid_permission_fn orig;
-	int ret;
-
-	atomic_inc(&lkmdbg_owner_proc_hide_inflight);
-
-	registry = READ_ONCE(lkmdbg_proc_pid_permission_registry);
-	if (registry)
-		lkmdbg_hook_registry_note_hit(registry);
-
-	orig = READ_ONCE(lkmdbg_proc_pid_permission_orig);
-	if (!orig)
-		ret = -ENOENT;
-	else
-		ret = orig(mnt_userns, inode, mask);
-
-	ret = lkmdbg_proc_pid_permission_apply_hide(inode, ret);
-
-	if (atomic_dec_and_test(&lkmdbg_owner_proc_hide_inflight))
-		wake_up_all(&lkmdbg_owner_proc_hide_waitq);
-
-	mutex_lock(&lkmdbg_state.lock);
-	lkmdbg_state.owner_proc_hide_hook_hits++;
-	lkmdbg_state.owner_proc_hide_hook_last_ret = ret;
-	mutex_unlock(&lkmdbg_state.lock);
-	return ret;
-}
-#else
-static int lkmdbg_proc_pid_permission_replacement(struct inode *inode, int mask)
-{
-	struct lkmdbg_hook_registry_entry *registry;
-	lkmdbg_proc_pid_permission_fn orig;
-	int ret;
-
-	atomic_inc(&lkmdbg_owner_proc_hide_inflight);
-
-	registry = READ_ONCE(lkmdbg_proc_pid_permission_registry);
-	if (registry)
-		lkmdbg_hook_registry_note_hit(registry);
-
-	orig = READ_ONCE(lkmdbg_proc_pid_permission_orig);
-	if (!orig)
-		ret = -ENOENT;
-	else
-		ret = orig(inode, mask);
-
-	ret = lkmdbg_proc_pid_permission_apply_hide(inode, ret);
-
-	if (atomic_dec_and_test(&lkmdbg_owner_proc_hide_inflight))
-		wake_up_all(&lkmdbg_owner_proc_hide_waitq);
-
-	mutex_lock(&lkmdbg_state.lock);
-	lkmdbg_state.owner_proc_hide_hook_hits++;
-	lkmdbg_state.owner_proc_hide_hook_last_ret = ret;
-	mutex_unlock(&lkmdbg_state.lock);
-	return ret;
-}
-#endif
-
 static int lkmdbg_install_owner_proc_hide_hook(void)
 {
 	void *target;
 	void *readdir_target;
-	void *permission_target;
-	void *get_proc_task_target;
 	void *orig_fn = NULL;
 	void *readdir_orig_fn = NULL;
-	void *permission_orig_fn = NULL;
 	int ret;
 
 	if (lkmdbg_proc_pid_lookup_hook &&
-	    lkmdbg_proc_pid_readdir_hook &&
-	    lkmdbg_proc_pid_permission_hook)
+	    lkmdbg_proc_pid_readdir_hook)
 		return 0;
 
 	target = lkmdbg_lookup_proc_pid_lookup();
 	readdir_target = lkmdbg_lookup_proc_pid_readdir();
-	permission_target = lkmdbg_lookup_proc_pid_permission();
-	get_proc_task_target = lkmdbg_lookup_get_proc_task();
-	if (!target || !readdir_target || !permission_target ||
-	    !get_proc_task_target)
+	if (!target || !readdir_target)
 		return -EOPNOTSUPP;
-
-	lkmdbg_get_proc_task_orig = (struct task_struct *(*)(const struct inode *))
-		get_proc_task_target;
 
 	lkmdbg_proc_pid_lookup_registry = lkmdbg_hook_registry_register(
 		"proc_pid_lookup", target, lkmdbg_proc_pid_lookup_replacement);
@@ -539,30 +391,6 @@ static int lkmdbg_install_owner_proc_hide_hook(void)
 	lkmdbg_hook_registry_mark_installed(lkmdbg_proc_pid_readdir_registry,
 					    readdir_target, readdir_orig_fn, 0);
 
-	lkmdbg_proc_pid_permission_registry = lkmdbg_hook_registry_register(
-		"proc_pid_permission", permission_target,
-		lkmdbg_proc_pid_permission_replacement);
-	if (!lkmdbg_proc_pid_permission_registry) {
-		ret = -ENOMEM;
-		goto rollback_readdir;
-	}
-
-	ret = lkmdbg_hook_install(permission_target,
-				  lkmdbg_proc_pid_permission_replacement,
-				  &lkmdbg_proc_pid_permission_hook,
-				  &permission_orig_fn);
-	mutex_lock(&lkmdbg_state.lock);
-	lkmdbg_state.owner_proc_hide_hook_last_ret = ret;
-	mutex_unlock(&lkmdbg_state.lock);
-	if (ret)
-		goto rollback_permission_registry;
-
-	lkmdbg_proc_pid_permission_orig =
-		(lkmdbg_proc_pid_permission_fn)permission_orig_fn;
-	lkmdbg_hook_registry_mark_installed(
-		lkmdbg_proc_pid_permission_registry, permission_target,
-		permission_orig_fn, 0);
-
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.owner_proc_hide_hook_active = true;
 	mutex_unlock(&lkmdbg_state.lock);
@@ -571,14 +399,7 @@ static int lkmdbg_install_owner_proc_hide_hook(void)
 		       target, orig_fn);
 	lkmdbg_pr_info("lkmdbg: runtime hook active target=proc_pid_readdir origin=%px trampoline=%px\n",
 		       readdir_target, readdir_orig_fn);
-	lkmdbg_pr_info("lkmdbg: runtime hook active target=proc_pid_permission origin=%px trampoline=%px\n",
-		       permission_target, permission_orig_fn);
 	return 0;
-
-rollback_permission_registry:
-	lkmdbg_hook_registry_unregister(lkmdbg_proc_pid_permission_registry,
-					ret);
-	lkmdbg_proc_pid_permission_registry = NULL;
 
 rollback_readdir:
 	if (lkmdbg_proc_pid_readdir_hook) {
@@ -603,17 +424,13 @@ rollback_lookup:
 		lkmdbg_proc_pid_lookup_registry = NULL;
 	}
 	lkmdbg_proc_pid_lookup_orig = NULL;
-	lkmdbg_proc_pid_permission_orig = NULL;
-	lkmdbg_get_proc_task_orig = NULL;
 	return ret;
 }
 
 bool lkmdbg_runtime_hook_owner_proc_hide_supported(void)
 {
 	return lkmdbg_lookup_proc_pid_lookup() != NULL &&
-	       lkmdbg_lookup_proc_pid_readdir() != NULL &&
-	       lkmdbg_lookup_proc_pid_permission() != NULL &&
-	       lkmdbg_lookup_get_proc_task() != NULL;
+	       lkmdbg_lookup_proc_pid_readdir() != NULL;
 }
 
 int lkmdbg_runtime_hook_set_owner_proc_hidden(pid_t owner_tgid, bool hidden)
@@ -639,6 +456,7 @@ int lkmdbg_runtime_hook_set_owner_proc_hidden(pid_t owner_tgid, bool hidden)
 
 	WRITE_ONCE(lkmdbg_owner_proc_hidden_tgid, owner_tgid);
 	WRITE_ONCE(lkmdbg_owner_proc_hidden_enabled, true);
+	lkmdbg_owner_proc_drop_cached_pid_dentry(owner_tgid);
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.owner_proc_hidden = true;
@@ -694,9 +512,6 @@ void lkmdbg_runtime_hooks_exit(void)
 	if (lkmdbg_proc_pid_readdir_hook &&
 	    !lkmdbg_hook_deactivate(lkmdbg_proc_pid_readdir_hook))
 		remaining = 0;
-	if (lkmdbg_proc_pid_permission_hook &&
-	    !lkmdbg_hook_deactivate(lkmdbg_proc_pid_permission_hook))
-		remaining = 0;
 
 	if (!remaining) {
 		long drained;
@@ -718,10 +533,6 @@ void lkmdbg_runtime_hooks_exit(void)
 		lkmdbg_hook_destroy(lkmdbg_proc_pid_readdir_hook);
 		lkmdbg_proc_pid_readdir_hook = NULL;
 	}
-	if (lkmdbg_proc_pid_permission_hook) {
-		lkmdbg_hook_destroy(lkmdbg_proc_pid_permission_hook);
-		lkmdbg_proc_pid_permission_hook = NULL;
-	}
 	if (lkmdbg_proc_pid_lookup_registry) {
 		lkmdbg_hook_registry_unregister(lkmdbg_proc_pid_lookup_registry,
 						0);
@@ -732,15 +543,8 @@ void lkmdbg_runtime_hooks_exit(void)
 						0);
 		lkmdbg_proc_pid_readdir_registry = NULL;
 	}
-	if (lkmdbg_proc_pid_permission_registry) {
-		lkmdbg_hook_registry_unregister(
-			lkmdbg_proc_pid_permission_registry, 0);
-		lkmdbg_proc_pid_permission_registry = NULL;
-	}
 	lkmdbg_proc_pid_lookup_orig = NULL;
 	lkmdbg_proc_pid_readdir_orig = NULL;
-	lkmdbg_proc_pid_permission_orig = NULL;
-	lkmdbg_get_proc_task_orig = NULL;
 
 	if (lkmdbg_seq_read_hook) {
 		if (!lkmdbg_hook_deactivate(lkmdbg_seq_read_hook)) {
