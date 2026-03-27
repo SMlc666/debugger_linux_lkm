@@ -258,13 +258,18 @@ jobs:
             "$GITHUB_WORKSPACE/.github/scripts/qemu-watchpoint-control.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/lkmdbg_open_session" \
-            "$GITHUB_WORKSPACE/tools/lkmdbg_open_session.c"
+            "$GITHUB_WORKSPACE/tools/lkmdbg_open_session.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/lkmdbg_stealth_ctl" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_stealth_ctl.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
             -o "$RUNNER_TEMP/lkmdbg_mem_test" \
-            "$GITHUB_WORKSPACE/tools/lkmdbg_mem_test.c"
+            "$GITHUB_WORKSPACE/tools/lkmdbg_mem_test.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_events.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_memory.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_control.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
             -o "$RUNNER_TEMP/lkmdbg_mmu_test" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_mmu_test.c"
@@ -308,7 +313,7 @@ jobs:
           if-no-files-found: error
 
       - name: Save QEMU kernel output cache
-        if: steps.qemu-kernel-cache-state.outputs.reuse_kernel != 'true' && steps.qemu-kernel-cache-verify.outputs.cache_complete == 'true'
+        if: always() && steps.qemu-kernel-cache-state.outputs.reuse_kernel != 'true' && steps.qemu-kernel-cache-verify.outputs.cache_complete == 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.KERNEL_OUT_DIR }}
