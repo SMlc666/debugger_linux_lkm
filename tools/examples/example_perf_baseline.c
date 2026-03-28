@@ -163,11 +163,14 @@ int main(void)
 	double xlate_kops;
 	double alloc_us;
 	uintptr_t shell_addr;
+	uintptr_t bench_base;
 	size_t bench_len;
 	size_t chunk_len;
+	size_t rw_alloc_len;
 	pid_t child;
 	int session_fd = -1;
 	char cmd = 'q';
+	uint64_t rw_alloc_id = 0;
 	int i;
 	int status = 1;
 
@@ -223,6 +226,33 @@ int main(void)
 	chunk_len = (size_t)info.page_size * 16U;
 	if (chunk_len > bench_len)
 		chunk_len = bench_len;
+	shell_addr = info.map_addr + info.page_size;
+	bench_base = shell_addr;
+	rw_alloc_len = bench_len * 2U;
+	if (rw_alloc_len < info.page_size * 2U)
+		rw_alloc_len = info.page_size * 2U;
+	{
+		struct lkmdbg_remote_alloc_request rw_alloc_req = {
+			.version = LKMDBG_PROTO_VERSION,
+			.size = sizeof(rw_alloc_req),
+			.remote_addr = shell_addr,
+			.length = rw_alloc_len,
+			.prot = LKMDBG_REMOTE_ALLOC_PROT_READ |
+				LKMDBG_REMOTE_ALLOC_PROT_WRITE,
+		};
+		if (ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_ALLOC, &rw_alloc_req) <
+			    0 ||
+		    !rw_alloc_req.alloc_id ||
+		    rw_alloc_req.mapped_length < rw_alloc_len) {
+			fprintf(stderr,
+				"example_perf_baseline: CREATE_REMOTE_ALLOC(rw) failed errno=%d id=%" PRIu64 " len=%" PRIu64 "\n",
+				errno, (uint64_t)rw_alloc_req.alloc_id,
+				(uint64_t)rw_alloc_req.mapped_length);
+			goto out;
+		}
+		rw_alloc_id = rw_alloc_req.alloc_id;
+		bench_base = (uintptr_t)rw_alloc_req.remote_addr;
+	}
 	buf = malloc(bench_len);
 	if (!buf) {
 		fprintf(stderr, "example_perf_baseline: alloc failed len=%zu\n",
@@ -232,23 +262,23 @@ int main(void)
 	memset(buf, 0x5A, bench_len);
 
 	/* Warmup */
-	if (run_mem_xfer_loops(session_fd, info.map_addr, buf, bench_len,
+	if (run_mem_xfer_loops(session_fd, bench_base, buf, bench_len,
 			       chunk_len, 1, 0, "READ_MEM warmup") < 0)
 		goto out;
-	if (run_mem_xfer_loops(session_fd, info.map_addr + bench_len, buf,
+	if (run_mem_xfer_loops(session_fd, bench_base + bench_len, buf,
 			       bench_len, chunk_len, 1, 1,
 			       "WRITE_MEM warmup") < 0)
 		goto out;
 
 	t0 = now_ns();
-	if (run_mem_xfer_loops(session_fd, info.map_addr, buf, bench_len,
+	if (run_mem_xfer_loops(session_fd, bench_base, buf, bench_len,
 			       chunk_len, LOOPS_RW, 0, "READ_MEM") < 0)
 		goto out;
 	t1 = now_ns();
 	ns_read = t1 - t0;
 
 	t0 = now_ns();
-	if (run_mem_xfer_loops(session_fd, info.map_addr + bench_len, buf,
+	if (run_mem_xfer_loops(session_fd, bench_base + bench_len, buf,
 			       bench_len, chunk_len, LOOPS_RW, 1,
 			       "WRITE_MEM") < 0)
 		goto out;
@@ -259,7 +289,7 @@ int main(void)
 	for (i = 0; i < LOOPS_XLATE; i++) {
 		memset(&translate_op, 0, sizeof(translate_op));
 		memset(&phys_req, 0, sizeof(phys_req));
-		translate_op.phys_addr = info.map_addr + (uintptr_t)((i % 32) * 64);
+		translate_op.phys_addr = bench_base + (uintptr_t)((i % 32) * 64);
 		translate_op.length = 8;
 		translate_op.flags = LKMDBG_PHYS_OP_FLAG_TARGET_VADDR |
 				     LKMDBG_PHYS_OP_FLAG_TRANSLATE_ONLY;
@@ -276,7 +306,23 @@ int main(void)
 	t1 = now_ns();
 	ns_xlate = t1 - t0;
 
-	shell_addr = info.map_addr + info.page_size;
+	if (rw_alloc_id) {
+		struct lkmdbg_remote_alloc_handle_request rw_free_req = {
+			.version = LKMDBG_PROTO_VERSION,
+			.size = sizeof(rw_free_req),
+			.alloc_id = rw_alloc_id,
+		};
+
+		if (ioctl(session_fd, LKMDBG_IOC_REMOVE_REMOTE_ALLOC,
+			  &rw_free_req) < 0) {
+			fprintf(stderr,
+				"example_perf_baseline: REMOVE_REMOTE_ALLOC(rw) failed errno=%d\n",
+				errno);
+			goto out;
+		}
+		rw_alloc_id = 0;
+	}
+
 	t0 = now_ns();
 	for (i = 0; i < LOOPS_ALLOC; i++) {
 		struct lkmdbg_remote_alloc_request alloc_req = {
@@ -326,6 +372,14 @@ int main(void)
 	       LOOPS_XLATE, LOOPS_ALLOC);
 
 out:
+	if (rw_alloc_id && session_fd >= 0) {
+		struct lkmdbg_remote_alloc_handle_request rw_free_req = {
+			.version = LKMDBG_PROTO_VERSION,
+			.size = sizeof(rw_free_req),
+			.alloc_id = rw_alloc_id,
+		};
+		(void)ioctl(session_fd, LKMDBG_IOC_REMOVE_REMOTE_ALLOC, &rw_free_req);
+	}
 	(void)write_full(cmd_pipe[1], &cmd, sizeof(cmd));
 	free(buf);
 	if (session_fd >= 0)
