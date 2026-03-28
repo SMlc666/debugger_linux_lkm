@@ -938,10 +938,21 @@ static void qemu_insmod(const char *params)
 
 static void qemu_rmmod(void)
 {
-	if (syscall(SYS_delete_module, MODULE_NAME, 0) == 0)
-		return;
+	unsigned int attempt;
 
-	qemu_fail("rmmod errno=%d", errno);
+	for (attempt = 0; attempt < 80; attempt++) {
+		if (syscall(SYS_delete_module, MODULE_NAME, 0) == 0)
+			return;
+		if (errno == EINTR)
+			continue;
+		if (errno == EBUSY || errno == EAGAIN) {
+			usleep(50000);
+			continue;
+		}
+		qemu_fail("rmmod errno=%d", errno);
+	}
+
+	qemu_fail("rmmod timeout errno=%d", errno);
 }
 
 int main(void)
