@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.smlc666.lkmdbg.R
@@ -213,30 +214,7 @@ internal fun MemoryScreen(
 
             state.memoryPreview?.let { preview ->
                 Spacer(Modifier.height(10.dp))
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    ),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Text(
-                            stringResource(R.string.memory_preview_title, hex64(preview.address)),
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Text(
-                            stringResource(R.string.memory_preview_bytes, preview.bytes.size),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Text(
-                            preview.bytes.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                }
+                MemoryPreviewCard(preview)
             }
         }
     }
@@ -293,6 +271,61 @@ internal fun MemoryScreen(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun MemoryPreviewCard(preview: com.smlc666.lkmdbg.data.MemoryPreview) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                stringResource(R.string.memory_preview_title, hex64(preview.address)),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(R.string.memory_preview_bytes, preview.bytes.size),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                stringResource(R.string.memory_preview_hex_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            preview.rows.forEach { row ->
+                Text(
+                    text = "${hex64(row.address)}  ${row.hexBytes.padEnd(47)}  ${row.ascii}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+
+            Text(
+                stringResource(R.string.memory_preview_disasm_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            if (preview.disassembly.isEmpty()) {
+                Text(
+                    stringResource(R.string.memory_preview_disasm_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                preview.disassembly.forEach { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+        }
     }
 }
 

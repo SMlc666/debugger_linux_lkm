@@ -26,11 +26,6 @@ data class SessionEventEntry(
     val receivedAtMs: Long,
 )
 
-data class MemoryPreview(
-    val address: ULong,
-    val bytes: ByteArray,
-)
-
 data class MemorySearchUiState(
     val query: String = "",
     val valueType: MemorySearchValueType = MemorySearchValueType.Int32,
@@ -270,15 +265,13 @@ class SessionBridgeRepository(
         }
     }
 
-    suspend fun readMemoryPreview(remoteAddr: ULong, length: UInt = 64u) {
+    suspend fun readMemoryPreview(remoteAddr: ULong, length: UInt = 128u) {
         runOperation {
             val reply = client.readMemory(remoteAddr, length)
+            val bytes = reply.data.copyOf(reply.bytesDone.toInt())
             _state.update { current ->
                 current.copy(
-                    memoryPreview = MemoryPreview(
-                        address = remoteAddr,
-                        bytes = reply.data.copyOf(reply.bytesDone.toInt()),
-                    ),
+                    memoryPreview = buildMemoryPreview(remoteAddr, bytes),
                     lastMessage = reply.message.ifBlank {
                         appContext.getString(R.string.memory_message_preview, reply.bytesDone.toString(), hex64(remoteAddr))
                     },
@@ -295,7 +288,7 @@ class SessionBridgeRepository(
                 updateMessage(appContext.getString(R.string.memory_error_no_pc))
                 return@runOperation
             }
-            readMemoryPreviewUnsafe(pc, 64u)
+            readMemoryPreviewUnsafe(pc, 128u)
         }
     }
 
@@ -435,17 +428,54 @@ class SessionBridgeRepository(
 
     private suspend fun readMemoryPreviewUnsafe(remoteAddr: ULong, length: UInt) {
         val reply = client.readMemory(remoteAddr, length)
+        val bytes = reply.data.copyOf(reply.bytesDone.toInt())
         _state.update { current ->
             current.copy(
-                memoryPreview = MemoryPreview(
-                    address = remoteAddr,
-                    bytes = reply.data.copyOf(reply.bytesDone.toInt()),
-                ),
+                memoryPreview = buildMemoryPreview(remoteAddr, bytes),
                 lastMessage = reply.message.ifBlank {
                     appContext.getString(R.string.memory_message_preview, reply.bytesDone.toString(), hex64(remoteAddr))
                 },
             )
         }
+    }
+
+    private fun buildMemoryPreview(remoteAddr: ULong, bytes: ByteArray): MemoryPreview {
+        val rows = ArrayList<MemoryPreviewRow>((bytes.size + 15) / 16)
+        var offset = 0
+
+        while (offset < bytes.size) {
+            val end = minOf(bytes.size, offset + 16)
+            val slice = bytes.copyOfRange(offset, end)
+            val hexBytes = slice.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+            val ascii = buildString(slice.size) {
+                slice.forEach { byte ->
+                    val value = byte.toInt() and 0xff
+                    append(
+                        if (value in 0x20..0x7e)
+                            value.toChar()
+                        else
+                            '.',
+                    )
+                }
+            }
+            rows += MemoryPreviewRow(
+                address = remoteAddr + offset.toUInt().toULong(),
+                hexBytes = hexBytes,
+                ascii = ascii,
+            )
+            offset = end
+        }
+
+        val disassembly = runCatching {
+            NativeDisassembler.disassembleArm64(remoteAddr, bytes)
+        }.getOrDefault(emptyList())
+
+        return MemoryPreview(
+            address = remoteAddr,
+            bytes = bytes,
+            rows = rows,
+            disassembly = disassembly,
+        )
     }
 
     private fun selectThreadId(

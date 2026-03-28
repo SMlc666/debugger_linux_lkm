@@ -81,7 +81,7 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onSearchMemory = { coroutineScope.launch { repository.runMemorySearch() } },
                     onPreviewSelectedPc = { coroutineScope.launch { repository.previewSelectedPc() } },
                     onPreviewAddress = { address ->
-                        coroutineScope.launch { repository.readMemoryPreview(address, 64u) }
+                        coroutineScope.launch { repository.readMemoryPreview(address, 128u) }
                     },
                     onAttachProcess = { processPid ->
                         coroutineScope.launch {
@@ -119,7 +119,7 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onSearchMemory = { coroutineScope.launch { repository.runMemorySearch() } },
                     onPreviewSelectedPc = { coroutineScope.launch { repository.previewSelectedPc() } },
                     onPreviewAddress = { address ->
-                        coroutineScope.launch { repository.readMemoryPreview(address, 64u) }
+                        coroutineScope.launch { repository.readMemoryPreview(address, 128u) }
                     },
                     onAttachProcess = { processPid ->
                         coroutineScope.launch {

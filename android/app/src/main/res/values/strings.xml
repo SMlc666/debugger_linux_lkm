@@ -97,6 +97,9 @@
     <string name="memory_image_flags">prot=%1$s flags=%2$s segments=%3$s</string>
     <string name="memory_preview_title">Bytes at %1$s</string>
     <string name="memory_preview_bytes">size=%1$d</string>
+    <string name="memory_preview_hex_title">Memory page</string>
+    <string name="memory_preview_disasm_title">Capstone disassembly (local JNI)</string>
+    <string name="memory_preview_disasm_empty">No local disassembly available for this preview.</string>
     <string name="thread_panel_title">Thread View</string>
     <string name="thread_panel_subtitle">Live thread inventory and a register snapshot for the selected target thread.</string>
     <string name="thread_action_refresh">Refresh threads</string>

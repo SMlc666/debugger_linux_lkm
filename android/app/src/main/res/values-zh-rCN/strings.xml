@@ -97,6 +97,9 @@
     <string name="memory_image_flags">prot=%1$s flags=%2$s segments=%3$s</string>
     <string name="memory_preview_title">%1$s 的字节预览</string>
     <string name="memory_preview_bytes">大小=%1$d</string>
+    <string name="memory_preview_hex_title">内存页</string>
+    <string name="memory_preview_disasm_title">Capstone 反汇编（本地 JNI）</string>
+    <string name="memory_preview_disasm_empty">当前预览没有可用的本地反汇编结果。</string>
     <string name="thread_panel_title">线程视图</string>
     <string name="thread_panel_subtitle">展示真实线程清单，以及当前选中线程的寄存器快照。</string>
     <string name="thread_action_refresh">刷新线程</string>
