@@ -1,0 +1,64 @@
+name: android-build
+
+on:
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-build.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-build.yml"
+  workflow_dispatch:
+
+jobs:
+  android-app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Build shared and app debug APK
+        run: gradle -p android :shared:build :app:assembleDebug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: lkmdbg-android-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+
+  android-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure agent build
+        run: cmake -S android/agent -B "$RUNNER_TEMP/lkmdbg-agent-build"
+
+      - name: Build agent
+        run: cmake --build "$RUNNER_TEMP/lkmdbg-agent-build" --parallel
+
+      - name: Upload agent artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lkmdbg-agent-host
+          path: ${{ runner.temp }}/lkmdbg-agent-build/lkmdbg-agent
