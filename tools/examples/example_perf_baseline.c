@@ -119,7 +119,12 @@ static int run_child(int info_fd, int cmd_fd)
 
 	memset(&info, 0, sizeof(info));
 	info.page_size = (uint32_t)getpagesize();
-	info.map_len = info.page_size * 512U;
+	/*
+	 * Keep shell mapping shape aligned with remote_alloc_rw example.
+	 * Large mappings can exercise different page-table forms and make
+	 * perf-baseline smoke non-deterministic across kernels.
+	 */
+	info.map_len = info.page_size * 4U;
 	map = mmap(NULL, info.map_len, PROT_READ | PROT_WRITE,
 		   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (map == MAP_FAILED)
@@ -235,14 +240,23 @@ int main(void)
 			.prot = LKMDBG_REMOTE_ALLOC_PROT_READ |
 				LKMDBG_REMOTE_ALLOC_PROT_WRITE,
 		};
-		if (ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_ALLOC, &rw_alloc_req) <
-			    0 ||
-		    !rw_alloc_req.alloc_id ||
+		int alloc_ret;
+		int alloc_errno = 0;
+
+		errno = 0;
+		alloc_ret = ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_ALLOC,
+				  &rw_alloc_req);
+		if (alloc_ret < 0)
+			alloc_errno = errno;
+		if (alloc_ret < 0 || !rw_alloc_req.alloc_id ||
 		    rw_alloc_req.mapped_length < rw_alloc_len) {
 			fprintf(stderr,
-				"example_perf_baseline: CREATE_REMOTE_ALLOC(rw) failed errno=%d id=%" PRIu64 " len=%" PRIu64 "\n",
-				errno, (uint64_t)rw_alloc_req.alloc_id,
-				(uint64_t)rw_alloc_req.mapped_length);
+				"example_perf_baseline: CREATE_REMOTE_ALLOC(rw) failed ret=%d errno=%d id=%" PRIu64
+				" len=%" PRIu64 " target=%d shell=0x%" PRIxPTR " req_len=%zu page=%u map=0x%"
+				PRIxPTR "/%u\n",
+				alloc_ret, alloc_errno, (uint64_t)rw_alloc_req.alloc_id,
+				(uint64_t)rw_alloc_req.mapped_length, child, shell_addr,
+				rw_alloc_len, info.page_size, info.map_addr, info.map_len);
 			goto out;
 		}
 		rw_alloc_id = rw_alloc_req.alloc_id;
@@ -342,8 +356,10 @@ int main(void)
 			    0 ||
 		    !alloc_req.alloc_id) {
 			fprintf(stderr,
-				"example_perf_baseline: CREATE_REMOTE_ALLOC failed loop=%d errno=%d\n",
-				i, errno);
+				"example_perf_baseline: CREATE_REMOTE_ALLOC failed loop=%d errno=%d id=%" PRIu64
+				" len=%" PRIu64 " shell=0x%" PRIxPTR "\n",
+				i, errno, (uint64_t)alloc_req.alloc_id,
+				(uint64_t)alloc_req.mapped_length, shell_addr);
 			goto out;
 		}
 
