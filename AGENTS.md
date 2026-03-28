@@ -28,6 +28,7 @@ The current design is intentionally conservative:
 - Treat `core/lkmdbg_protect.c` as best-effort Android GKI compatibility code. Do not make module load depend on a bypass succeeding unless explicitly intended.
 - When introducing hooks, isolate arch-specific patching logic from transport/session policy.
 - Keep the first hook layer minimal: install/uninstall, relocation, trampoline, rollback. Add chaining or policy later.
+- Keep owner-proc hide on the current lookup-only procfs path (`proc_pid_lookup` + `proc_pid_readdir` + `proc_tgid_base_lookup` + `d_drop`) and avoid reintroducing `proc_pid_permission` hooking unless explicitly requested.
 - Keep user/kernel protocol changes synchronized in [include/lkmdbg_ioctl.h](/root/debugger_linux_lkm/include/lkmdbg_ioctl.h).
 
 ## Verification Expectations

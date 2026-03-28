@@ -126,8 +126,17 @@ Current stealth controls are intentionally narrow:
 - `debugfs` visibility can be toggled on or off at runtime
 - module-list hide only removes `lkmdbg` from `/proc/modules` and `lsmod`
 - optional `sysfshide` removes the module kobject from `/sys/module/lkmdbg`
+- optional `ownerprochide` hides the owner session process from `/proc` views
 - module-list hide is only accepted when the `/proc/version` hook is active, so there is still a restore path
 - `sysfshide` is also only accepted when the `/proc/version` hook is active, so there is still a restore path
+
+`ownerprochide` currently uses a lookup-only procfs backend:
+
+- hook points: `proc_pid_lookup`, `proc_pid_readdir`, and `proc_tgid_base_lookup`
+- cache invalidation: enabling owner hide drops cached `/proc/<tgid>` dentries with `d_drop()`
+- no `proc_pid_permission` hook is used in the current design
+- direct file paths such as `/proc/<tgid>/status`, `/proc/<tgid>/comm`, and `/proc/<tgid>/cmdline` are blocked via `proc_tgid_base_lookup`
+- owner process self-bypass is intentionally disabled while owner hide is active
 
 Example stealth flow:
 
