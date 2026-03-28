@@ -84,7 +84,6 @@ class SessionBridgeRepository(
                 maxResults: UInt,
                 pattern: ByteArray,
             ) = client.searchMemory(regionPreset, maxResults, pattern)
-            }
         },
     )
     private val _state = MutableStateFlow(
