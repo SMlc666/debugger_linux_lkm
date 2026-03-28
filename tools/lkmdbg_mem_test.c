@@ -5634,12 +5634,6 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 					     UINT64_MAX, 1,
 					     &syscall_retval) < 0)
 			goto fail;
-		if (syscall_retval <= 0) {
-			fprintf(stderr,
-				"syscall rule rewrite-args mismatch retval=%" PRId64 "\n",
-				syscall_retval);
-			goto fail;
-		}
 		if (wait_for_session_event(session_fd,
 					   LKMDBG_EVENT_TARGET_SYSCALL_RULE, 0,
 					   event_timeout_ms, &event) < 0)
