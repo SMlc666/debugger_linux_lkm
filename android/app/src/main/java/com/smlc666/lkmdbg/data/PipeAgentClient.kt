@@ -4,6 +4,7 @@ import android.content.Context
 import com.smlc666.lkmdbg.shared.BridgeCommand
 import com.smlc666.lkmdbg.shared.BridgeHelloReply
 import com.smlc666.lkmdbg.shared.BridgeOpenSessionReply
+import com.smlc666.lkmdbg.shared.BridgeProcessListReply
 import com.smlc666.lkmdbg.shared.BridgeSetTargetReply
 import com.smlc666.lkmdbg.shared.BridgeSetTargetRequest
 import com.smlc666.lkmdbg.shared.BridgeStatusCode
@@ -108,6 +109,23 @@ class PipeAgentClient(
                 )
             }
             BridgeWireCodec.decodeStatusSnapshot(payload)
+        }
+    }
+
+    suspend fun queryProcesses(): BridgeProcessListReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(requireOutputLocked(), BridgeCommand.QueryProcesses)
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.QueryProcesses.wireId) {
+                return@synchronized BridgeProcessListReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    count = 0u,
+                    message = "unexpected query-processes reply command=${header.command}",
+                    processes = emptyList(),
+                )
+            }
+            BridgeWireCodec.decodeQueryProcessesReply(payload)
         }
     }
 

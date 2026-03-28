@@ -8,6 +8,7 @@
     <string name="metric_target">Target</string>
     <string name="metric_agent">Agent</string>
     <string name="workspace_session">Session</string>
+    <string name="workspace_processes">Processes</string>
     <string name="workspace_memory">Memory</string>
     <string name="workspace_threads">Threads</string>
     <string name="workspace_events">Events</string>
@@ -15,9 +16,6 @@
     <string name="dashboard_chip_pipe">stdio pipe</string>
     <string name="dashboard_chip_md3">md3 shell</string>
     <string name="dashboard_chip_gki">arm64 gki</string>
-    <string name="process_state_attached">attached</string>
-    <string name="process_state_idle">idle</string>
-    <string name="process_state_available">available</string>
     <string name="thread_state_running">running</string>
     <string name="thread_state_stopped">stopped</string>
     <string name="thread_state_sleeping">sleeping</string>
@@ -66,7 +64,22 @@
     <string name="event_panel_title">Event Stream</string>
     <string name="event_panel_subtitle">Recent debugger-side event summaries for quick situational awareness.</string>
     <string name="process_panel_title">Process Lanes</string>
-    <string name="process_panel_subtitle">Representative target inventory shown alongside current debugger ownership state.</string>
+    <string name="process_panel_subtitle">Root-side process enumeration with local Android classification, filters, and APK icon rendering.</string>
+    <string name="process_action_refresh">Refresh process list</string>
+    <string name="process_filter_all">All</string>
+    <string name="process_filter_android">Android apps</string>
+    <string name="process_filter_cmdline">Command line</string>
+    <string name="process_filter_system">System apps</string>
+    <string name="process_filter_user">User apps</string>
+    <string name="process_summary_counts">total=%1$d  android=%2$d  cmd=%3$d  system=%4$d  user=%5$d</string>
+    <string name="process_empty">No process list yet. Refresh after the root agent comes up.</string>
+    <string name="process_pid_uid">pid=%1$d  uid=%2$d</string>
+    <string name="process_kind_label">class: %1$s</string>
+    <string name="process_kind_command_line">command line</string>
+    <string name="process_kind_system_app">system app</string>
+    <string name="process_kind_user_app">user app</string>
+    <string name="process_package_name">package: %1$s</string>
+    <string name="process_message_refreshed">%1$d processes refreshed</string>
     <string name="session_message_idle">bridge idle</string>
     <string name="session_message_connected">bridge connected</string>
     <string name="session_message_opened">session opened</string>

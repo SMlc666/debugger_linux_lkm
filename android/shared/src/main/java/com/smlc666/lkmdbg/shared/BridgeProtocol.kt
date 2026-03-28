@@ -16,6 +16,8 @@ object BridgeProtocol {
     const val SET_TARGET_REQUEST_SIZE: Int = 8
     const val SET_TARGET_REPLY_SIZE: Int = 72
     const val STATUS_SNAPSHOT_REPLY_SIZE: Int = 140
+    const val QUERY_PROCESSES_REPLY_HEADER_SIZE: Int = 72
+    const val QUERY_PROCESS_RECORD_SIZE: Int = 200
 }
 
 enum class BridgeCommand(val wireId: UInt) {
@@ -29,6 +31,7 @@ enum class BridgeCommand(val wireId: UInt) {
     EventStreamConfig(8u),
     PollEvent(9u),
     StatusSnapshot(10u),
+    QueryProcesses(11u),
 }
 
 enum class BridgeStatusCode(val wireValue: Int) {
@@ -88,12 +91,18 @@ data class BridgeStatusSnapshot(
     val message: String,
 )
 
-data class DashboardProcess(
+data class BridgeProcessRecord(
     val pid: Int,
-    val name: String,
-    val packageName: String,
-    val arch: String,
-    val state: String,
+    val uid: Int,
+    val comm: String,
+    val cmdline: String,
+)
+
+data class BridgeProcessListReply(
+    val status: Int,
+    val count: UInt,
+    val message: String,
+    val processes: List<BridgeProcessRecord>,
 )
 
 data class DashboardThread(
@@ -200,6 +209,38 @@ object BridgeWireCodec {
             sessionId = sessionId,
             transport = transport,
             message = message,
+        )
+    }
+
+    fun decodeQueryProcessesReply(payload: ByteArray): BridgeProcessListReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.QUERY_PROCESSES_REPLY_HEADER_SIZE)
+        val status = buffer.int
+        val count = buffer.int.toUInt()
+        val message = decodeCString(buffer, 64)
+        val remaining = payload.size - BridgeProtocol.QUERY_PROCESSES_REPLY_HEADER_SIZE
+        require(remaining >= count.toInt() * BridgeProtocol.QUERY_PROCESS_RECORD_SIZE) {
+            "process payload too small: got=${payload.size} count=$count"
+        }
+
+        val processes = ArrayList<BridgeProcessRecord>(count.toInt())
+        repeat(count.toInt()) {
+            val pid = buffer.int
+            val uid = buffer.int
+            val comm = decodeCString(buffer, 64)
+            val cmdline = decodeCString(buffer, 128)
+            processes += BridgeProcessRecord(
+                pid = pid,
+                uid = uid,
+                comm = comm,
+                cmdline = cmdline,
+            )
+        }
+
+        return BridgeProcessListReply(
+            status = status,
+            count = count,
+            message = message,
+            processes = processes,
         )
     }
 

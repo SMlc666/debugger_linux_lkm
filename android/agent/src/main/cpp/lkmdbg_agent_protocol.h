@@ -11,6 +11,7 @@ enum lkmdbg_agent_command {
 	LKMDBG_AGENT_CMD_OPEN_SESSION = 2u,
 	LKMDBG_AGENT_CMD_SET_TARGET = 3u,
 	LKMDBG_AGENT_CMD_STATUS_SNAPSHOT = 10u,
+	LKMDBG_AGENT_CMD_QUERY_PROCESSES = 11u,
 };
 
 enum lkmdbg_agent_status {
@@ -70,10 +71,25 @@ struct __attribute__((packed)) lkmdbg_agent_status_snapshot {
 	char message[64];
 };
 
+struct __attribute__((packed)) lkmdbg_agent_query_processes_reply {
+	int32_t status;
+	uint32_t count;
+	char message[64];
+};
+
+struct __attribute__((packed)) lkmdbg_agent_process_record {
+	int32_t pid;
+	int32_t uid;
+	char comm[64];
+	char cmdline[128];
+};
+
 static_assert(sizeof(struct lkmdbg_agent_hello_reply) == 80, "hello reply size");
 static_assert(sizeof(struct lkmdbg_agent_open_session_reply) == 80, "open-session reply size");
 static_assert(sizeof(struct lkmdbg_agent_set_target_request) == 8, "set-target request size");
 static_assert(sizeof(struct lkmdbg_agent_set_target_reply) == 72, "set-target reply size");
 static_assert(sizeof(struct lkmdbg_agent_status_snapshot) == 140, "status snapshot size");
+static_assert(sizeof(struct lkmdbg_agent_query_processes_reply) == 72, "query-processes reply size");
+static_assert(sizeof(struct lkmdbg_agent_process_record) == 200, "process record size");
 
 #endif

@@ -4,6 +4,7 @@ import android.content.Context
 import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.shared.BridgeHelloReply
 import com.smlc666.lkmdbg.shared.BridgeOpenSessionReply
+import com.smlc666.lkmdbg.shared.BridgeProcessListReply
 import com.smlc666.lkmdbg.shared.BridgeStatusSnapshot
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +32,8 @@ data class SessionBridgeState(
         message = "idle",
     ),
     val lastMessage: String,
+    val processFilter: ProcessFilter = ProcessFilter.All,
+    val processes: List<ResolvedProcessRecord> = emptyList(),
 )
 
 class SessionBridgeRepository(
@@ -38,6 +41,7 @@ class SessionBridgeRepository(
     private val client: PipeAgentClient = PipeAgentClient(context.applicationContext),
 ) {
     private val appContext = context.applicationContext
+    private val processResolver = AndroidProcessResolver(appContext)
     private val _state = MutableStateFlow(
         SessionBridgeState(
             agentPath = client.agentPathHint,
@@ -51,6 +55,10 @@ class SessionBridgeRepository(
         _state.update { current ->
             current.copy(targetPidInput = value.filter { it.isDigit() })
         }
+    }
+
+    fun updateProcessFilter(filter: ProcessFilter) {
+        _state.update { current -> current.copy(processFilter = filter) }
     }
 
     suspend fun connect() {
@@ -123,6 +131,23 @@ class SessionBridgeRepository(
             client.setTarget(targetPid)
         }
         refreshStatus()
+    }
+
+    suspend fun refreshProcesses() {
+        runOperation(
+            success = { reply: BridgeProcessListReply ->
+                val resolved = processResolver.resolve(reply.processes)
+                _state.update { current ->
+                    current.copy(
+                        processes = resolved,
+                        lastMessage = reply.message.ifBlank {
+                            appContext.getString(R.string.process_message_refreshed, resolved.size)
+                        },
+                    )
+                }
+            },
+            block = client::queryProcesses,
+        )
     }
 
     private suspend fun <T> runOperation(

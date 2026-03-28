@@ -3,12 +3,14 @@ package com.smlc666.lkmdbg.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ColumnScope.weight
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope.weight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -21,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.ui.components.HeroHeader
 import com.smlc666.lkmdbg.ui.components.StatusStrip
@@ -28,7 +31,8 @@ import com.smlc666.lkmdbg.ui.components.WorkspaceBar
 import com.smlc666.lkmdbg.ui.components.WorkspaceRail
 import com.smlc666.lkmdbg.ui.screens.EventScreen
 import com.smlc666.lkmdbg.ui.screens.MemoryScreen
-import com.smlc666.lkmdbg.ui.screens.ProcessSummaryScreen
+import com.smlc666.lkmdbg.ui.screens.ProcessControlPanel
+import com.smlc666.lkmdbg.ui.screens.ProcessRowCard
 import com.smlc666.lkmdbg.ui.screens.SessionScreen
 import com.smlc666.lkmdbg.ui.screens.ThreadScreen
 import kotlinx.coroutines.launch
@@ -61,7 +65,6 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                 WorkspaceRail(selectedTab = selectedTab, onSelect = { selectedTab = it })
                 DashboardContent(
                     dashboardState = dashboardState,
-                    sessionRepository = repository,
                     sessionState = sessionState,
                     selectedTab = selectedTab,
                     padding = PaddingValues(24.dp),
@@ -70,14 +73,15 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onOpenSession = { coroutineScope.launch { repository.openSession() } },
                     onRefreshStatus = { coroutineScope.launch { repository.refreshStatus() } },
                     onAttachTarget = { coroutineScope.launch { repository.attachTarget() } },
+                    onRefreshProcesses = { coroutineScope.launch { repository.refreshProcesses() } },
                     onTargetPidChanged = repository::updateTargetPidInput,
+                    onProcessFilterChanged = repository::updateProcessFilter,
                 )
             }
         } else {
             Column(modifier = Modifier.fillMaxSize()) {
                 DashboardContent(
                     dashboardState = dashboardState,
-                    sessionRepository = repository,
                     sessionState = sessionState,
                     selectedTab = selectedTab,
                     padding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
@@ -86,7 +90,9 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onOpenSession = { coroutineScope.launch { repository.openSession() } },
                     onRefreshStatus = { coroutineScope.launch { repository.refreshStatus() } },
                     onAttachTarget = { coroutineScope.launch { repository.attachTarget() } },
+                    onRefreshProcesses = { coroutineScope.launch { repository.refreshProcesses() } },
                     onTargetPidChanged = repository::updateTargetPidInput,
+                    onProcessFilterChanged = repository::updateProcessFilter,
                 )
                 WorkspaceBar(selectedTab = selectedTab, onSelect = { selectedTab = it })
             }
@@ -97,7 +103,6 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
 @Composable
 private fun DashboardContent(
     dashboardState: DashboardState,
-    sessionRepository: SessionBridgeRepository,
     sessionState: com.smlc666.lkmdbg.data.SessionBridgeState,
     selectedTab: WorkspaceTab,
     padding: PaddingValues,
@@ -105,9 +110,15 @@ private fun DashboardContent(
     onOpenSession: () -> Unit,
     onRefreshStatus: () -> Unit,
     onAttachTarget: () -> Unit,
+    onRefreshProcesses: () -> Unit,
     onTargetPidChanged: (String) -> Unit,
+    onProcessFilterChanged: (ProcessFilter) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val filteredProcesses = remember(sessionState.processes, sessionState.processFilter) {
+        sessionState.processes.filter { sessionState.processFilter.matches(it) }
+    }
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = padding,
@@ -125,14 +136,21 @@ private fun DashboardContent(
                     onAttachTarget = onAttachTarget,
                     onTargetPidChanged = onTargetPidChanged,
                 )
-                WorkspaceTab.Memory -> MemoryScreen(dashboardState)
-                WorkspaceTab.Threads -> {
-                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        ProcessSummaryScreen(dashboardState)
-                        ThreadScreen(dashboardState)
-                    }
+                WorkspaceTab.Processes -> {
+                    ProcessControlPanel(
+                        state = sessionState,
+                        onRefreshProcesses = onRefreshProcesses,
+                        onProcessFilterChanged = onProcessFilterChanged,
+                    )
                 }
+                WorkspaceTab.Memory -> MemoryScreen(dashboardState)
+                WorkspaceTab.Threads -> ThreadScreen(dashboardState)
                 WorkspaceTab.Events -> EventScreen(dashboardState)
+            }
+        }
+        if (selectedTab == WorkspaceTab.Processes) {
+            items(filteredProcesses, key = { "${it.pid}:${it.processName}" }) { process ->
+                ProcessRowCard(process = process)
             }
         }
     }

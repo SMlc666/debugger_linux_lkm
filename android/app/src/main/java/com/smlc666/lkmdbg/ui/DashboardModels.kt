@@ -3,7 +3,6 @@ package com.smlc666.lkmdbg.ui
 import android.content.Context
 import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.shared.DashboardEvent
-import com.smlc666.lkmdbg.shared.DashboardProcess
 import com.smlc666.lkmdbg.shared.DashboardThread
 
 internal data class DashboardMetric(
@@ -13,7 +12,6 @@ internal data class DashboardMetric(
 
 internal data class DashboardState(
     val chips: List<String>,
-    val processes: List<DashboardProcess>,
     val threads: List<DashboardThread>,
     val events: List<DashboardEvent>,
     val scanSummary: String,
@@ -27,11 +25,6 @@ internal fun sampleDashboardState(context: Context): DashboardState =
             context.getString(R.string.dashboard_chip_pipe),
             context.getString(R.string.dashboard_chip_md3),
             context.getString(R.string.dashboard_chip_gki),
-        ),
-        processes = listOf(
-            DashboardProcess(4321, "com.example.game", "com.example.game", "arm64", context.getString(R.string.process_state_attached)),
-            DashboardProcess(5544, "surfaceflinger", "system", "arm64", context.getString(R.string.process_state_idle)),
-            DashboardProcess(6110, "zygote64", "system", "arm64", context.getString(R.string.process_state_available)),
         ),
         threads = listOf(
             DashboardThread(4321, "RenderThread", "0x00000074ab12c090", context.getString(R.string.thread_state_running)),

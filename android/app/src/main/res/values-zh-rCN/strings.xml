@@ -8,6 +8,7 @@
     <string name="metric_target">目标</string>
     <string name="metric_agent">Agent</string>
     <string name="workspace_session">会话</string>
+    <string name="workspace_processes">进程</string>
     <string name="workspace_memory">内存</string>
     <string name="workspace_threads">线程</string>
     <string name="workspace_events">事件</string>
@@ -15,9 +16,6 @@
     <string name="dashboard_chip_pipe">stdio 管道</string>
     <string name="dashboard_chip_md3">MD3 外壳</string>
     <string name="dashboard_chip_gki">arm64 GKI</string>
-    <string name="process_state_attached">已附加</string>
-    <string name="process_state_idle">空闲</string>
-    <string name="process_state_available">可用</string>
     <string name="thread_state_running">运行中</string>
     <string name="thread_state_stopped">已停止</string>
     <string name="thread_state_sleeping">休眠</string>
@@ -66,7 +64,22 @@
     <string name="event_panel_title">事件流</string>
     <string name="event_panel_subtitle">近期调试事件摘要，用于快速感知当前状态。</string>
     <string name="process_panel_title">进程泳道</string>
-    <string name="process_panel_subtitle">展示代表性目标清单，以及当前调试所有权状态。</string>
+    <string name="process_panel_subtitle">由 root agent 枚举真实进程，并在本地完成 Android 分类、过滤和 APK 图标渲染。</string>
+    <string name="process_action_refresh">刷新进程列表</string>
+    <string name="process_filter_all">全部</string>
+    <string name="process_filter_android">安卓应用</string>
+    <string name="process_filter_cmdline">命令行</string>
+    <string name="process_filter_system">系统应用</string>
+    <string name="process_filter_user">用户应用</string>
+    <string name="process_summary_counts">总计=%1$d  安卓=%2$d  命令行=%3$d  系统=%4$d  用户=%5$d</string>
+    <string name="process_empty">还没有进程列表。等待 root agent 就绪后刷新。</string>
+    <string name="process_pid_uid">pid=%1$d  uid=%2$d</string>
+    <string name="process_kind_label">类型：%1$s</string>
+    <string name="process_kind_command_line">命令行</string>
+    <string name="process_kind_system_app">系统应用</string>
+    <string name="process_kind_user_app">用户应用</string>
+    <string name="process_package_name">包名：%1$s</string>
+    <string name="process_message_refreshed">已刷新 %1$d 个进程</string>
     <string name="session_message_idle">桥接空闲</string>
     <string name="session_message_connected">桥接已连接</string>
     <string name="session_message_opened">会话已打开</string>
