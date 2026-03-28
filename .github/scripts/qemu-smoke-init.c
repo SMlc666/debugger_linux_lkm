@@ -43,6 +43,7 @@
 #define EXAMPLE_VMA_PAGE_QUERY_TOOL "/lkmdbg_example_vma_page_query"
 #define EXAMPLE_REMOTE_ALLOC_RW_TOOL "/lkmdbg_example_remote_alloc_rw"
 #define EXAMPLE_PHYS_TRANSLATE_READ_TOOL "/lkmdbg_example_phys_translate_read"
+#define EXAMPLE_PERF_BASELINE_TOOL "/lkmdbg_example_perf_baseline"
 #define INPUT_QUERY_BATCH 16U
 #define QEMU_HOOK_SELFTEST_STRESS_REPEATS 5U
 #define QEMU_PROC_VERSION_REPEATS 5U
@@ -995,6 +996,7 @@ int main(void)
 		EXAMPLE_PHYS_TRANSLATE_READ_TOOL,
 		NULL,
 	};
+	char *const ex_perf_baseline_argv[] = { EXAMPLE_PERF_BASELINE_TOOL, NULL };
 	int watchpoint_ctrl_status;
 	int mem_test_status;
 	bool hook_soak_only;
@@ -1135,6 +1137,7 @@ int main(void)
 				qemu_run_tool(ex_vma_page_query_argv);
 				qemu_run_tool(ex_remote_alloc_rw_argv);
 				qemu_run_tool(ex_phys_translate_read_argv);
+				qemu_run_tool(ex_perf_baseline_argv);
 			printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
 			       qemu_read_status_u64("hwpoint_callback_total="),
 			       qemu_read_status_u64("breakpoint_callback_total="),

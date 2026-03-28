@@ -15,7 +15,7 @@ static void usage(const char *prog)
 		"Usage:\n"
 		"  %s cfg-get <pid>\n"
 		"  %s cfg <pid> <observe|enforce> <raw|raw+rule|rule>\n"
-		"  %s add <pid> <syscall_nr|-1> <setret|stop|setret+stop> <retval> [tid] [priority] [oneshot|persistent] [enter|exit|both]\n"
+		"  %s add <pid> <syscall_nr|-1> <setret|stop|rwargs|rwnr|rwret+...> <retval> [tid] [priority] [oneshot|persistent] [enter|exit|both] [rewrite_nr]\n"
 		"  %s del <pid> <rule_id>\n"
 		"  %s list <pid>\n",
 		prog, prog, prog, prog, prog);
@@ -108,20 +108,44 @@ static int parse_event_policy(const char *s, uint32_t *policy_out)
 
 static int parse_actions(const char *s, uint32_t *actions_out)
 {
-	if (strcmp(s, "setret") == 0) {
-		*actions_out = LKMDBG_SYSCALL_RULE_ACTION_SET_RETURN;
-		return 0;
+	char buf[128];
+	char *cursor;
+	uint32_t actions = 0;
+
+	if (!s || !actions_out)
+		return -1;
+	if (snprintf(buf, sizeof(buf), "%s", s) >= (int)sizeof(buf))
+		return -1;
+
+	cursor = buf;
+	while (cursor && *cursor) {
+		char *plus = strchr(cursor, '+');
+		size_t len = plus ? (size_t)(plus - cursor) : strlen(cursor);
+		uint32_t bit = 0;
+
+		if (len == 0)
+			return -1;
+		if (len == 6 && strncmp(cursor, "setret", len) == 0)
+			bit = LKMDBG_SYSCALL_RULE_ACTION_SET_RETURN;
+		else if (len == 4 && strncmp(cursor, "stop", len) == 0)
+			bit = LKMDBG_SYSCALL_RULE_ACTION_STOP;
+		else if (len == 6 && strncmp(cursor, "rwargs", len) == 0)
+			bit = LKMDBG_SYSCALL_RULE_ACTION_REWRITE_ARGS;
+		else if (len == 4 && strncmp(cursor, "rwnr", len) == 0)
+			bit = LKMDBG_SYSCALL_RULE_ACTION_REWRITE_NR;
+		else if (len == 5 && strncmp(cursor, "rwret", len) == 0)
+			bit = LKMDBG_SYSCALL_RULE_ACTION_REWRITE_RETVAL;
+		else
+			return -1;
+
+		actions |= bit;
+		if (!plus)
+			break;
+		cursor = plus + 1;
 	}
-	if (strcmp(s, "stop") == 0) {
-		*actions_out = LKMDBG_SYSCALL_RULE_ACTION_STOP;
-		return 0;
-	}
-	if (strcmp(s, "setret+stop") == 0 || strcmp(s, "stop+setret") == 0) {
-		*actions_out = LKMDBG_SYSCALL_RULE_ACTION_SET_RETURN |
-			       LKMDBG_SYSCALL_RULE_ACTION_STOP;
-		return 0;
-	}
-	return -1;
+
+	*actions_out = actions;
+	return actions ? 0 : -1;
 }
 
 static int parse_phases(const char *s, uint32_t *phases_out)
@@ -164,10 +188,10 @@ static const char *policy_name(uint32_t policy)
 
 static void print_rule(const struct lkmdbg_syscall_rule_entry *e)
 {
-	printf("rule_id=%llu tid=%d nr=%d phases=0x%x actions=0x%x flags=0x%x priority=%u arg_match=0x%x rewrite=0x%x retval=%lld hits=%llu\n",
+	printf("rule_id=%llu tid=%d nr=%d phases=0x%x actions=0x%x flags=0x%x priority=%u arg_match=0x%x rewrite=0x%x rewrite_nr=%d retval=%lld hits=%llu\n",
 	       (unsigned long long)e->rule_id, e->tid, e->syscall_nr,
 	       e->phases, e->actions, e->flags, e->priority,
-	       e->arg_match_mask, e->rewrite_mask,
+	       e->arg_match_mask, e->rewrite_mask, e->rewrite_syscall_nr,
 	       (long long)e->retval, (unsigned long long)e->hits);
 }
 
@@ -229,12 +253,13 @@ int main(int argc, char **argv)
 		struct lkmdbg_syscall_rule_request reply;
 		int32_t syscall_nr = -1;
 		int32_t tid = 0;
+		int32_t rewrite_nr = -1;
 		uint32_t actions = 0;
 		uint32_t priority = 0;
 		uint32_t phases = LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
 		int64_t retval64 = 0;
 		uint32_t flags = LKMDBG_SYSCALL_RULE_FLAG_ENABLED;
-		int phase_consumed = 0;
+		int argi = 9;
 
 		memset(&entry, 0, sizeof(entry));
 		if (argc < 6 || parse_i32(argv[3], &syscall_nr) < 0 ||
@@ -251,20 +276,45 @@ int main(int argc, char **argv)
 			fprintf(stderr, "invalid priority: %s\n", argv[7]);
 			goto out;
 		}
-		if (argc >= 9) {
+		if (argc >= argi) {
 			if (strcmp(argv[8], "oneshot") == 0)
 				flags |= LKMDBG_SYSCALL_RULE_FLAG_ONESHOT;
-			else if (parse_phases(argv[8], &phases) == 0)
-				phase_consumed = 1;
 			else if (strcmp(argv[8], "persistent") != 0) {
-				fprintf(stderr, "invalid rule persistence: %s\n",
-					argv[8]);
+				if (parse_phases(argv[8], &phases) < 0) {
+					fprintf(stderr,
+						"invalid rule persistence/phases: %s\n",
+						argv[8]);
+					goto out;
+				}
+			}
+		}
+		if (argc >= argi + 1) {
+			if (parse_phases(argv[9], &phases) == 0) {
+				argi++;
+			} else if (parse_i32(argv[9], &rewrite_nr) == 0) {
+				argi++;
+			} else {
+				fprintf(stderr, "invalid phases/rewrite_nr: %s\n",
+					argv[9]);
 				goto out;
 			}
 		}
-		if (argc >= 10 && !phase_consumed &&
-		    parse_phases(argv[9], &phases) < 0) {
-			fprintf(stderr, "invalid phases: %s\n", argv[9]);
+		if (argc >= argi + 1) {
+			if (parse_i32(argv[10], &rewrite_nr) < 0) {
+				fprintf(stderr, "invalid rewrite_nr: %s\n",
+					argv[10]);
+				goto out;
+			}
+			argi++;
+		}
+		if (argc > argi) {
+			usage(argv[0]);
+			goto out;
+		}
+		if ((actions & LKMDBG_SYSCALL_RULE_ACTION_REWRITE_NR) &&
+		    rewrite_nr < 0) {
+			fprintf(stderr,
+				"rewrite_nr action requires rewrite_nr argument\n");
 			goto out;
 		}
 
@@ -274,6 +324,7 @@ int main(int argc, char **argv)
 		entry.actions = actions;
 		entry.flags = flags;
 		entry.priority = priority;
+		entry.rewrite_syscall_nr = rewrite_nr;
 		entry.retval = retval64;
 
 		if (upsert_syscall_rule(session_fd, &entry, &reply) < 0)

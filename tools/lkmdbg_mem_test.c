@@ -5260,9 +5260,11 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 	};
 	const uint32_t nr = SYS_getppid;
 	const uint32_t nr_rewrite = SYS_getpgid;
+	const uint32_t nr_rewrite_to = SYS_getpid;
 	const pid_t parent_pid = getpid();
 	const int event_timeout_ms = 5000;
 	const int64_t exit_rewrite_retval = -7777;
+	const int64_t exit_rewrite_retval_v3 = -8889;
 	int64_t syscall_retval;
 	uint32_t supported_phases;
 	uint32_t control_phases;
@@ -5610,6 +5612,23 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 					(uint64_t)event.value1);
 				goto fail;
 			}
+			if (wait_for_session_event(
+				    session_fd,
+				    LKMDBG_EVENT_TARGET_SYSCALL_RULE_DETAIL, 0,
+				    event_timeout_ms, &event) < 0)
+				goto fail;
+			if (event.flags != LKMDBG_SYSCALL_TRACE_PHASE_EXIT ||
+			    (event.code &
+			     LKMDBG_SYSCALL_RULE_ACTION_SET_RETURN) == 0 ||
+			    (int64_t)event.value0 != parent_pid ||
+			    (int64_t)event.value1 != exit_rewrite_retval) {
+				fprintf(stderr,
+					"syscall rule exit detail mismatch flags=0x%x code=0x%x old=%" PRId64 " new=%" PRId64 "\n",
+					event.flags, event.code,
+					(int64_t)event.value0,
+					(int64_t)event.value1);
+				goto fail;
+			}
 		}
 
 		memset(&rule_entry, 0, sizeof(rule_entry));
@@ -5646,6 +5665,143 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 				event.flags, (uint64_t)event.value0,
 				(uint64_t)event.value1);
 			goto fail;
+		}
+		if (wait_for_session_event(
+			    session_fd, LKMDBG_EVENT_TARGET_SYSCALL_RULE_DETAIL, 0,
+			    event_timeout_ms, &event) < 0)
+			goto fail;
+		if (event.flags != LKMDBG_SYSCALL_TRACE_PHASE_ENTER ||
+		    (event.code & LKMDBG_SYSCALL_RULE_ACTION_REWRITE_ARGS) == 0 ||
+		    event.value0 != nr_rewrite || event.value1 != nr_rewrite) {
+			fprintf(stderr,
+				"syscall rule rewrite detail mismatch flags=0x%x code=0x%x old=%" PRIu64 " new=%" PRIu64 "\n",
+				event.flags, event.code, (uint64_t)event.value0,
+				(uint64_t)event.value1);
+			goto fail;
+		}
+
+		if (resolve_req.backend_flags &
+		    LKMDBG_SYSCALL_RESOLVE_FLAG_NR_REWRITE_SUPPORTED) {
+			memset(&rule_entry, 0, sizeof(rule_entry));
+			rule_entry.tid = child;
+			rule_entry.syscall_nr = (int32_t)nr;
+			rule_entry.phases = LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
+			rule_entry.actions = LKMDBG_SYSCALL_RULE_ACTION_REWRITE_NR;
+			rule_entry.flags = LKMDBG_SYSCALL_RULE_FLAG_ENABLED;
+			rule_entry.priority = 250;
+			rule_entry.rewrite_syscall_nr = (int32_t)nr_rewrite_to;
+			memset(&rule_req, 0, sizeof(rule_req));
+			if (upsert_syscall_rule(session_fd, &rule_entry,
+						&rule_req) < 0)
+				goto fail;
+
+			if (drain_session_events(session_fd) < 0)
+				goto fail;
+			if (child_trigger_syscall(cmd_fd, resp_fd,
+						  &syscall_retval) < 0)
+				goto fail;
+			if ((pid_t)syscall_retval != child) {
+				fprintf(stderr,
+					"syscall rule rewrite-nr mismatch got=%" PRId64 " expected=%d\n",
+					syscall_retval, child);
+				goto fail;
+			}
+			if (wait_for_session_event(
+				    session_fd, LKMDBG_EVENT_TARGET_SYSCALL_RULE,
+				    0, event_timeout_ms, &event) < 0)
+				goto fail;
+			if (event.flags != LKMDBG_SYSCALL_TRACE_PHASE_ENTER ||
+			    (event.code &
+			     LKMDBG_SYSCALL_RULE_ACTION_REWRITE_NR) == 0 ||
+			    event.value0 != nr_rewrite_to ||
+			    event.value1 != rule_req.rule.rule_id) {
+				fprintf(stderr,
+					"syscall rule rewrite-nr event mismatch flags=0x%x code=0x%x nr=%" PRIu64 " rule=%" PRIu64 "\n",
+					event.flags, event.code,
+					(uint64_t)event.value0,
+					(uint64_t)event.value1);
+				goto fail;
+			}
+			if (wait_for_session_event(
+				    session_fd,
+				    LKMDBG_EVENT_TARGET_SYSCALL_RULE_DETAIL, 0,
+				    event_timeout_ms, &event) < 0)
+				goto fail;
+			if (event.flags != LKMDBG_SYSCALL_TRACE_PHASE_ENTER ||
+			    (event.code &
+			     LKMDBG_SYSCALL_RULE_ACTION_REWRITE_NR) == 0 ||
+			    event.value0 != nr ||
+			    event.value1 != nr_rewrite_to) {
+				fprintf(stderr,
+					"syscall rule rewrite-nr detail mismatch flags=0x%x code=0x%x old=%" PRIu64 " new=%" PRIu64 "\n",
+					event.flags, event.code,
+					(uint64_t)event.value0,
+					(uint64_t)event.value1);
+				goto fail;
+			}
+		}
+
+		if (control_phases & LKMDBG_SYSCALL_TRACE_PHASE_EXIT) {
+			memset(&rule_entry, 0, sizeof(rule_entry));
+			rule_entry.tid = child;
+			rule_entry.syscall_nr = (int32_t)nr_rewrite_to;
+			rule_entry.phases = LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
+			rule_entry.actions =
+				LKMDBG_SYSCALL_RULE_ACTION_REWRITE_RETVAL;
+			rule_entry.flags = LKMDBG_SYSCALL_RULE_FLAG_ENABLED;
+			rule_entry.priority = 260;
+			rule_entry.retval = exit_rewrite_retval_v3;
+			memset(&rule_req, 0, sizeof(rule_req));
+			if (upsert_syscall_rule(session_fd, &rule_entry,
+						&rule_req) < 0)
+				goto fail;
+
+			if (drain_session_events(session_fd) < 0)
+				goto fail;
+			if (child_trigger_syscall_ex(cmd_fd, resp_fd, nr_rewrite_to,
+						     0, 0,
+						     &syscall_retval) < 0)
+				goto fail;
+			if (syscall_retval != exit_rewrite_retval_v3) {
+				fprintf(stderr,
+					"syscall rule rewrite-retval mismatch got=%" PRId64 " expected=%" PRId64 "\n",
+					syscall_retval,
+					exit_rewrite_retval_v3);
+				goto fail;
+			}
+			if (wait_for_session_event(
+				    session_fd, LKMDBG_EVENT_TARGET_SYSCALL_RULE,
+				    0, event_timeout_ms, &event) < 0)
+				goto fail;
+			if (event.flags != LKMDBG_SYSCALL_TRACE_PHASE_EXIT ||
+			    (event.code &
+			     LKMDBG_SYSCALL_RULE_ACTION_REWRITE_RETVAL) == 0 ||
+			    event.value0 != nr_rewrite_to ||
+			    event.value1 != rule_req.rule.rule_id) {
+				fprintf(stderr,
+					"syscall rule rewrite-retval event mismatch flags=0x%x code=0x%x nr=%" PRIu64 " rule=%" PRIu64 "\n",
+					event.flags, event.code,
+					(uint64_t)event.value0,
+					(uint64_t)event.value1);
+				goto fail;
+			}
+			if (wait_for_session_event(
+				    session_fd,
+				    LKMDBG_EVENT_TARGET_SYSCALL_RULE_DETAIL, 0,
+				    event_timeout_ms, &event) < 0)
+				goto fail;
+			if (event.flags != LKMDBG_SYSCALL_TRACE_PHASE_EXIT ||
+			    (event.code &
+			     LKMDBG_SYSCALL_RULE_ACTION_REWRITE_RETVAL) == 0 ||
+			    (pid_t)(int64_t)event.value0 != child ||
+			    (int64_t)event.value1 != exit_rewrite_retval_v3) {
+				fprintf(stderr,
+					"syscall rule rewrite-retval detail mismatch flags=0x%x code=0x%x old=%" PRId64 " new=%" PRId64 "\n",
+					event.flags, event.code,
+					(int64_t)event.value0,
+					(int64_t)event.value1);
+				goto fail;
+			}
 		}
 	}
 

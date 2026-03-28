@@ -108,6 +108,7 @@ static void lkmdbg_session_supported_event_mask(u64 *mask_words)
 	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_MUNMAP);
 	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_MPROTECT);
 	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_SYSCALL_RULE);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_SYSCALL_RULE_DETAIL);
 }
 
 static bool lkmdbg_session_event_type_enabled(const struct lkmdbg_session *session,
@@ -771,6 +772,31 @@ static void lkmdbg_syscall_rule_apply_rewrite_args(
 #endif
 }
 
+static bool lkmdbg_syscall_rule_apply_rewrite_nr(
+	const struct lkmdbg_syscall_rule_entry *entry, bool rewrite_supported,
+	struct pt_regs *regs, s32 *syscall_nr_io)
+{
+#ifdef CONFIG_ARM64
+	s32 nr;
+
+	if (!entry || !regs || !syscall_nr_io)
+		return false;
+	if (!rewrite_supported || entry->rewrite_syscall_nr < 0)
+		return false;
+
+	nr = entry->rewrite_syscall_nr;
+	regs->regs[8] = (u64)(u32)nr;
+	*syscall_nr_io = nr;
+	return true;
+#else
+	(void)entry;
+	(void)rewrite_supported;
+	(void)regs;
+	(void)syscall_nr_io;
+	return false;
+#endif
+}
+
 static struct lkmdbg_syscall_rule *
 lkmdbg_find_syscall_rule_locked(struct lkmdbg_session *session, u64 rule_id)
 {
@@ -949,6 +975,19 @@ void lkmdbg_session_broadcast_syscall_event(
 	}
 }
 
+static void lkmdbg_session_queue_syscall_rule_detail_event(
+	struct lkmdbg_session *session, pid_t tgid, pid_t tid, u32 phase,
+	u32 applied_actions, u64 value0, u64 value1)
+{
+	if (!session)
+		return;
+
+	lkmdbg_session_queue_event_ex(session,
+				      LKMDBG_EVENT_TARGET_SYSCALL_RULE_DETAIL,
+				      applied_actions, tgid, tid, phase, value0,
+				      value1);
+}
+
 int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
 				 bool nr_rewrite_supported, bool *skip_out,
 				 s64 *retval_out)
@@ -967,7 +1006,8 @@ int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
 	struct lkmdbg_syscall_rule *rule = NULL;
 	struct lkmdbg_regs_arm64 stop_regs;
 	unsigned long irqflags;
-	s32 syscall_nr;
+	s32 syscall_nr_before;
+	s32 syscall_nr_effective;
 	u32 requested_actions = 0;
 	u32 applied_actions = 0;
 	u64 rule_id = 0;
@@ -984,14 +1024,15 @@ int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
 	    *syscall_nr_io < 0)
 		return 0;
 
-	syscall_nr = *syscall_nr_io;
+	syscall_nr_before = *syscall_nr_io;
+	syscall_nr_effective = syscall_nr_before;
 
 	spin_lock_irqsave(&lkmdbg_session_list_lock, irqflags);
 	list_for_each_entry(candidate, &lkmdbg_session_list, node) {
 		if (READ_ONCE(candidate->target_tgid) != current->tgid)
 			continue;
 		control_match = lkmdbg_session_syscall_control_matches(
-			candidate, current->pid, syscall_nr);
+			candidate, current->pid, syscall_nr_before);
 		rule_candidate =
 			READ_ONCE(candidate->syscall_rule_count) > 0 &&
 			(READ_ONCE(candidate->syscall_trace_mode) &
@@ -1021,7 +1062,7 @@ int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
 
 	if (session->syscall_rule_count > 0) {
 		matched_rule = lkmdbg_session_pick_syscall_rule_locked(
-			session, current->pid, syscall_nr,
+			session, current->pid, syscall_nr_before,
 			LKMDBG_SYSCALL_TRACE_PHASE_ENTER, regs, &rule);
 		if (matched_rule) {
 			requested_actions = rule->entry.actions;
@@ -1030,6 +1071,15 @@ int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
 
 			if (session->syscall_rule_mode ==
 			    LKMDBG_SYSCALL_RULE_MODE_ENFORCE) {
+				if (requested_actions &
+				    LKMDBG_SYSCALL_RULE_ACTION_REWRITE_NR) {
+					if (lkmdbg_syscall_rule_apply_rewrite_nr(
+						    &rule->entry,
+						    nr_rewrite_supported, regs,
+						    &syscall_nr_effective))
+						applied_actions |=
+							LKMDBG_SYSCALL_RULE_ACTION_REWRITE_NR;
+				}
 				if (requested_actions &
 				    LKMDBG_SYSCALL_RULE_ACTION_REWRITE_ARGS) {
 					lkmdbg_syscall_rule_apply_rewrite_args(
@@ -1068,16 +1118,25 @@ int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
 				session, LKMDBG_EVENT_TARGET_SYSCALL_RULE,
 				applied_actions, current->tgid, current->pid,
 				LKMDBG_SYSCALL_TRACE_PHASE_ENTER,
-				(u64)(u32)syscall_nr, rule_id);
+				(u64)(u32)syscall_nr_effective, rule_id);
+
+		if (emit_rule_event)
+			lkmdbg_session_queue_syscall_rule_detail_event(
+				session, current->tgid, current->pid,
+				LKMDBG_SYSCALL_TRACE_PHASE_ENTER,
+				applied_actions, (u64)(u32)syscall_nr_before,
+				(u64)(u32)syscall_nr_effective);
 
 		if (request_rule_stop) {
 			(void)lkmdbg_session_request_async_stop(
 				session, LKMDBG_STOP_REASON_SYSCALL, current->tgid,
 				current->pid, LKMDBG_SYSCALL_TRACE_PHASE_ENTER, 0,
-				(u64)(u32)syscall_nr, rule_id, &stop_regs);
+				(u64)(u32)syscall_nr_effective, rule_id,
+				&stop_regs);
 		}
 
 		lkmdbg_session_async_put(session);
+		*syscall_nr_io = syscall_nr_effective;
 		if (skip_out)
 			*skip_out = skip;
 		if (retval_out)
@@ -1103,7 +1162,7 @@ int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
 			0;
 	session->syscall_control.tgid = current->tgid;
 	session->syscall_control.tid = current->pid;
-	session->syscall_control.syscall_nr = syscall_nr;
+	session->syscall_control.syscall_nr = syscall_nr_before;
 	session->syscall_control.retval = 0;
 	session->syscall_control.regs = stop_regs;
 	memcpy(session->syscall_control.args, stop_regs.regs,
@@ -1113,7 +1172,7 @@ int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
 	ret = lkmdbg_session_request_async_stop(
 		session, LKMDBG_STOP_REASON_SYSCALL, current->tgid, current->pid,
 		LKMDBG_SYSCALL_TRACE_PHASE_ENTER,
-		LKMDBG_STOP_FLAG_SYSCALL_CONTROL, (u64)(u32)syscall_nr, 0,
+		LKMDBG_STOP_FLAG_SYSCALL_CONTROL, (u64)(u32)syscall_nr_before, 0,
 		&stop_regs);
 	if (ret) {
 		lkmdbg_session_fail_syscall_control(session);
@@ -1192,6 +1251,7 @@ int lkmdbg_control_syscall_exit(struct pt_regs *regs, s32 syscall_nr,
 	bool matched_rule = false;
 	bool emit_rule_event = false;
 	bool request_rule_stop = false;
+	s64 retval_before = retval_io ? *retval_io : 0;
 	s64 retval = retval_io ? *retval_io : 0;
 
 	if (!regs || current->tgid <= 0 || current->pid <= 0 || syscall_nr < 0)
@@ -1243,6 +1303,13 @@ int lkmdbg_control_syscall_exit(struct pt_regs *regs, s32 syscall_nr,
 				applied_actions |=
 					LKMDBG_SYSCALL_RULE_ACTION_SET_RETURN;
 			}
+			if (requested_actions &
+			    LKMDBG_SYSCALL_RULE_ACTION_REWRITE_RETVAL) {
+				retval = rule->entry.retval;
+				regs->regs[0] = (u64)retval;
+				applied_actions |=
+					LKMDBG_SYSCALL_RULE_ACTION_REWRITE_RETVAL;
+			}
 			if (requested_actions & LKMDBG_SYSCALL_RULE_ACTION_STOP) {
 				request_rule_stop = true;
 				applied_actions |=
@@ -1266,6 +1333,12 @@ int lkmdbg_control_syscall_exit(struct pt_regs *regs, s32 syscall_nr,
 					      current->pid,
 					      LKMDBG_SYSCALL_TRACE_PHASE_EXIT,
 					      (u64)(u32)syscall_nr, rule_id);
+
+	if (emit_rule_event)
+		lkmdbg_session_queue_syscall_rule_detail_event(
+			session, current->tgid, current->pid,
+			LKMDBG_SYSCALL_TRACE_PHASE_EXIT, applied_actions,
+			(u64)retval_before, (u64)retval);
 
 	if (request_rule_stop) {
 		(void)lkmdbg_session_request_async_stop(
@@ -1456,7 +1529,9 @@ static int lkmdbg_validate_syscall_rule_request(
 {
 	u32 valid_actions = LKMDBG_SYSCALL_RULE_ACTION_SET_RETURN |
 			    LKMDBG_SYSCALL_RULE_ACTION_STOP |
-			    LKMDBG_SYSCALL_RULE_ACTION_REWRITE_ARGS;
+			    LKMDBG_SYSCALL_RULE_ACTION_REWRITE_ARGS |
+			    LKMDBG_SYSCALL_RULE_ACTION_REWRITE_NR |
+			    LKMDBG_SYSCALL_RULE_ACTION_REWRITE_RETVAL;
 	u32 valid_flags = LKMDBG_SYSCALL_RULE_FLAG_ENABLED |
 			  LKMDBG_SYSCALL_RULE_FLAG_ONESHOT;
 	u32 i;
@@ -1482,11 +1557,20 @@ static int lkmdbg_validate_syscall_rule_request(
 	     (req->rule.actions & LKMDBG_SYSCALL_RULE_ACTION_REWRITE_ARGS)) &&
 	    !(req->rule.phases & LKMDBG_SYSCALL_TRACE_PHASE_ENTER))
 		return -EINVAL;
+	if ((req->rule.actions & LKMDBG_SYSCALL_RULE_ACTION_REWRITE_NR) &&
+	    !(req->rule.phases & LKMDBG_SYSCALL_TRACE_PHASE_ENTER))
+		return -EINVAL;
+	if ((req->rule.actions & LKMDBG_SYSCALL_RULE_ACTION_REWRITE_RETVAL) &&
+	    !(req->rule.phases & LKMDBG_SYSCALL_TRACE_PHASE_EXIT))
+		return -EINVAL;
 	if (!(req->rule.actions & LKMDBG_SYSCALL_RULE_ACTION_REWRITE_ARGS) &&
 	    req->rule.rewrite_mask)
 		return -EINVAL;
 	if ((req->rule.actions & LKMDBG_SYSCALL_RULE_ACTION_REWRITE_ARGS) &&
 	    !req->rule.rewrite_mask)
+		return -EINVAL;
+	if ((req->rule.actions & LKMDBG_SYSCALL_RULE_ACTION_REWRITE_NR) &&
+	    req->rule.rewrite_syscall_nr < 0)
 		return -EINVAL;
 	for (i = 0; i < LKMDBG_SYSCALL_RULE_ARG_MAX; i++) {
 		if ((req->rule.arg_match_mask & (1U << i)) &&

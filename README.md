@@ -65,6 +65,7 @@ cc -O2 -Wall -Wextra -o tools/examples/example_sysrule_combo tools/examples/exam
 cc -O2 -Wall -Wextra -o tools/examples/example_vma_page_query tools/examples/example_vma_page_query.c tools/driver/bridge_c.c
 cc -O2 -Wall -Wextra -o tools/examples/example_remote_alloc_rw tools/examples/example_remote_alloc_rw.c tools/driver/bridge_c.c tools/driver/bridge_memory.c
 cc -O2 -Wall -Wextra -o tools/examples/example_phys_translate_read tools/examples/example_phys_translate_read.c tools/driver/bridge_c.c tools/driver/bridge_memory.c
+cc -O2 -Wall -Wextra -o tools/examples/example_perf_baseline tools/examples/example_perf_baseline.c tools/driver/bridge_c.c tools/driver/bridge_memory.c
 ```
 
 `tools/examples/` now provides one-file runnable examples for core session-fd flows and is executed in QEMU smoke CI.
@@ -80,6 +81,7 @@ Current composable examples:
 - `example_vma_page_query`: VMA walk + page-table view (`QUERY_PAGES`)
 - `example_remote_alloc_rw`: remote alloc lifecycle + memory read/write
 - `example_phys_translate_read`: target VA->PA translate + physical read
+- `example_perf_baseline`: memory/translation/remote_alloc baseline throughput and latency
 
 `tools/lkmdbg_sysrule_ctl` provides fast syscall rule config and CRUD helpers:
 
@@ -87,8 +89,18 @@ Current composable examples:
 sudo ./tools/lkmdbg_mem_test sysset <pid> event+control enter+exit
 sudo ./tools/lkmdbg_sysrule_ctl cfg <pid> enforce raw+rule
 sudo ./tools/lkmdbg_sysrule_ctl add <pid> 173 setret -1 0 100 persistent exit
+sudo ./tools/lkmdbg_sysrule_ctl add <pid> 173 rwret -7777 0 120 persistent exit
+sudo ./tools/lkmdbg_sysrule_ctl add <pid> 173 rwnr 0 0 130 persistent enter 172
 sudo ./tools/lkmdbg_sysrule_ctl list <pid>
 ```
+
+`add` now accepts action combinations joined by `+`:
+
+- `setret`
+- `stop`
+- `rwargs`
+- `rwnr` (requires trailing `rewrite_nr`)
+- `rwret`
 
 User-space driver code is split under `tools/driver/`:
 
