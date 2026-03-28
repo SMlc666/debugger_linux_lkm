@@ -3,7 +3,6 @@ package com.smlc666.lkmdbg.ui.screens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope.weight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -27,18 +26,16 @@ internal fun ThreadScreen(state: DashboardState) {
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 state.threads.forEach { thread ->
-                    Row(
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("${thread.name} (${thread.tid})", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                stringResource(R.string.thread_pc_value, thread.pc),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        Text("${thread.name} (${thread.tid})", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            stringResource(R.string.thread_pc_value, thread.pc),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         AssistChip(onClick = {}, label = { Text(thread.state) })
                     }
                 }

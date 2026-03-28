@@ -4,10 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope.weight
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -59,7 +58,19 @@ internal fun WorkspaceRail(selectedTab: WorkspaceTab, onSelect: (WorkspaceTab) -
 
 @Composable
 internal fun WorkspaceBar(selectedTab: WorkspaceTab, onSelect: (WorkspaceTab) -> Unit) {
-    NavigationBar(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)) {
+    WorkspaceBar(selectedTab = selectedTab, onSelect = onSelect, modifier = Modifier)
+}
+
+@Composable
+internal fun WorkspaceBar(
+    selectedTab: WorkspaceTab,
+    onSelect: (WorkspaceTab) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    NavigationBar(
+        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        modifier = modifier,
+    ) {
         WorkspaceTab.entries.forEach { tab ->
             NavigationBarItem(
                 selected = selectedTab == tab,
@@ -136,17 +147,17 @@ internal fun HeroHeader(chips: List<String>, sessionState: SessionBridgeState) {
 
 @Composable
 internal fun StatusStrip(sessionState: SessionBridgeState) {
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        MetricCard(stringResource(R.string.metric_transport), sessionState.snapshot.transport, Modifier.weight(1f))
+        MetricCard(stringResource(R.string.metric_transport), sessionState.snapshot.transport, Modifier.fillMaxWidth())
         MetricCard(
             stringResource(R.string.metric_target),
             "${sessionState.snapshot.targetPid}/${sessionState.snapshot.targetTid}",
-            Modifier.weight(1f),
+            Modifier.fillMaxWidth(),
         )
-        MetricCard(stringResource(R.string.metric_agent), sessionState.snapshot.agentPid.toString(), Modifier.weight(1f))
+        MetricCard(stringResource(R.string.metric_agent), sessionState.snapshot.agentPid.toString(), Modifier.fillMaxWidth())
     }
 }
 
