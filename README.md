@@ -19,6 +19,10 @@ Current source layout:
 - `mem/`: target memory read/write helpers
 - `ui/`: debugfs status export
 - `include/`: shared kernel/user protocol and internal declarations
+- `tools/`: host-side CLI tools, examples, and reusable bridge helpers
+- `android/shared/`: Kotlin-side pipe protocol framing shared by the app and root agent
+- `android/agent/`: root-side `lkmdbg-agent --stdio` bridge to the kernel session-fd API
+- `android/app/`: MD3 Android app shell with session, memory, threads, and event panes
 
 Current hook support is intentionally minimal:
 
@@ -113,6 +117,46 @@ User-space driver code is split under `tools/driver/`:
 - `bridge_memory.*` for C memory xfer helpers
 - `bridge_control.*` for C control-path ioctls
 - `common.hpp` for shared logging/error formatting
+
+## Android App Skeleton
+
+The repository now also contains an Android-side control plane under `android/`.
+
+The current Android design is:
+
+- APK UI in `android/app/`
+- shared pipe protocol definitions in `android/shared/`
+- root stdio bridge in `android/agent/`
+- kernel control remains on the existing anonymous session fd returned from `/proc/version`
+
+The Android bridge is intentionally narrow:
+
+- the APK does not talk to kernel ioctls directly
+- the APK launches a root helper through `su -c`
+- the helper runs `lkmdbg-agent --stdio`
+- the agent opens the hidden session bootstrap, then forwards a small framed protocol over stdin/stdout
+
+Currently wired Android commands:
+
+- `HELLO`
+- `OPEN_SESSION`
+- `SET_TARGET`
+- `STATUS_SNAPSHOT`
+
+The APK `Session` pane now uses that real pipe bridge path. The `Memory`, `Threads`, and `Events` panes are still UI-first placeholders until those commands are exposed over the same framed transport.
+
+### Android CI
+
+Android CI is separate from the kernel/QEMU workflow:
+
+- workflow: `.github/workflows/android-build.yml`
+- `android-agent` job builds the current `android/agent/` source with CMake
+- `android-app` job builds `android/shared` and assembles the debug APK from `android/app`
+
+The current CI output is:
+
+- host-side `lkmdbg-agent` artifact for interface sanity checks
+- debug APK artifact for UI and protocol build validation
 
 Load and inspect:
 
