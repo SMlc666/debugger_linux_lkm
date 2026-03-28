@@ -56,29 +56,75 @@
 #define SKIPDATA_MNEM NULL
 #endif
 
+#ifdef CAPSTONE_HAS_AARCH64
 #include "arch/AArch64/AArch64Module.h"
+#endif
+#ifdef CAPSTONE_HAS_ARM
 #include "arch/ARM/ARMModule.h"
+#endif
+#ifdef CAPSTONE_HAS_EVM
 #include "arch/EVM/EVMModule.h"
+#endif
+#ifdef CAPSTONE_HAS_WASM
 #include "arch/WASM/WASMModule.h"
+#endif
+#ifdef CAPSTONE_HAS_M680X
 #include "arch/M680X/M680XModule.h"
+#endif
+#ifdef CAPSTONE_HAS_M68K
 #include "arch/M68K/M68KModule.h"
+#endif
+#ifdef CAPSTONE_HAS_MIPS
 #include "arch/Mips/MipsModule.h"
+#endif
+#ifdef CAPSTONE_HAS_POWERPC
 #include "arch/PowerPC/PPCModule.h"
+#endif
+#ifdef CAPSTONE_HAS_SPARC
 #include "arch/Sparc/SparcModule.h"
+#endif
+#ifdef CAPSTONE_HAS_SYSTEMZ
 #include "arch/SystemZ/SystemZModule.h"
+#endif
+#ifdef CAPSTONE_HAS_TMS320C64X
 #include "arch/TMS320C64x/TMS320C64xModule.h"
+#endif
+#ifdef CAPSTONE_HAS_X86
 #include "arch/X86/X86Module.h"
+#endif
+#ifdef CAPSTONE_HAS_XCORE
 #include "arch/XCore/XCoreModule.h"
+#endif
+#ifdef CAPSTONE_HAS_RISCV
 #include "arch/RISCV/RISCVModule.h"
+#endif
+#ifdef CAPSTONE_HAS_MOS65XX
 #include "arch/MOS65XX/MOS65XXModule.h"
+#endif
+#ifdef CAPSTONE_HAS_BPF
 #include "arch/BPF/BPFModule.h"
+#endif
+#ifdef CAPSTONE_HAS_SH
 #include "arch/SH/SHModule.h"
+#endif
+#ifdef CAPSTONE_HAS_TRICORE
 #include "arch/TriCore/TriCoreModule.h"
+#endif
+#ifdef CAPSTONE_HAS_ALPHA
 #include "arch/Alpha/AlphaModule.h"
+#endif
+#ifdef CAPSTONE_HAS_HPPA
 #include "arch/HPPA/HPPAModule.h"
+#endif
+#ifdef CAPSTONE_HAS_LOONGARCH
 #include "arch/LoongArch/LoongArchModule.h"
+#endif
+#ifdef CAPSTONE_HAS_XTENSA
 #include "arch/Xtensa/XtensaModule.h"
+#endif
+#ifdef CAPSTONE_HAS_ARC
 #include "arch/ARC/ARCModule.h"
+#endif
 
 typedef struct cs_arch_config {
 	// constructor initialization
