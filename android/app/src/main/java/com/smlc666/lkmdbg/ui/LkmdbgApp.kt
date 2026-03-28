@@ -84,6 +84,17 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onStepMemoryPage = { direction ->
                         coroutineScope.launch { repository.stepMemoryPage(direction) }
                     },
+                    onLoadSelectionIntoHexSearch = {
+                        coroutineScope.launch { repository.loadSelectionIntoHexSearch() }
+                    },
+                    onLoadSelectionIntoAsciiSearch = {
+                        coroutineScope.launch { repository.loadSelectionIntoAsciiSearch() }
+                    },
+                    onLoadSelectionIntoEditors = {
+                        coroutineScope.launch { repository.loadSelectionIntoEditors() }
+                    },
+                    onWriteHexAtFocus = { coroutineScope.launch { repository.writeHexAtFocus() } },
+                    onWriteAsciiAtFocus = { coroutineScope.launch { repository.writeAsciiAtFocus() } },
                     onSelectMemoryAddress = { address ->
                         coroutineScope.launch { repository.selectMemoryAddress(address) }
                     },
@@ -98,6 +109,9 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     },
                     onTargetPidChanged = repository::updateTargetPidInput,
                     onMemoryAddressChanged = repository::updateMemoryAddressInput,
+                    onMemorySelectionSizeChanged = repository::updateMemorySelectionSize,
+                    onMemoryWriteHexChanged = repository::updateMemoryWriteHexInput,
+                    onMemoryWriteAsciiChanged = repository::updateMemoryWriteAsciiInput,
                     onProcessFilterChanged = repository::updateProcessFilter,
                     onMemorySearchQueryChanged = repository::updateMemorySearchQuery,
                     onMemorySearchValueTypeChanged = repository::updateMemorySearchValueType,
@@ -127,6 +141,17 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onStepMemoryPage = { direction ->
                         coroutineScope.launch { repository.stepMemoryPage(direction) }
                     },
+                    onLoadSelectionIntoHexSearch = {
+                        coroutineScope.launch { repository.loadSelectionIntoHexSearch() }
+                    },
+                    onLoadSelectionIntoAsciiSearch = {
+                        coroutineScope.launch { repository.loadSelectionIntoAsciiSearch() }
+                    },
+                    onLoadSelectionIntoEditors = {
+                        coroutineScope.launch { repository.loadSelectionIntoEditors() }
+                    },
+                    onWriteHexAtFocus = { coroutineScope.launch { repository.writeHexAtFocus() } },
+                    onWriteAsciiAtFocus = { coroutineScope.launch { repository.writeAsciiAtFocus() } },
                     onSelectMemoryAddress = { address ->
                         coroutineScope.launch { repository.selectMemoryAddress(address) }
                     },
@@ -141,6 +166,9 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     },
                     onTargetPidChanged = repository::updateTargetPidInput,
                     onMemoryAddressChanged = repository::updateMemoryAddressInput,
+                    onMemorySelectionSizeChanged = repository::updateMemorySelectionSize,
+                    onMemoryWriteHexChanged = repository::updateMemoryWriteHexInput,
+                    onMemoryWriteAsciiChanged = repository::updateMemoryWriteAsciiInput,
                     onProcessFilterChanged = repository::updateProcessFilter,
                     onMemorySearchQueryChanged = repository::updateMemorySearchQuery,
                     onMemorySearchValueTypeChanged = repository::updateMemorySearchValueType,
@@ -175,11 +203,19 @@ private fun DashboardContent(
     onPreviewSelectedPc: () -> Unit,
     onJumpMemoryAddress: () -> Unit,
     onStepMemoryPage: (Int) -> Unit,
+    onLoadSelectionIntoHexSearch: () -> Unit,
+    onLoadSelectionIntoAsciiSearch: () -> Unit,
+    onLoadSelectionIntoEditors: () -> Unit,
+    onWriteHexAtFocus: () -> Unit,
+    onWriteAsciiAtFocus: () -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
     onAttachProcess: (Int) -> Unit,
     onSelectThread: (Int) -> Unit,
     onTargetPidChanged: (String) -> Unit,
     onMemoryAddressChanged: (String) -> Unit,
+    onMemorySelectionSizeChanged: (Int) -> Unit,
+    onMemoryWriteHexChanged: (String) -> Unit,
+    onMemoryWriteAsciiChanged: (String) -> Unit,
     onProcessFilterChanged: (ProcessFilter) -> Unit,
     onMemorySearchQueryChanged: (String) -> Unit,
     onMemorySearchValueTypeChanged: (com.smlc666.lkmdbg.data.MemorySearchValueType) -> Unit,
@@ -223,8 +259,16 @@ private fun DashboardContent(
                     onPreviewSelectedPc = onPreviewSelectedPc,
                     onJumpMemoryAddress = onJumpMemoryAddress,
                     onStepMemoryPage = onStepMemoryPage,
+                    onLoadSelectionIntoHexSearch = onLoadSelectionIntoHexSearch,
+                    onLoadSelectionIntoAsciiSearch = onLoadSelectionIntoAsciiSearch,
+                    onLoadSelectionIntoEditors = onLoadSelectionIntoEditors,
+                    onWriteHexAtFocus = onWriteHexAtFocus,
+                    onWriteAsciiAtFocus = onWriteAsciiAtFocus,
                     onSelectMemoryAddress = onSelectMemoryAddress,
                     onMemoryAddressChanged = onMemoryAddressChanged,
+                    onSelectionSizeChanged = onMemorySelectionSizeChanged,
+                    onWriteHexChanged = onMemoryWriteHexChanged,
+                    onWriteAsciiChanged = onMemoryWriteAsciiChanged,
                     onSearchQueryChanged = onMemorySearchQueryChanged,
                     onSearchValueTypeChanged = onMemorySearchValueTypeChanged,
                     onRegionPresetChanged = onMemoryRegionPresetChanged,

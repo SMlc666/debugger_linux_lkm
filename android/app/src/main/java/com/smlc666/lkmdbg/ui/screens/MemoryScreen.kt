@@ -51,8 +51,16 @@ internal fun MemoryScreen(
     onPreviewSelectedPc: () -> Unit,
     onJumpMemoryAddress: () -> Unit,
     onStepMemoryPage: (Int) -> Unit,
+    onLoadSelectionIntoHexSearch: () -> Unit,
+    onLoadSelectionIntoAsciiSearch: () -> Unit,
+    onLoadSelectionIntoEditors: () -> Unit,
+    onWriteHexAtFocus: () -> Unit,
+    onWriteAsciiAtFocus: () -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
     onMemoryAddressChanged: (String) -> Unit,
+    onSelectionSizeChanged: (Int) -> Unit,
+    onWriteHexChanged: (String) -> Unit,
+    onWriteAsciiChanged: (String) -> Unit,
     onSearchQueryChanged: (String) -> Unit,
     onSearchValueTypeChanged: (MemorySearchValueType) -> Unit,
     onRegionPresetChanged: (MemoryRegionPreset) -> Unit,
@@ -131,8 +139,64 @@ internal fun MemoryScreen(
             state.memoryPage?.let { page ->
                 MemoryPageCard(
                     page = page,
+                    selectionSize = state.memorySelectionSize,
                     onSelectMemoryAddress = onSelectMemoryAddress,
                 )
+                Spacer(Modifier.height(14.dp))
+
+                Text(
+                    stringResource(R.string.memory_selection_title),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Spacer(Modifier.height(8.dp))
+                MemoryChipRow {
+                    listOf(1, 2, 4, 8, 16).forEach { size ->
+                        FilterChip(
+                            selected = state.memorySelectionSize == size,
+                            onClick = { onSelectionSizeChanged(size) },
+                            label = { Text(stringResource(R.string.memory_selection_size, size)) },
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(onClick = onLoadSelectionIntoHexSearch, enabled = !state.busy) {
+                        Text(stringResource(R.string.memory_action_selection_hex_search))
+                    }
+                    FilledTonalButton(onClick = onLoadSelectionIntoAsciiSearch, enabled = !state.busy) {
+                        Text(stringResource(R.string.memory_action_selection_ascii_search))
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = state.memoryWriteHexInput,
+                    onValueChange = onWriteHexChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.memory_write_hex_label)) },
+                    placeholder = { Text(stringResource(R.string.memory_write_hex_placeholder)) },
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = state.memoryWriteAsciiInput,
+                    onValueChange = onWriteAsciiChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.memory_write_ascii_label)) },
+                    placeholder = { Text(stringResource(R.string.memory_write_ascii_placeholder)) },
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(onClick = onLoadSelectionIntoEditors, enabled = !state.busy) {
+                        Text(stringResource(R.string.memory_action_load_selection))
+                    }
+                    FilledTonalButton(onClick = onWriteHexAtFocus, enabled = !state.busy) {
+                        Text(stringResource(R.string.memory_action_write_hex))
+                    }
+                    FilledTonalButton(onClick = onWriteAsciiAtFocus, enabled = !state.busy) {
+                        Text(stringResource(R.string.memory_action_write_ascii))
+                    }
+                }
                 Spacer(Modifier.height(14.dp))
             }
 
@@ -320,6 +384,7 @@ internal fun MemoryScreen(
 @Composable
 private fun MemoryPageCard(
     page: MemoryPage,
+    selectionSize: Int,
     onSelectMemoryAddress: (ULong) -> Unit,
 ) {
     Card(
@@ -369,29 +434,73 @@ private fun MemoryPageCard(
             ScalarRow(page.scalars)
 
             Text(
+                stringResource(
+                    R.string.memory_selection_summary,
+                    selectionSize,
+                    hex64(page.focusAddress),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Text(
                 stringResource(R.string.memory_preview_hex_title),
                 style = MaterialTheme.typography.titleSmall,
             )
             page.rows.forEach { row ->
-                val selected = page.focusAddress >= row.address && page.focusAddress < row.address + 16uL
                 Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onSelectMemoryAddress(row.address) },
                     colors = CardDefaults.cardColors(
-                        containerColor = if (selected) {
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
-                        } else {
-                            MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
-                        },
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
                     ),
                 ) {
-                    Text(
+                    Column(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                        text = "${hex64(row.address)}  ${row.hexBytes.padEnd(47)}  ${row.ascii}",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                    )
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = "${hex64(row.address)}  ${row.ascii}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            row.byteValues.forEachIndexed { index, value ->
+                                val cellAddress = row.address + index.toUInt().toULong()
+                                val selected = cellAddress >= page.focusAddress &&
+                                    cellAddress < page.focusAddress + selectionSize.toUInt().toULong()
+                                Card(
+                                    modifier = Modifier.clickable { onSelectMemoryAddress(cellAddress) },
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (selected) {
+                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+                                        } else {
+                                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.68f)
+                                        },
+                                    ),
+                                ) {
+                                    Text(
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 6.dp),
+                                        text = "%02x".format(value),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (selected) {
+                                            MaterialTheme.colorScheme.onPrimaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        Text(
+                            text = row.hexBytes,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
 

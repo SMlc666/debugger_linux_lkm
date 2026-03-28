@@ -63,6 +63,11 @@
     <string name="memory_action_jump">跳转</string>
     <string name="memory_action_prev_page">上一页</string>
     <string name="memory_action_next_page">下一页</string>
+    <string name="memory_action_selection_hex_search">选择转 hex 搜索</string>
+    <string name="memory_action_selection_ascii_search">选择转 ascii 搜索</string>
+    <string name="memory_action_load_selection">载入选择</string>
+    <string name="memory_action_write_hex">写入 hex</string>
+    <string name="memory_action_write_ascii">写入 ascii</string>
     <string name="memory_action_search">搜索</string>
     <string name="memory_action_refresh_ranges">刷新区域</string>
     <string name="memory_action_ranges">区域</string>
@@ -72,10 +77,16 @@
     <string name="memory_error_no_pc">当前还没有可用 PC，请先刷新线程。</string>
     <string name="memory_error_invalid_address">请先输入有效地址。</string>
     <string name="memory_error_no_page">请先打开一个内存页。</string>
+    <string name="memory_error_no_selection">请先选择字节范围。</string>
+    <string name="memory_error_invalid_hex">请先输入合法的 hex 字节。</string>
+    <string name="memory_error_invalid_ascii">请先输入 ASCII 文本。</string>
     <string name="memory_message_images">已刷新 %1$d 个映像</string>
     <string name="memory_message_vmas">已刷新 %1$d 个区域</string>
     <string name="memory_message_preview">已在 %2$s 预览 %1$s 字节</string>
     <string name="memory_message_cursor">游标已移动到 %1$s</string>
+    <string name="memory_message_search_query_loaded">已载入查询：%1$s</string>
+    <string name="memory_message_editor_loaded">已将 %1$d 字节载入编辑器</string>
+    <string name="memory_message_write_complete">已在 %2$s 写入 %1$d 字节</string>
     <string name="memory_search_query_label">搜索值</string>
     <string name="memory_search_query_placeholder">42、3.14、7f 45 4c 46、hello</string>
     <string name="memory_search_summary">%1$d 个命中，覆盖 %2$d 个区域，扫描 %3$s 字节</string>
@@ -110,6 +121,13 @@
     <string name="memory_page_region">%1$s  %2$s - %3$s  prot=%4$s</string>
     <string name="memory_page_region_none">当前地址还没有对应的 VMA 元数据</string>
     <string name="memory_page_scalars_title">标量解释</string>
+    <string name="memory_selection_title">选择与写回</string>
+    <string name="memory_selection_size">%1$d B</string>
+    <string name="memory_selection_summary">选择=%1$d 字节  焦点=%2$s</string>
+    <string name="memory_write_hex_label">Hex 补丁字节</string>
+    <string name="memory_write_hex_placeholder">90 00 00 14</string>
+    <string name="memory_write_ascii_label">ASCII 补丁文本</string>
+    <string name="memory_write_ascii_placeholder">patched-by-lkmdbg</string>
     <string name="memory_preview_hex_title">内存页</string>
     <string name="memory_preview_disasm_title">Capstone 反汇编（本地 JNI）</string>
     <string name="memory_preview_disasm_empty">当前预览没有可用的本地反汇编结果。</string>

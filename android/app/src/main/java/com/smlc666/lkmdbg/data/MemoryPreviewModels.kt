@@ -2,6 +2,7 @@ package com.smlc666.lkmdbg.data
 
 data class MemoryPreviewRow(
     val address: ULong,
+    val byteValues: List<Int>,
     val hexBytes: String,
     val ascii: String,
 )

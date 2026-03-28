@@ -26,6 +26,8 @@ data class SessionEventEntry(
     val receivedAtMs: Long,
 )
 
+private val MEMORY_SELECTION_SIZES = listOf(1, 2, 4, 8, 16)
+
 data class MemorySearchUiState(
     val query: String = "",
     val valueType: MemorySearchValueType = MemorySearchValueType.Int32,
@@ -63,6 +65,9 @@ data class SessionBridgeState(
     val images: List<BridgeImageRecord> = emptyList(),
     val vmas: List<BridgeVmaRecord> = emptyList(),
     val memoryAddressInput: String = "",
+    val memorySelectionSize: Int = 4,
+    val memoryWriteHexInput: String = "",
+    val memoryWriteAsciiInput: String = "",
     val memoryPage: MemoryPage? = null,
     val memorySearch: MemorySearchUiState = MemorySearchUiState(),
 )
@@ -117,6 +122,21 @@ class SessionBridgeRepository(
     fun updateMemoryAddressInput(value: String) {
         val filtered = value.filter { it.isDigit() || it.lowercaseChar() in 'a'..'f' || it == 'x' || it == 'X' }
         _state.update { current -> current.copy(memoryAddressInput = filtered) }
+    }
+
+    fun updateMemorySelectionSize(size: Int) {
+        if (size !in MEMORY_SELECTION_SIZES)
+            return
+        _state.update { current -> current.copy(memorySelectionSize = size) }
+    }
+
+    fun updateMemoryWriteHexInput(value: String) {
+        val filtered = value.filter { it.isDigit() || it.lowercaseChar() in 'a'..'f' || it.isWhitespace() }
+        _state.update { current -> current.copy(memoryWriteHexInput = filtered) }
+    }
+
+    fun updateMemoryWriteAsciiInput(value: String) {
+        _state.update { current -> current.copy(memoryWriteAsciiInput = value) }
     }
 
     fun updateMemorySearchValueType(valueType: MemorySearchValueType) {
@@ -326,6 +346,122 @@ class SessionBridgeRepository(
         }
     }
 
+    suspend fun loadSelectionIntoHexSearch() {
+        runOperation {
+            val bytes = currentSelectionBytes() ?: run {
+                updateMessage(appContext.getString(R.string.memory_error_no_selection))
+                return@runOperation
+            }
+            val query = bytes.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+            _state.update { current ->
+                current.copy(
+                    memorySearch = current.memorySearch.copy(
+                        valueType = MemorySearchValueType.HexBytes,
+                        query = query,
+                    ),
+                    lastMessage = appContext.getString(R.string.memory_message_search_query_loaded, query),
+                )
+            }
+        }
+    }
+
+    suspend fun loadSelectionIntoAsciiSearch() {
+        runOperation {
+            val bytes = currentSelectionBytes() ?: run {
+                updateMessage(appContext.getString(R.string.memory_error_no_selection))
+                return@runOperation
+            }
+            val query = bytes.decodeToString()
+            _state.update { current ->
+                current.copy(
+                    memorySearch = current.memorySearch.copy(
+                        valueType = MemorySearchValueType.Ascii,
+                        query = query,
+                    ),
+                    lastMessage = appContext.getString(R.string.memory_message_search_query_loaded, query),
+                )
+            }
+        }
+    }
+
+    suspend fun loadSelectionIntoEditors() {
+        runOperation {
+            val bytes = currentSelectionBytes() ?: run {
+                updateMessage(appContext.getString(R.string.memory_error_no_selection))
+                return@runOperation
+            }
+            _state.update { current ->
+                current.copy(
+                    memoryWriteHexInput = bytes.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
+                    memoryWriteAsciiInput = bytes.decodeToString(),
+                    lastMessage = appContext.getString(R.string.memory_message_editor_loaded, bytes.size),
+                )
+            }
+        }
+    }
+
+    suspend fun writeHexAtFocus() {
+        runOperation {
+            val page = state.value.memoryPage ?: run {
+                updateMessage(appContext.getString(R.string.memory_error_no_page))
+                return@runOperation
+            }
+            val data = parseHexBytes(state.value.memoryWriteHexInput)
+            if (data == null || data.isEmpty()) {
+                updateMessage(appContext.getString(R.string.memory_error_invalid_hex))
+                return@runOperation
+            }
+            val reply = client.writeMemory(page.focusAddress, data)
+            if (reply.status != 0 || reply.bytesDone.toInt() != data.size)
+                throw IllegalStateException(reply.message.ifBlank { "write failed bytes_done=${reply.bytesDone}" })
+            openMemoryPageUnsafe(page.focusAddress)
+            _state.update { current ->
+                current.copy(
+                    memoryWriteHexInput = data.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
+                    memoryWriteAsciiInput = data.decodeToString(),
+                    lastMessage = reply.message.ifBlank {
+                        appContext.getString(
+                            R.string.memory_message_write_complete,
+                            data.size,
+                            hex64(page.focusAddress),
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    suspend fun writeAsciiAtFocus() {
+        runOperation {
+            val page = state.value.memoryPage ?: run {
+                updateMessage(appContext.getString(R.string.memory_error_no_page))
+                return@runOperation
+            }
+            val data = state.value.memoryWriteAsciiInput.toByteArray(Charsets.UTF_8)
+            if (data.isEmpty()) {
+                updateMessage(appContext.getString(R.string.memory_error_invalid_ascii))
+                return@runOperation
+            }
+            val reply = client.writeMemory(page.focusAddress, data)
+            if (reply.status != 0 || reply.bytesDone.toInt() != data.size)
+                throw IllegalStateException(reply.message.ifBlank { "write failed bytes_done=${reply.bytesDone}" })
+            openMemoryPageUnsafe(page.focusAddress)
+            _state.update { current ->
+                current.copy(
+                    memoryWriteHexInput = data.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
+                    memoryWriteAsciiInput = data.decodeToString(),
+                    lastMessage = reply.message.ifBlank {
+                        appContext.getString(
+                            R.string.memory_message_write_complete,
+                            data.size,
+                            hex64(page.focusAddress),
+                        )
+                    },
+                )
+            }
+        }
+    }
+
     suspend fun selectMemoryAddress(remoteAddr: ULong) {
         runOperation {
             val current = state.value.memoryPage
@@ -529,6 +665,7 @@ class SessionBridgeRepository(
             }
             rows += MemoryPreviewRow(
                 address = pageStart + offset.toUInt().toULong(),
+                byteValues = slice.map { it.toInt() and 0xff },
                 hexBytes = hexBytes,
                 ascii = ascii,
             )
@@ -579,6 +716,22 @@ class SessionBridgeRepository(
             add(MemoryScalarValue("f32", scalarFloat32(scalarBytes, remaining) ?: "n/a"))
             add(MemoryScalarValue("f64", scalarFloat64(scalarBytes, remaining) ?: "n/a"))
         }
+    }
+
+    private fun currentSelectionBytes(): ByteArray? {
+        val page = state.value.memoryPage ?: return null
+        return selectionBytes(page, state.value.memorySelectionSize)
+    }
+
+    private fun selectionBytes(page: MemoryPage, size: Int): ByteArray? {
+        if (page.focusAddress < page.pageStart)
+            return null
+        val offset = (page.focusAddress - page.pageStart).toInt()
+        if (offset >= page.bytes.size)
+            return null
+        val clampedSize = size.coerceAtLeast(1)
+        val end = minOf(page.bytes.size, offset + clampedSize)
+        return page.bytes.copyOfRange(offset, end)
     }
 
     private fun scalarInt32(bytes: ByteArray, remaining: Int): String? {
@@ -636,6 +789,17 @@ class SessionBridgeRepository(
         if (trimmed.startsWith("0x", ignoreCase = true))
             return trimmed.removePrefix("0x").removePrefix("0X").toULongOrNull(16)
         return trimmed.toULongOrNull() ?: trimmed.toULongOrNull(16)
+    }
+
+    private fun parseHexBytes(value: String): ByteArray? {
+        val compact = value.replace(" ", "").replace("\n", "").replace("\t", "")
+        if (compact.isEmpty() || compact.length % 2 != 0)
+            return null
+        return runCatching {
+            ByteArray(compact.length / 2) { index ->
+                compact.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+            }
+        }.getOrNull()
     }
 
     private fun selectThreadId(

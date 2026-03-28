@@ -63,6 +63,11 @@
     <string name="memory_action_jump">Jump</string>
     <string name="memory_action_prev_page">Prev page</string>
     <string name="memory_action_next_page">Next page</string>
+    <string name="memory_action_selection_hex_search">Selection to hex search</string>
+    <string name="memory_action_selection_ascii_search">Selection to ascii search</string>
+    <string name="memory_action_load_selection">Load selection</string>
+    <string name="memory_action_write_hex">Write hex</string>
+    <string name="memory_action_write_ascii">Write ascii</string>
     <string name="memory_action_search">Search</string>
     <string name="memory_action_refresh_ranges">Refresh ranges</string>
     <string name="memory_action_ranges">Ranges</string>
@@ -72,10 +77,16 @@
     <string name="memory_error_no_pc">No selected PC yet. Refresh threads first.</string>
     <string name="memory_error_invalid_address">Enter a valid address first.</string>
     <string name="memory_error_no_page">Open a memory page first.</string>
+    <string name="memory_error_no_selection">Select a byte range first.</string>
+    <string name="memory_error_invalid_hex">Enter valid hex bytes first.</string>
+    <string name="memory_error_invalid_ascii">Enter ASCII text first.</string>
     <string name="memory_message_images">%1$d images refreshed</string>
     <string name="memory_message_vmas">%1$d ranges refreshed</string>
     <string name="memory_message_preview">previewed %1$s bytes at %2$s</string>
     <string name="memory_message_cursor">cursor moved to %1$s</string>
+    <string name="memory_message_search_query_loaded">loaded query: %1$s</string>
+    <string name="memory_message_editor_loaded">loaded %1$d bytes into editors</string>
+    <string name="memory_message_write_complete">wrote %1$d bytes at %2$s</string>
     <string name="memory_search_query_label">Search value</string>
     <string name="memory_search_query_placeholder">42, 3.14, 7f 45 4c 46, hello</string>
     <string name="memory_search_summary">%1$d hits across %2$d ranges, scanned %3$s bytes</string>
@@ -110,6 +121,13 @@
     <string name="memory_page_region">%1$s  %2$s - %3$s  prot=%4$s</string>
     <string name="memory_page_region_none">no VMA metadata loaded for this address</string>
     <string name="memory_page_scalars_title">Scalar interpretations</string>
+    <string name="memory_selection_title">Selection and patch</string>
+    <string name="memory_selection_size">%1$d B</string>
+    <string name="memory_selection_summary">selection=%1$d bytes  focus=%2$s</string>
+    <string name="memory_write_hex_label">Hex patch bytes</string>
+    <string name="memory_write_hex_placeholder">90 00 00 14</string>
+    <string name="memory_write_ascii_label">ASCII patch text</string>
+    <string name="memory_write_ascii_placeholder">patched-by-lkmdbg</string>
     <string name="memory_preview_hex_title">Memory page</string>
     <string name="memory_preview_disasm_title">Capstone disassembly (local JNI)</string>
     <string name="memory_preview_disasm_empty">No local disassembly available for this preview.</string>
