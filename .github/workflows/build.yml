@@ -109,31 +109,31 @@ jobs:
       matrix:
         include:
           - label: 5.10
-            kernel_ref: v5.10
+            kernel_ref: android12-5.10
             artifact_name: qemu-arm64-boot-5.10
             cache_suffix: v5.10
           - label: 5.15
-            kernel_ref: v5.15
+            kernel_ref: android13-5.15
             artifact_name: qemu-arm64-boot-5.15
             cache_suffix: v5.15
           - label: 6.1
-            kernel_ref: v6.1
+            kernel_ref: android14-6.1-lts
             artifact_name: qemu-arm64-boot-6.1
             cache_suffix: v6.1
           - label: 6.6
-            kernel_ref: v6.6
+            kernel_ref: android15-6.6
             artifact_name: qemu-arm64-boot-6.6
             cache_suffix: v6.6
           - label: 6.12
-            kernel_ref: v6.12
+            kernel_ref: android16-6.12
             artifact_name: qemu-arm64-boot-6.12
             cache_suffix: v6.12
           - label: 6.18
-            kernel_ref: v6.18
+            kernel_ref: android17-6.18
             artifact_name: qemu-arm64-boot-6.18
             cache_suffix: v6.18
     env:
-      KERNEL_REPO: https://github.com/torvalds/linux.git
+      KERNEL_REPO: https://android.googlesource.com/kernel/common
       KERNEL_REF: ${{ matrix.kernel_ref }}
       KERNEL_OUT_DIR: ${{ github.workspace }}/.cache/qemu-linux-arm64-out-${{ matrix.cache_suffix }}
 
@@ -181,7 +181,7 @@ jobs:
           echo "cache-complete=$cache_complete"
           echo "reuse-kernel=$reuse_kernel"
 
-      - name: Fetch upstream Linux
+      - name: Fetch Android common kernel
         run: |
           git clone --depth=1 --branch "$KERNEL_REF" "$KERNEL_REPO" \
             "$RUNNER_TEMP/linux-arm64-qemu"
