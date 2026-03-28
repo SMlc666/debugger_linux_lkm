@@ -493,8 +493,7 @@ static int lkmdbg_validate_syscall_trace_request(
 		return -EINVAL;
 
 	if ((req->mode & LKMDBG_SYSCALL_TRACE_MODE_CONTROL) &&
-	    ((req->mode & LKMDBG_SYSCALL_TRACE_MODE_STOP) ||
-	     req->phases != LKMDBG_SYSCALL_TRACE_PHASE_ENTER))
+	    (req->mode & LKMDBG_SYSCALL_TRACE_MODE_STOP))
 		return -EINVAL;
 
 	return 0;
@@ -2202,6 +2201,7 @@ static void lkmdbg_invoke_syscall_replacement(
 					   syscall_table);
 	if (regs)
 		retval = (s64)regs->regs[0];
+	lkmdbg_control_syscall_exit(regs, nr, &retval);
 	lkmdbg_syscall_exit_broadcast_regs(regs, nr, retval);
 
 	if (atomic_dec_and_test(&lkmdbg_syscall_enter_inflight))
@@ -2213,6 +2213,7 @@ static long lkmdbg_invoke_syscall_inner_replacement(
 {
 	bool skip = false;
 	s64 control_ret = 0;
+	s64 exit_ret = 0;
 	long ret = 0;
 	s32 nr = -1;
 
@@ -2226,7 +2227,10 @@ static long lkmdbg_invoke_syscall_inner_replacement(
 		ret = lkmdbg_invoke_syscall_inner_orig(regs, syscall_fn);
 	else if (skip)
 		ret = (long)control_ret;
-	lkmdbg_syscall_exit_broadcast_regs(regs, nr, ret);
+	exit_ret = (s64)ret;
+	lkmdbg_control_syscall_exit(regs, nr, &exit_ret);
+	ret = (long)exit_ret;
+	lkmdbg_syscall_exit_broadcast_regs(regs, nr, exit_ret);
 
 	if (atomic_dec_and_test(&lkmdbg_syscall_enter_inflight))
 		wake_up_all(&lkmdbg_syscall_enter_waitq);
@@ -2250,6 +2254,7 @@ static void lkmdbg_do_el0_svc_replacement(struct pt_regs *regs)
 		lkmdbg_do_el0_svc_orig(regs);
 	if (regs)
 		retval = (s64)regs->regs[0];
+	lkmdbg_control_syscall_exit(regs, nr, &retval);
 	lkmdbg_syscall_exit_broadcast_regs(regs, nr, retval);
 
 	if (atomic_dec_and_test(&lkmdbg_syscall_enter_inflight))
@@ -3000,9 +3005,8 @@ long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 
 #ifdef CONFIG_ARM64
 	mutex_lock(&session->lock);
-	if (session->syscall_rule_count > 0 &&
-	    (!(req.mode & LKMDBG_SYSCALL_TRACE_MODE_CONTROL) ||
-	     !(req.phases & LKMDBG_SYSCALL_TRACE_PHASE_ENTER))) {
+	if (session->syscall_rule_count > 0 && req.mode &&
+	    !(req.mode & LKMDBG_SYSCALL_TRACE_MODE_CONTROL)) {
 		mutex_unlock(&session->lock);
 		return -EBUSY;
 	}

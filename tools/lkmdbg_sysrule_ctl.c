@@ -15,7 +15,7 @@ static void usage(const char *prog)
 		"Usage:\n"
 		"  %s cfg-get <pid>\n"
 		"  %s cfg <pid> <observe|enforce> <raw|raw+rule|rule>\n"
-		"  %s add <pid> <syscall_nr|-1> <setret|stop|setret+stop> <retval> [tid] [priority] [oneshot|persistent]\n"
+		"  %s add <pid> <syscall_nr|-1> <setret|stop|setret+stop> <retval> [tid] [priority] [oneshot|persistent] [enter|exit|both]\n"
 		"  %s del <pid> <rule_id>\n"
 		"  %s list <pid>\n",
 		prog, prog, prog, prog, prog);
@@ -124,6 +124,24 @@ static int parse_actions(const char *s, uint32_t *actions_out)
 	return -1;
 }
 
+static int parse_phases(const char *s, uint32_t *phases_out)
+{
+	if (strcmp(s, "enter") == 0) {
+		*phases_out = LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
+		return 0;
+	}
+	if (strcmp(s, "exit") == 0) {
+		*phases_out = LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
+		return 0;
+	}
+	if (strcmp(s, "both") == 0) {
+		*phases_out = LKMDBG_SYSCALL_TRACE_PHASE_ENTER |
+			      LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
+		return 0;
+	}
+	return -1;
+}
+
 static const char *mode_name(uint32_t mode)
 {
 	if (mode == LKMDBG_SYSCALL_RULE_MODE_OBSERVE)
@@ -146,9 +164,10 @@ static const char *policy_name(uint32_t policy)
 
 static void print_rule(const struct lkmdbg_syscall_rule_entry *e)
 {
-	printf("rule_id=%llu tid=%d nr=%d phases=0x%x actions=0x%x flags=0x%x priority=%u retval=%lld hits=%llu\n",
+	printf("rule_id=%llu tid=%d nr=%d phases=0x%x actions=0x%x flags=0x%x priority=%u arg_match=0x%x rewrite=0x%x retval=%lld hits=%llu\n",
 	       (unsigned long long)e->rule_id, e->tid, e->syscall_nr,
 	       e->phases, e->actions, e->flags, e->priority,
+	       e->arg_match_mask, e->rewrite_mask,
 	       (long long)e->retval, (unsigned long long)e->hits);
 }
 
@@ -212,8 +231,10 @@ int main(int argc, char **argv)
 		int32_t tid = 0;
 		uint32_t actions = 0;
 		uint32_t priority = 0;
+		uint32_t phases = LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
 		int64_t retval64 = 0;
 		uint32_t flags = LKMDBG_SYSCALL_RULE_FLAG_ENABLED;
+		int phase_consumed = 0;
 
 		memset(&entry, 0, sizeof(entry));
 		if (argc < 6 || parse_i32(argv[3], &syscall_nr) < 0 ||
@@ -233,16 +254,23 @@ int main(int argc, char **argv)
 		if (argc >= 9) {
 			if (strcmp(argv[8], "oneshot") == 0)
 				flags |= LKMDBG_SYSCALL_RULE_FLAG_ONESHOT;
+			else if (parse_phases(argv[8], &phases) == 0)
+				phase_consumed = 1;
 			else if (strcmp(argv[8], "persistent") != 0) {
 				fprintf(stderr, "invalid rule persistence: %s\n",
 					argv[8]);
 				goto out;
 			}
 		}
+		if (argc >= 10 && !phase_consumed &&
+		    parse_phases(argv[9], &phases) < 0) {
+			fprintf(stderr, "invalid phases: %s\n", argv[9]);
+			goto out;
+		}
 
 		entry.tid = tid;
 		entry.syscall_nr = syscall_nr;
-		entry.phases = LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
+		entry.phases = phases;
 		entry.actions = actions;
 		entry.flags = flags;
 		entry.priority = priority;

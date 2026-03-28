@@ -458,6 +458,8 @@ long lkmdbg_resolve_syscall(struct lkmdbg_session *session, void __user *argp);
 int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
 				 bool nr_rewrite_supported, bool *skip_out,
 				 s64 *retval_out);
+int lkmdbg_control_syscall_exit(struct pt_regs *regs, s32 syscall_nr,
+				s64 *retval_io);
 long lkmdbg_get_stop_state(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_continue_target(struct lkmdbg_session *session, void __user *argp);
 int lkmdbg_continue_target_internal(struct lkmdbg_session *session,

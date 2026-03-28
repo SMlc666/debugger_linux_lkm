@@ -68,9 +68,9 @@ cc -O2 -Wall -Wextra -o tools/examples/example_stealth_roundtrip tools/examples/
 `tools/lkmdbg_sysrule_ctl` provides fast syscall rule config and CRUD helpers:
 
 ```bash
-sudo ./tools/lkmdbg_mem_test sysset <pid> event+control enter
+sudo ./tools/lkmdbg_mem_test sysset <pid> event+control enter+exit
 sudo ./tools/lkmdbg_sysrule_ctl cfg <pid> enforce raw+rule
-sudo ./tools/lkmdbg_sysrule_ctl add <pid> -1 setret -1
+sudo ./tools/lkmdbg_sysrule_ctl add <pid> 173 setret -1 0 100 persistent exit
 sudo ./tools/lkmdbg_sysrule_ctl list <pid>
 ```
 

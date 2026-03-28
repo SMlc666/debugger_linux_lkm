@@ -180,6 +180,28 @@ static int64_t child_raw_syscall0(long nr)
 #endif
 }
 
+static int64_t child_raw_syscall1(long nr, uint64_t arg0)
+{
+#if defined(__aarch64__)
+	register long x8 __asm__("x8") = nr;
+	register long x0 __asm__("x0") = (long)arg0;
+
+	__asm__ volatile("svc #0"
+			 : "+r"(x0)
+			 : "r"(x8)
+			 : "memory");
+	return (int64_t)x0;
+#else
+	long ret;
+
+	errno = 0;
+	ret = syscall(nr, (unsigned long)arg0);
+	if (ret == -1 && errno)
+		return -(int64_t)errno;
+	return (int64_t)ret;
+#endif
+}
+
 enum {
 	CHILD_OP_QUERY_NOFAULT = 1,
 	CHILD_OP_EXIT = 2,
@@ -199,6 +221,9 @@ static int expect_stop_state(int session_fd, uint32_t reason,
 static int child_query_nofault_residency(int cmd_fd, int resp_fd);
 static int child_ping(int cmd_fd, int resp_fd);
 static int child_trigger_syscall(int cmd_fd, int resp_fd, int64_t *retval_out);
+static int child_trigger_syscall_ex(int cmd_fd, int resp_fd, long syscall_nr,
+				    uint64_t arg0, int use_arg0,
+				    int64_t *retval_out);
 static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   void *buf, size_t len);
 static int child_fill_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
@@ -3100,7 +3125,14 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 			break;
 		case CHILD_OP_TRIGGER_SYSCALL:
 		{
-			int64_t retval = child_raw_syscall0(SYS_getppid);
+			int64_t retval;
+			long syscall_nr = cmd.addr ? (long)cmd.addr : SYS_getppid;
+
+			if (cmd.length)
+				retval =
+					child_raw_syscall1(syscall_nr, cmd.value);
+			else
+				retval = child_raw_syscall0(syscall_nr);
 
 			if (write_full(resp_fd, &retval, sizeof(retval)) !=
 			    (ssize_t)sizeof(retval))
@@ -3213,10 +3245,15 @@ static int child_ping(int cmd_fd, int resp_fd)
 	return -1;
 }
 
-static int child_trigger_syscall(int cmd_fd, int resp_fd, int64_t *retval_out)
+static int child_trigger_syscall_ex(int cmd_fd, int resp_fd, long syscall_nr,
+				    uint64_t arg0, int use_arg0,
+				    int64_t *retval_out)
 {
 	struct child_cmd cmd = {
 		.op = CHILD_OP_TRIGGER_SYSCALL,
+		.addr = (uint64_t)syscall_nr,
+		.length = use_arg0 ? 1U : 0U,
+		.value = (uint32_t)arg0,
 	};
 	int64_t retval;
 
@@ -3235,6 +3272,12 @@ static int child_trigger_syscall(int cmd_fd, int resp_fd, int64_t *retval_out)
 		*retval_out = retval;
 
 	return 0;
+}
+
+static int child_trigger_syscall(int cmd_fd, int resp_fd, int64_t *retval_out)
+{
+	return child_trigger_syscall_ex(cmd_fd, resp_fd, SYS_getppid, 0, 0,
+					retval_out);
 }
 
 static int child_read_syscall_result(int resp_fd, int64_t *retval_out)
@@ -5206,6 +5249,9 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 {
 	struct lkmdbg_syscall_trace_request trace_req;
 	struct lkmdbg_syscall_resolve_request resolve_req;
+	struct lkmdbg_syscall_rule_config_request rule_cfg;
+	struct lkmdbg_syscall_rule_request rule_req;
+	struct lkmdbg_syscall_rule_entry rule_entry;
 	struct lkmdbg_event_record event;
 	struct lkmdbg_stop_query_request stop_req;
 	const uint32_t stop_phases[] = {
@@ -5213,15 +5259,21 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 		LKMDBG_SYSCALL_TRACE_PHASE_EXIT,
 	};
 	const uint32_t nr = SYS_getppid;
+	const uint32_t nr_rewrite = SYS_getpgid;
 	const pid_t parent_pid = getpid();
 	const int event_timeout_ms = 5000;
+	const int64_t exit_rewrite_retval = -7777;
 	int64_t syscall_retval;
 	uint32_t supported_phases;
+	uint32_t control_phases;
 	size_t stop_idx;
 	int trace_active = 0;
 
 	memset(&trace_req, 0, sizeof(trace_req));
 	memset(&resolve_req, 0, sizeof(resolve_req));
+	memset(&rule_cfg, 0, sizeof(rule_cfg));
+	memset(&rule_req, 0, sizeof(rule_req));
+	memset(&rule_entry, 0, sizeof(rule_entry));
 	memset(&stop_req, 0, sizeof(stop_req));
 
 	if (drain_session_events(session_fd) < 0)
@@ -5265,6 +5317,9 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 		printf("selftest syscall trace unavailable, skipping\n");
 		return 0;
 	}
+	control_phases = LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
+	if (supported_phases & LKMDBG_SYSCALL_TRACE_PHASE_EXIT)
+		control_phases |= LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
 	if (((LKMDBG_SYSCALL_TRACE_PHASE_ENTER |
 	      LKMDBG_SYSCALL_TRACE_PHASE_EXIT) &
 	     ~supported_phases) != 0) {
@@ -5505,6 +5560,101 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 					syscall_retval, child);
 				goto fail;
 			}
+		}
+
+		if (set_syscall_trace(session_fd, child, -1,
+				      LKMDBG_SYSCALL_TRACE_MODE_CONTROL,
+				      control_phases, &trace_req) < 0)
+			goto fail;
+		if (set_syscall_rule_config(
+			    session_fd, LKMDBG_SYSCALL_RULE_MODE_ENFORCE,
+			    LKMDBG_SYSCALL_RULE_EVENT_RAW_AND_RULE,
+			    &rule_cfg) < 0)
+			goto fail;
+
+		if (control_phases & LKMDBG_SYSCALL_TRACE_PHASE_EXIT) {
+			memset(&rule_entry, 0, sizeof(rule_entry));
+			rule_entry.tid = child;
+			rule_entry.syscall_nr = (int32_t)nr;
+			rule_entry.phases = LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
+			rule_entry.actions =
+				LKMDBG_SYSCALL_RULE_ACTION_SET_RETURN;
+			rule_entry.flags = LKMDBG_SYSCALL_RULE_FLAG_ENABLED;
+			rule_entry.priority = 100;
+			rule_entry.retval = exit_rewrite_retval;
+			memset(&rule_req, 0, sizeof(rule_req));
+			if (upsert_syscall_rule(session_fd, &rule_entry,
+						&rule_req) < 0)
+				goto fail;
+
+			if (drain_session_events(session_fd) < 0)
+				goto fail;
+			if (child_trigger_syscall(cmd_fd, resp_fd,
+						  &syscall_retval) < 0)
+				goto fail;
+			if (syscall_retval != exit_rewrite_retval) {
+				fprintf(stderr,
+					"syscall rule exit setret mismatch got=%" PRId64 " expected=%" PRId64 "\n",
+					syscall_retval, exit_rewrite_retval);
+				goto fail;
+			}
+			if (wait_for_session_event(
+				    session_fd, LKMDBG_EVENT_TARGET_SYSCALL_RULE,
+				    0, event_timeout_ms, &event) < 0)
+				goto fail;
+			if (event.flags != LKMDBG_SYSCALL_TRACE_PHASE_EXIT ||
+			    event.value0 != nr || event.value1 != rule_req.rule.rule_id) {
+				fprintf(stderr,
+					"syscall rule exit event mismatch flags=0x%x nr=%" PRIu64 " rule=%" PRIu64 "\n",
+					event.flags, (uint64_t)event.value0,
+					(uint64_t)event.value1);
+				goto fail;
+			}
+			if (remove_syscall_rule(session_fd,
+						rule_req.rule.rule_id) < 0)
+				goto fail;
+		}
+
+		memset(&rule_entry, 0, sizeof(rule_entry));
+		rule_entry.tid = child;
+		rule_entry.syscall_nr = (int32_t)nr_rewrite;
+		rule_entry.phases = LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
+		rule_entry.actions = LKMDBG_SYSCALL_RULE_ACTION_REWRITE_ARGS;
+		rule_entry.flags = LKMDBG_SYSCALL_RULE_FLAG_ENABLED;
+		rule_entry.priority = 200;
+		rule_entry.arg_match_mask = 0x1;
+		rule_entry.arg_values[0] = UINT64_MAX;
+		rule_entry.arg_value_masks[0] = UINT64_MAX;
+		rule_entry.rewrite_mask = 0x1;
+		rule_entry.rewrite_args[0] = 0;
+		memset(&rule_req, 0, sizeof(rule_req));
+		if (upsert_syscall_rule(session_fd, &rule_entry, &rule_req) < 0)
+			goto fail;
+
+		if (drain_session_events(session_fd) < 0)
+			goto fail;
+		if (child_trigger_syscall_ex(cmd_fd, resp_fd, nr_rewrite,
+					     UINT64_MAX, 1,
+					     &syscall_retval) < 0)
+			goto fail;
+		if (syscall_retval <= 0) {
+			fprintf(stderr,
+				"syscall rule rewrite-args mismatch retval=%" PRId64 "\n",
+				syscall_retval);
+			goto fail;
+		}
+		if (wait_for_session_event(session_fd,
+					   LKMDBG_EVENT_TARGET_SYSCALL_RULE, 0,
+					   event_timeout_ms, &event) < 0)
+			goto fail;
+		if (event.flags != LKMDBG_SYSCALL_TRACE_PHASE_ENTER ||
+		    event.value0 != nr_rewrite ||
+		    event.value1 != rule_req.rule.rule_id) {
+			fprintf(stderr,
+				"syscall rule rewrite event mismatch flags=0x%x nr=%" PRIu64 " rule=%" PRIu64 "\n",
+				event.flags, (uint64_t)event.value0,
+				(uint64_t)event.value1);
+			goto fail;
 		}
 	}
 
