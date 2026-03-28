@@ -62,7 +62,8 @@ data class SessionBridgeState(
     val recentEvents: List<SessionEventEntry> = emptyList(),
     val images: List<BridgeImageRecord> = emptyList(),
     val vmas: List<BridgeVmaRecord> = emptyList(),
-    val memoryPreview: MemoryPreview? = null,
+    val memoryAddressInput: String = "",
+    val memoryPage: MemoryPage? = null,
     val memorySearch: MemorySearchUiState = MemorySearchUiState(),
 )
 
@@ -70,6 +71,11 @@ class SessionBridgeRepository(
     context: Context,
     private val client: PipeAgentClient = PipeAgentClient(context.applicationContext),
 ) {
+    companion object {
+        private const val MEMORY_BROWSER_PAGE_SIZE: UInt = 256u
+        private const val MEMORY_ROW_BYTES = 16
+    }
+
     private val appContext = context.applicationContext
     private val processResolver = AndroidProcessResolver(appContext)
     private val searchEngine = MemorySearchEngine(
@@ -106,6 +112,11 @@ class SessionBridgeRepository(
                 memorySearch = current.memorySearch.copy(query = value),
             )
         }
+    }
+
+    fun updateMemoryAddressInput(value: String) {
+        val filtered = value.filter { it.isDigit() || it.lowercaseChar() in 'a'..'f' || it == 'x' || it == 'X' }
+        _state.update { current -> current.copy(memoryAddressInput = filtered) }
     }
 
     fun updateMemorySearchValueType(valueType: MemorySearchValueType) {
@@ -265,18 +276,9 @@ class SessionBridgeRepository(
         }
     }
 
-    suspend fun readMemoryPreview(remoteAddr: ULong, length: UInt = 128u) {
+    suspend fun openMemoryPage(remoteAddr: ULong) {
         runOperation {
-            val reply = client.readMemory(remoteAddr, length)
-            val bytes = reply.data.copyOf(reply.bytesDone.toInt())
-            _state.update { current ->
-                current.copy(
-                    memoryPreview = buildMemoryPreview(remoteAddr, bytes),
-                    lastMessage = reply.message.ifBlank {
-                        appContext.getString(R.string.memory_message_preview, reply.bytesDone.toString(), hex64(remoteAddr))
-                    },
-                )
-            }
+            openMemoryPageUnsafe(remoteAddr)
         }
     }
 
@@ -288,7 +290,60 @@ class SessionBridgeRepository(
                 updateMessage(appContext.getString(R.string.memory_error_no_pc))
                 return@runOperation
             }
-            readMemoryPreviewUnsafe(pc, 128u)
+            openMemoryPageUnsafe(pc)
+        }
+    }
+
+    suspend fun jumpToMemoryAddress() {
+        val address = parseAddressInput(state.value.memoryAddressInput)
+        if (address == null) {
+            updateMessage(appContext.getString(R.string.memory_error_invalid_address))
+            return
+        }
+        openMemoryPage(address)
+    }
+
+    suspend fun stepMemoryPage(direction: Int) {
+        runOperation {
+            val current = state.value.memoryPage
+            if (current == null) {
+                updateMessage(appContext.getString(R.string.memory_error_no_page))
+                return@runOperation
+            }
+            if (direction == 0)
+                return@runOperation
+
+            val delta = current.pageSize.toULong()
+            val nextFocus = if (direction < 0) {
+                if (current.pageStart < delta)
+                    0uL
+                else
+                    current.pageStart - delta
+            } else {
+                current.pageStart + delta
+            }
+            openMemoryPageUnsafe(nextFocus)
+        }
+    }
+
+    suspend fun selectMemoryAddress(remoteAddr: ULong) {
+        runOperation {
+            val current = state.value.memoryPage
+            if (current != null && addressInsidePage(current, remoteAddr)) {
+                _state.update { snapshot ->
+                    val page = snapshot.memoryPage ?: return@update snapshot
+                    snapshot.copy(
+                        memoryAddressInput = hex64(remoteAddr),
+                        memoryPage = page.copy(
+                            focusAddress = remoteAddr,
+                            scalars = buildScalarValues(remoteAddr, page.pageStart, page.bytes),
+                        ),
+                        lastMessage = appContext.getString(R.string.memory_message_cursor, hex64(remoteAddr)),
+                    )
+                }
+                return@runOperation
+            }
+            openMemoryPageUnsafe(remoteAddr)
         }
     }
 
@@ -419,6 +474,9 @@ class SessionBridgeRepository(
         _state.update { current ->
             current.copy(
                 vmas = reply.vmas,
+                memoryPage = current.memoryPage?.let { page ->
+                    buildMemoryPage(page.focusAddress, page.pageStart, page.bytes, reply.vmas)
+                },
                 lastMessage = reply.message.ifBlank {
                     appContext.getString(R.string.memory_message_vmas, reply.vmas.size)
                 },
@@ -426,25 +484,36 @@ class SessionBridgeRepository(
         }
     }
 
-    private suspend fun readMemoryPreviewUnsafe(remoteAddr: ULong, length: UInt) {
-        val reply = client.readMemory(remoteAddr, length)
+    private suspend fun openMemoryPageUnsafe(remoteAddr: ULong) {
+        val pageStart = alignDown(remoteAddr, MEMORY_BROWSER_PAGE_SIZE)
+        val reply = client.readMemory(pageStart, MEMORY_BROWSER_PAGE_SIZE)
         val bytes = reply.data.copyOf(reply.bytesDone.toInt())
         _state.update { current ->
             current.copy(
-                memoryPreview = buildMemoryPreview(remoteAddr, bytes),
+                memoryAddressInput = hex64(remoteAddr),
+                memoryPage = buildMemoryPage(remoteAddr, pageStart, bytes, current.vmas),
                 lastMessage = reply.message.ifBlank {
-                    appContext.getString(R.string.memory_message_preview, reply.bytesDone.toString(), hex64(remoteAddr))
+                    appContext.getString(
+                        R.string.memory_message_preview,
+                        reply.bytesDone.toString(),
+                        hex64(pageStart),
+                    )
                 },
             )
         }
     }
 
-    private fun buildMemoryPreview(remoteAddr: ULong, bytes: ByteArray): MemoryPreview {
-        val rows = ArrayList<MemoryPreviewRow>((bytes.size + 15) / 16)
+    private fun buildMemoryPage(
+        focusAddr: ULong,
+        pageStart: ULong,
+        bytes: ByteArray,
+        vmas: List<BridgeVmaRecord>,
+    ): MemoryPage {
+        val rows = ArrayList<MemoryPreviewRow>((bytes.size + MEMORY_ROW_BYTES - 1) / MEMORY_ROW_BYTES)
         var offset = 0
 
         while (offset < bytes.size) {
-            val end = minOf(bytes.size, offset + 16)
+            val end = minOf(bytes.size, offset + MEMORY_ROW_BYTES)
             val slice = bytes.copyOfRange(offset, end)
             val hexBytes = slice.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
             val ascii = buildString(slice.size) {
@@ -459,7 +528,7 @@ class SessionBridgeRepository(
                 }
             }
             rows += MemoryPreviewRow(
-                address = remoteAddr + offset.toUInt().toULong(),
+                address = pageStart + offset.toUInt().toULong(),
                 hexBytes = hexBytes,
                 ascii = ascii,
             )
@@ -467,15 +536,106 @@ class SessionBridgeRepository(
         }
 
         val disassembly = runCatching {
-            NativeDisassembler.disassembleArm64(remoteAddr, bytes)
+            NativeDisassembler.disassembleArm64(pageStart, bytes)
         }.getOrDefault(emptyList())
 
-        return MemoryPreview(
-            address = remoteAddr,
+        return MemoryPage(
+            focusAddress = focusAddr,
+            pageStart = pageStart,
+            pageSize = MEMORY_BROWSER_PAGE_SIZE,
             bytes = bytes,
             rows = rows,
             disassembly = disassembly,
+            scalars = buildScalarValues(focusAddr, pageStart, bytes),
+            region = vmas.firstOrNull { focusAddr >= it.startAddr && focusAddr < it.endAddr }?.let { vma ->
+                MemoryRegionSummary(
+                    name = vma.name,
+                    startAddr = vma.startAddr,
+                    endAddr = vma.endAddr,
+                    prot = vma.prot,
+                    flags = vma.flags,
+                )
+            },
         )
+    }
+
+    private fun buildScalarValues(
+        focusAddr: ULong,
+        pageStart: ULong,
+        bytes: ByteArray,
+    ): List<MemoryScalarValue> {
+        if (focusAddr < pageStart)
+            return emptyList()
+        val offset = (focusAddr - pageStart).toInt()
+        if (offset >= bytes.size)
+            return emptyList()
+
+        val remaining = bytes.size - offset
+        val scalarBytes = bytes.copyOfRange(offset, bytes.size)
+        return buildList {
+            add(MemoryScalarValue("u8", (scalarBytes[0].toInt() and 0xff).toString()))
+            add(MemoryScalarValue("i32", scalarInt32(scalarBytes, remaining) ?: "n/a"))
+            add(MemoryScalarValue("i64", scalarInt64(scalarBytes, remaining) ?: "n/a"))
+            add(MemoryScalarValue("f32", scalarFloat32(scalarBytes, remaining) ?: "n/a"))
+            add(MemoryScalarValue("f64", scalarFloat64(scalarBytes, remaining) ?: "n/a"))
+        }
+    }
+
+    private fun scalarInt32(bytes: ByteArray, remaining: Int): String? {
+        return scalarInt32Bits(bytes, remaining)?.toString()
+    }
+
+    private fun scalarInt64(bytes: ByteArray, remaining: Int): String? {
+        return scalarInt64Bits(bytes, remaining)?.toString()
+    }
+
+    private fun scalarFloat32(bytes: ByteArray, remaining: Int): String? {
+        val bits = scalarInt32Bits(bytes, remaining) ?: return null
+        return Float.fromBits(bits).toString()
+    }
+
+    private fun scalarFloat64(bytes: ByteArray, remaining: Int): String? {
+        val bits = scalarInt64Bits(bytes, remaining) ?: return null
+        return Double.fromBits(bits).toString()
+    }
+
+    private fun scalarInt32Bits(bytes: ByteArray, remaining: Int): Int? {
+        if (remaining < 4)
+            return null
+        var value = 0
+        repeat(4) { index ->
+            value = value or ((bytes[index].toInt() and 0xff) shl (index * 8))
+        }
+        return value
+    }
+
+    private fun scalarInt64Bits(bytes: ByteArray, remaining: Int): Long? {
+        if (remaining < 8)
+            return null
+        var value = 0L
+        repeat(8) { index ->
+            value = value or ((bytes[index].toLong() and 0xffL) shl (index * 8))
+        }
+        return value
+    }
+
+    private fun addressInsidePage(page: MemoryPage, remoteAddr: ULong): Boolean {
+        val end = page.pageStart + page.bytes.size.toUInt().toULong()
+        return remoteAddr >= page.pageStart && remoteAddr < end
+    }
+
+    private fun alignDown(address: ULong, alignment: UInt): ULong {
+        val mask = alignment.toULong() - 1uL
+        return address and mask.inv()
+    }
+
+    private fun parseAddressInput(value: String): ULong? {
+        val trimmed = value.trim()
+        if (trimmed.isEmpty())
+            return null
+        if (trimmed.startsWith("0x", ignoreCase = true))
+            return trimmed.removePrefix("0x").removePrefix("0X").toULongOrNull(16)
+        return trimmed.toULongOrNull() ?: trimmed.toULongOrNull(16)
     }
 
     private fun selectThreadId(

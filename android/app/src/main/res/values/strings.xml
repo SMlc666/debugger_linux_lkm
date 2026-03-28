@@ -58,6 +58,11 @@
     <string name="memory_panel_title">Memory Snapshot</string>
     <string name="memory_panel_subtitle">Inspector-first memory workspace with typed search, range presets, raw bytes, and image context.</string>
     <string name="memory_recent_scan">Recent scan: %1$s</string>
+    <string name="memory_address_label">Address</string>
+    <string name="memory_address_placeholder">0x7100000000 or 485331304448</string>
+    <string name="memory_action_jump">Jump</string>
+    <string name="memory_action_prev_page">Prev page</string>
+    <string name="memory_action_next_page">Next page</string>
     <string name="memory_action_search">Search</string>
     <string name="memory_action_refresh_ranges">Refresh ranges</string>
     <string name="memory_action_ranges">Ranges</string>
@@ -65,9 +70,12 @@
     <string name="memory_action_preview_pc">Preview selected PC</string>
     <string name="memory_error_no_target">No active target. Attach a process first.</string>
     <string name="memory_error_no_pc">No selected PC yet. Refresh threads first.</string>
+    <string name="memory_error_invalid_address">Enter a valid address first.</string>
+    <string name="memory_error_no_page">Open a memory page first.</string>
     <string name="memory_message_images">%1$d images refreshed</string>
     <string name="memory_message_vmas">%1$d ranges refreshed</string>
     <string name="memory_message_preview">previewed %1$s bytes at %2$s</string>
+    <string name="memory_message_cursor">cursor moved to %1$s</string>
     <string name="memory_search_query_label">Search value</string>
     <string name="memory_search_query_placeholder">42, 3.14, 7f 45 4c 46, hello</string>
     <string name="memory_search_summary">%1$d hits across %2$d ranges, scanned %3$s bytes</string>
@@ -97,6 +105,11 @@
     <string name="memory_image_flags">prot=%1$s flags=%2$s segments=%3$s</string>
     <string name="memory_preview_title">Bytes at %1$s</string>
     <string name="memory_preview_bytes">size=%1$d</string>
+    <string name="memory_page_focus">focus=%1$s</string>
+    <string name="memory_page_window">window=%1$s bytes loaded=%2$s</string>
+    <string name="memory_page_region">%1$s  %2$s - %3$s  prot=%4$s</string>
+    <string name="memory_page_region_none">no VMA metadata loaded for this address</string>
+    <string name="memory_page_scalars_title">Scalar interpretations</string>
     <string name="memory_preview_hex_title">Memory page</string>
     <string name="memory_preview_disasm_title">Capstone disassembly (local JNI)</string>
     <string name="memory_preview_disasm_empty">No local disassembly available for this preview.</string>

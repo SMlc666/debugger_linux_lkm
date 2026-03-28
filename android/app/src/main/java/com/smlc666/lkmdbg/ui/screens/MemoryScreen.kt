@@ -1,6 +1,7 @@
 package com.smlc666.lkmdbg.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -25,16 +25,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.smlc666.lkmdbg.R
+import com.smlc666.lkmdbg.data.MemoryPage
 import com.smlc666.lkmdbg.data.MemoryRegionPreset
 import com.smlc666.lkmdbg.data.MemorySearchResult
 import com.smlc666.lkmdbg.data.MemorySearchValueType
+import com.smlc666.lkmdbg.data.MemoryScalarValue
 import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.ui.DashboardState
 import com.smlc666.lkmdbg.ui.components.PanelCard
@@ -47,7 +49,10 @@ internal fun MemoryScreen(
     onRefreshVmas: () -> Unit,
     onSearchMemory: () -> Unit,
     onPreviewSelectedPc: () -> Unit,
-    onPreviewAddress: (ULong) -> Unit,
+    onJumpMemoryAddress: () -> Unit,
+    onStepMemoryPage: (Int) -> Unit,
+    onSelectMemoryAddress: (ULong) -> Unit,
+    onMemoryAddressChanged: (String) -> Unit,
     onSearchQueryChanged: (String) -> Unit,
     onSearchValueTypeChanged: (MemorySearchValueType) -> Unit,
     onRegionPresetChanged: (MemoryRegionPreset) -> Unit,
@@ -73,6 +78,63 @@ internal fun MemoryScreen(
                 style = MaterialTheme.typography.titleMedium,
             )
             Spacer(Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = state.memoryAddressInput,
+                onValueChange = onMemoryAddressChanged,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.memory_address_label)) },
+                placeholder = { Text(stringResource(R.string.memory_address_placeholder)) },
+                singleLine = true,
+            )
+            Spacer(Modifier.height(10.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = onJumpMemoryAddress, enabled = !state.busy) {
+                    Text(stringResource(R.string.memory_action_jump))
+                }
+                FilledTonalButton(
+                    onClick = { onStepMemoryPage(-1) },
+                    enabled = !state.busy && state.memoryPage != null,
+                ) {
+                    Text(stringResource(R.string.memory_action_prev_page))
+                }
+                FilledTonalButton(
+                    onClick = { onStepMemoryPage(1) },
+                    enabled = !state.busy && state.memoryPage != null,
+                ) {
+                    Text(stringResource(R.string.memory_action_next_page))
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = onPreviewSelectedPc, enabled = !state.busy) {
+                    Text(stringResource(R.string.memory_action_preview_pc))
+                }
+                FilledTonalButton(onClick = onRefreshVmas, enabled = !state.busy) {
+                    Text(stringResource(R.string.memory_action_refresh_ranges))
+                }
+                FilledTonalButton(onClick = { showRanges = true }, enabled = state.vmas.isNotEmpty()) {
+                    Text(stringResource(R.string.memory_action_ranges))
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = onRefreshImages, enabled = !state.busy) {
+                    Text(stringResource(R.string.memory_action_refresh_images))
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            state.memoryPage?.let { page ->
+                MemoryPageCard(
+                    page = page,
+                    onSelectMemoryAddress = onSelectMemoryAddress,
+                )
+                Spacer(Modifier.height(14.dp))
+            }
 
             OutlinedTextField(
                 value = state.memorySearch.query,
@@ -105,26 +167,8 @@ internal fun MemoryScreen(
             }
             Spacer(Modifier.height(12.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = onSearchMemory, enabled = !state.busy) {
-                    Text(stringResource(R.string.memory_action_search))
-                }
-                FilledTonalButton(onClick = onRefreshVmas, enabled = !state.busy) {
-                    Text(stringResource(R.string.memory_action_refresh_ranges))
-                }
-                FilledTonalButton(onClick = { showRanges = true }, enabled = state.vmas.isNotEmpty()) {
-                    Text(stringResource(R.string.memory_action_ranges))
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = onRefreshImages, enabled = !state.busy) {
-                    Text(stringResource(R.string.memory_action_refresh_images))
-                }
-                FilledTonalButton(onClick = onPreviewSelectedPc, enabled = !state.busy) {
-                    Text(stringResource(R.string.memory_action_preview_pc))
-                }
+            FilledTonalButton(onClick = onSearchMemory, enabled = !state.busy) {
+                Text(stringResource(R.string.memory_action_search))
             }
 
             Spacer(Modifier.height(12.dp))
@@ -163,7 +207,7 @@ internal fun MemoryScreen(
                 state.memorySearch.results.take(24).forEach { result ->
                     MemorySearchResultCard(
                         result = result,
-                        onPreviewAddress = onPreviewAddress,
+                        onSelectMemoryAddress = onSelectMemoryAddress,
                     )
                     Spacer(Modifier.height(8.dp))
                 }
@@ -211,11 +255,6 @@ internal fun MemoryScreen(
                     Spacer(Modifier.height(8.dp))
                 }
             }
-
-            state.memoryPreview?.let { preview ->
-                Spacer(Modifier.height(10.dp))
-                MemoryPreviewCard(preview)
-            }
         }
     }
 
@@ -238,6 +277,10 @@ internal fun MemoryScreen(
                     ) {
                         items(state.vmas.take(48), key = { "${it.startAddr}:${it.endAddr}:${it.name}" }) { vma ->
                             Card(
+                                modifier = Modifier.clickable {
+                                    onSelectMemoryAddress(vma.startAddr)
+                                    showRanges = false
+                                },
                                 colors = CardDefaults.cardColors(
                                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
                                 ),
@@ -275,7 +318,10 @@ internal fun MemoryScreen(
 }
 
 @Composable
-private fun MemoryPreviewCard(preview: com.smlc666.lkmdbg.data.MemoryPreview) {
+private fun MemoryPageCard(
+    page: MemoryPage,
+    onSelectMemoryAddress: (ULong) -> Unit,
+) {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
@@ -286,41 +332,118 @@ private fun MemoryPreviewCard(preview: com.smlc666.lkmdbg.data.MemoryPreview) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                stringResource(R.string.memory_preview_title, hex64(preview.address)),
+                stringResource(R.string.memory_preview_title, hex64(page.pageStart)),
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                stringResource(R.string.memory_preview_bytes, preview.bytes.size),
-                style = MaterialTheme.typography.labelMedium,
+                stringResource(R.string.memory_page_focus, hex64(page.focusAddress)),
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
+            Text(
+                stringResource(
+                    R.string.memory_page_window,
+                    page.pageSize.toString(),
+                    page.bytes.size.toString(),
+                ),
+                style = MaterialTheme.typography.labelMedium,
+            )
+            Text(
+                text = page.region?.let {
+                    stringResource(
+                        R.string.memory_page_region,
+                        it.name.ifBlank { stringResource(R.string.memory_ranges_unnamed) },
+                        hex64(it.startAddr),
+                        hex64(it.endAddr),
+                        it.prot.toString(),
+                    )
+                } ?: stringResource(R.string.memory_page_region_none),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Text(
+                stringResource(R.string.memory_page_scalars_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            ScalarRow(page.scalars)
+
             Text(
                 stringResource(R.string.memory_preview_hex_title),
                 style = MaterialTheme.typography.titleSmall,
             )
-            preview.rows.forEach { row ->
-                Text(
-                    text = "${hex64(row.address)}  ${row.hexBytes.padEnd(47)}  ${row.ascii}",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                )
+            page.rows.forEach { row ->
+                val selected = page.focusAddress >= row.address && page.focusAddress < row.address + 16uL
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelectMemoryAddress(row.address) },
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (selected) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                        } else {
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
+                        },
+                    ),
+                ) {
+                    Text(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        text = "${hex64(row.address)}  ${row.hexBytes.padEnd(47)}  ${row.ascii}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
             }
 
             Text(
                 stringResource(R.string.memory_preview_disasm_title),
                 style = MaterialTheme.typography.titleSmall,
             )
-            if (preview.disassembly.isEmpty()) {
+            if (page.disassembly.isEmpty()) {
                 Text(
                     stringResource(R.string.memory_preview_disasm_empty),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                preview.disassembly.forEach { line ->
+                page.disassembly.forEach { line ->
                     Text(
                         text = line,
                         style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScalarRow(scalars: List<MemoryScalarValue>) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        scalars.forEach { scalar ->
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
+                ),
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        scalar.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        scalar.value,
+                        style = MaterialTheme.typography.bodyMedium,
                         fontFamily = FontFamily.Monospace,
                     )
                 }
@@ -344,12 +467,12 @@ private fun MemoryChipRow(content: @Composable () -> Unit) {
 @Composable
 private fun MemorySearchResultCard(
     result: MemorySearchResult,
-    onPreviewAddress: (ULong) -> Unit,
+    onSelectMemoryAddress: (ULong) -> Unit,
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onPreviewAddress(result.address) },
+            .clickable { onSelectMemoryAddress(result.address) },
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
         ),

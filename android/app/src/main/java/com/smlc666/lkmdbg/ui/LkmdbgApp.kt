@@ -80,8 +80,12 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onRefreshVmas = { coroutineScope.launch { repository.refreshVmas() } },
                     onSearchMemory = { coroutineScope.launch { repository.runMemorySearch() } },
                     onPreviewSelectedPc = { coroutineScope.launch { repository.previewSelectedPc() } },
-                    onPreviewAddress = { address ->
-                        coroutineScope.launch { repository.readMemoryPreview(address, 128u) }
+                    onJumpMemoryAddress = { coroutineScope.launch { repository.jumpToMemoryAddress() } },
+                    onStepMemoryPage = { direction ->
+                        coroutineScope.launch { repository.stepMemoryPage(direction) }
+                    },
+                    onSelectMemoryAddress = { address ->
+                        coroutineScope.launch { repository.selectMemoryAddress(address) }
                     },
                     onAttachProcess = { processPid ->
                         coroutineScope.launch {
@@ -93,6 +97,7 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                         coroutineScope.launch { repository.refreshThreadRegisters(tid) }
                     },
                     onTargetPidChanged = repository::updateTargetPidInput,
+                    onMemoryAddressChanged = repository::updateMemoryAddressInput,
                     onProcessFilterChanged = repository::updateProcessFilter,
                     onMemorySearchQueryChanged = repository::updateMemorySearchQuery,
                     onMemorySearchValueTypeChanged = repository::updateMemorySearchValueType,
@@ -118,8 +123,12 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onRefreshVmas = { coroutineScope.launch { repository.refreshVmas() } },
                     onSearchMemory = { coroutineScope.launch { repository.runMemorySearch() } },
                     onPreviewSelectedPc = { coroutineScope.launch { repository.previewSelectedPc() } },
-                    onPreviewAddress = { address ->
-                        coroutineScope.launch { repository.readMemoryPreview(address, 128u) }
+                    onJumpMemoryAddress = { coroutineScope.launch { repository.jumpToMemoryAddress() } },
+                    onStepMemoryPage = { direction ->
+                        coroutineScope.launch { repository.stepMemoryPage(direction) }
+                    },
+                    onSelectMemoryAddress = { address ->
+                        coroutineScope.launch { repository.selectMemoryAddress(address) }
                     },
                     onAttachProcess = { processPid ->
                         coroutineScope.launch {
@@ -131,6 +140,7 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                         coroutineScope.launch { repository.refreshThreadRegisters(tid) }
                     },
                     onTargetPidChanged = repository::updateTargetPidInput,
+                    onMemoryAddressChanged = repository::updateMemoryAddressInput,
                     onProcessFilterChanged = repository::updateProcessFilter,
                     onMemorySearchQueryChanged = repository::updateMemorySearchQuery,
                     onMemorySearchValueTypeChanged = repository::updateMemorySearchValueType,
@@ -163,10 +173,13 @@ private fun DashboardContent(
     onRefreshVmas: () -> Unit,
     onSearchMemory: () -> Unit,
     onPreviewSelectedPc: () -> Unit,
-    onPreviewAddress: (ULong) -> Unit,
+    onJumpMemoryAddress: () -> Unit,
+    onStepMemoryPage: (Int) -> Unit,
+    onSelectMemoryAddress: (ULong) -> Unit,
     onAttachProcess: (Int) -> Unit,
     onSelectThread: (Int) -> Unit,
     onTargetPidChanged: (String) -> Unit,
+    onMemoryAddressChanged: (String) -> Unit,
     onProcessFilterChanged: (ProcessFilter) -> Unit,
     onMemorySearchQueryChanged: (String) -> Unit,
     onMemorySearchValueTypeChanged: (com.smlc666.lkmdbg.data.MemorySearchValueType) -> Unit,
@@ -208,7 +221,10 @@ private fun DashboardContent(
                     onRefreshVmas = onRefreshVmas,
                     onSearchMemory = onSearchMemory,
                     onPreviewSelectedPc = onPreviewSelectedPc,
-                    onPreviewAddress = onPreviewAddress,
+                    onJumpMemoryAddress = onJumpMemoryAddress,
+                    onStepMemoryPage = onStepMemoryPage,
+                    onSelectMemoryAddress = onSelectMemoryAddress,
+                    onMemoryAddressChanged = onMemoryAddressChanged,
                     onSearchQueryChanged = onMemorySearchQueryChanged,
                     onSearchValueTypeChanged = onMemorySearchValueTypeChanged,
                     onRegionPresetChanged = onMemoryRegionPresetChanged,
