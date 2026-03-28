@@ -235,9 +235,6 @@ static void lkmdbg_regs_arm64_export_fp(struct lkmdbg_regs_arm64 *dst,
 	if (!task)
 		return;
 
-	if (task == current)
-		fpsimd_preserve_current_state();
-
 	fpsimd = &task->thread.uw.fpsimd_state;
 	dst->features |= LKMDBG_REGS_ARM64_FEATURE_FP;
 	dst->fpsr = fpsimd->fpsr;
@@ -268,11 +265,6 @@ static void lkmdbg_regs_arm64_import_fp(struct task_struct *task,
 		fpsimd->vregs[i] =
 			lkmdbg_u128_join(src->vregs[i].lo, src->vregs[i].hi);
 	}
-
-	if (task == current)
-		fpsimd_update_current_state(fpsimd);
-	else
-		fpsimd_flush_task_state(task);
 }
 
 static void lkmdbg_regs_arm64_export(struct lkmdbg_regs_arm64 *dst,

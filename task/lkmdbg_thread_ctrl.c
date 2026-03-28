@@ -116,8 +116,6 @@ static void lkmdbg_regs_arm64_export_stop(struct lkmdbg_regs_arm64 *dst,
 	dst->sp = src->sp;
 	dst->pc = src->pc;
 	dst->pstate = src->pstate;
-
-	fpsimd_preserve_current_state();
 	fpsimd = &current->thread.uw.fpsimd_state;
 	dst->features |= LKMDBG_REGS_ARM64_FEATURE_FP;
 	dst->fpsr = fpsimd->fpsr;
