@@ -101,6 +101,7 @@ int main(void)
 		LOOPS_RW = 16,
 		LOOPS_XLATE = 256,
 		LOOPS_ALLOC = 16,
+		MAX_MEM_OP_LEN = 256 * 1024,
 	};
 	int info_pipe[2];
 	int cmd_pipe[2];
@@ -173,6 +174,9 @@ int main(void)
 	bench_len = info.page_size * 128U;
 	if (bench_len > info.map_len / 2U)
 		bench_len = info.map_len / 2U;
+	/* Keep each mem ioctl op within kernel-side single-op transfer cap. */
+	if (bench_len > MAX_MEM_OP_LEN)
+		bench_len = MAX_MEM_OP_LEN;
 	buf = malloc(bench_len);
 	if (!buf) {
 		fprintf(stderr, "example_perf_baseline: alloc failed len=%zu\n",
