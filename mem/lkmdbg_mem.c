@@ -18,6 +18,10 @@
 #define LKMDBG_MEM_OP_VALID_FLAGS LKMDBG_MEM_OP_FLAG_FORCE_ACCESS
 #define LKMDBG_PAGE_MAX_ENTRIES 1024U
 
+typedef int (*lkmdbg_access_remote_vm_fn)(struct mm_struct *mm,
+					  unsigned long addr, void *buf,
+					  int len, unsigned int gup_flags);
+
 static int lkmdbg_validate_mem_op(const struct lkmdbg_mem_op *op, bool write)
 {
 	if (!op->length || op->length > LKMDBG_MEM_MAX_XFER)
@@ -142,6 +146,28 @@ static bool lkmdbg_mem_is_nofault_miss(long ret)
 	}
 }
 
+static int lkmdbg_access_remote_vm_write(struct mm_struct *mm,
+					 unsigned long remote_addr, void *buf,
+					 size_t length, unsigned int gup_flags)
+{
+	lkmdbg_access_remote_vm_fn fn = NULL;
+
+	if (length > INT_MAX)
+		return -E2BIG;
+
+	if (lkmdbg_symbols.access_remote_vm_inner_sym)
+		fn = (lkmdbg_access_remote_vm_fn)
+			lkmdbg_symbols.access_remote_vm_inner_sym;
+	else if (lkmdbg_symbols.access_remote_vm_sym)
+		fn = (lkmdbg_access_remote_vm_fn)
+			lkmdbg_symbols.access_remote_vm_sym;
+
+	if (!fn)
+		return -EOPNOTSUPP;
+
+	return fn(mm, remote_addr, buf, (int)length, gup_flags);
+}
+
 static void lkmdbg_put_remote_pages(struct page **pages, unsigned int nr_pages)
 {
 	unsigned int i;
@@ -186,6 +212,60 @@ static void lkmdbg_mem_sync_exec_page(struct mm_struct *mm, struct page *page,
 	mmap_read_unlock(mm);
 }
 
+static long lkmdbg_mem_force_write_fallback(struct mm_struct *mm,
+					    u64 remote_addr, u64 local_addr,
+					    size_t length,
+					    unsigned int gup_flags)
+{
+	u8 *bounce;
+	size_t total_done = 0;
+	long ret = 0;
+
+	bounce = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!bounce)
+		return -ENOMEM;
+
+	while (total_done < length) {
+		void __user *user_addr;
+		size_t chunk_len;
+		int written;
+
+		chunk_len = min_t(size_t, length - total_done, PAGE_SIZE);
+		user_addr = u64_to_user_ptr(local_addr + total_done);
+
+		if (copy_from_user(bounce, user_addr, chunk_len)) {
+			if (!total_done) {
+				ret = -EFAULT;
+				goto out;
+			}
+			break;
+		}
+
+		written = lkmdbg_access_remote_vm_write(
+			mm, (unsigned long)remote_addr + total_done, bounce,
+			chunk_len, gup_flags);
+		if (written < 0) {
+			if (!total_done) {
+				ret = written;
+				goto out;
+			}
+			break;
+		}
+		if (!written)
+			break;
+
+		total_done += written;
+		if ((size_t)written != chunk_len)
+			break;
+
+		cond_resched();
+	}
+
+out:
+	kfree(bounce);
+	return ret ? ret : (long)total_done;
+}
+
 static long lkmdbg_mem_xfer_window(struct mm_struct *mm, u64 remote_addr,
 				   u64 local_addr, size_t length,
 				   unsigned int gup_flags, bool write)
@@ -213,6 +293,18 @@ static long lkmdbg_mem_xfer_window(struct mm_struct *mm, u64 remote_addr,
 							 nr_pages, gup_flags,
 							 pages);
 		if (pinned <= 0) {
+			long fallback;
+
+			if (write && (gup_flags & FOLL_FORCE)) {
+				fallback = lkmdbg_mem_force_write_fallback(
+					mm, remote_addr + total_done,
+					local_addr + total_done,
+					length - total_done, gup_flags);
+				if (fallback < 0)
+					return fallback;
+				total_done += fallback;
+				break;
+			}
 			if (lkmdbg_mem_is_nofault_miss(pinned))
 				break;
 			return pinned;
