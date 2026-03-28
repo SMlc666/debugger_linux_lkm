@@ -223,14 +223,9 @@ int main(void)
 	/* Keep each mem ioctl op within kernel-side single-op transfer cap. */
 	if (bench_len > MAX_MEM_OP_LEN)
 		bench_len = MAX_MEM_OP_LEN;
-	chunk_len = (size_t)info.page_size * 16U;
-	if (chunk_len > bench_len)
-		chunk_len = bench_len;
 	shell_addr = info.map_addr + info.page_size;
 	bench_base = shell_addr;
-	rw_alloc_len = bench_len * 2U;
-	if (rw_alloc_len < info.page_size * 2U)
-		rw_alloc_len = info.page_size * 2U;
+	rw_alloc_len = info.page_size * 2U;
 	{
 		struct lkmdbg_remote_alloc_request rw_alloc_req = {
 			.version = LKMDBG_PROTO_VERSION,
@@ -253,6 +248,11 @@ int main(void)
 		rw_alloc_id = rw_alloc_req.alloc_id;
 		bench_base = (uintptr_t)rw_alloc_req.remote_addr;
 	}
+	if (bench_len > rw_alloc_len / 2U)
+		bench_len = rw_alloc_len / 2U;
+	chunk_len = (size_t)info.page_size * 16U;
+	if (chunk_len > bench_len)
+		chunk_len = bench_len;
 	buf = malloc(bench_len);
 	if (!buf) {
 		fprintf(stderr, "example_perf_baseline: alloc failed len=%zu\n",
