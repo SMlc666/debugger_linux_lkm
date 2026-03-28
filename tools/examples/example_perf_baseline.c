@@ -21,6 +21,49 @@ struct example_child_info {
 	uint32_t map_len;
 };
 
+static int run_mem_xfer_loops(int session_fd, uintptr_t remote_addr, uint8_t *buf,
+			      size_t total_len, size_t chunk_len, int loops,
+			      int write, const char *tag)
+{
+	int loop;
+
+	for (loop = 0; loop < loops; loop++) {
+		size_t done = 0;
+
+		while (done < total_len) {
+			size_t this_len = total_len - done;
+			uint32_t bytes_done = 0;
+			int ret;
+
+			if (this_len > chunk_len)
+				this_len = chunk_len;
+
+			if (write) {
+				ret = write_target_memory(session_fd,
+							  remote_addr + done,
+							  buf + done, this_len,
+							  &bytes_done, 0);
+			} else {
+				ret = read_target_memory(session_fd,
+							 remote_addr + done,
+							 buf + done, this_len,
+							 &bytes_done, 0);
+			}
+
+			if (ret < 0 || bytes_done != this_len) {
+				fprintf(stderr,
+					"example_perf_baseline: %s failed loop=%d off=%zu req=%zu done=%u\n",
+					tag, loop, done, this_len, bytes_done);
+				return -1;
+			}
+
+			done += this_len;
+		}
+	}
+
+	return 0;
+}
+
 static uint64_t now_ns(void)
 {
 	struct timespec ts;
@@ -109,7 +152,6 @@ int main(void)
 	struct lkmdbg_phys_op translate_op;
 	struct lkmdbg_phys_request phys_req;
 	uint8_t *buf = NULL;
-	uint32_t bytes_done = 0;
 	uint64_t t0;
 	uint64_t t1;
 	uint64_t ns_read = 0;
@@ -122,6 +164,7 @@ int main(void)
 	double alloc_us;
 	uintptr_t shell_addr;
 	size_t bench_len;
+	size_t chunk_len;
 	pid_t child;
 	int session_fd = -1;
 	char cmd = 'q';
@@ -177,6 +220,9 @@ int main(void)
 	/* Keep each mem ioctl op within kernel-side single-op transfer cap. */
 	if (bench_len > MAX_MEM_OP_LEN)
 		bench_len = MAX_MEM_OP_LEN;
+	chunk_len = (size_t)info.page_size * 16U;
+	if (chunk_len > bench_len)
+		chunk_len = bench_len;
 	buf = malloc(bench_len);
 	if (!buf) {
 		fprintf(stderr, "example_perf_baseline: alloc failed len=%zu\n",
@@ -186,40 +232,26 @@ int main(void)
 	memset(buf, 0x5A, bench_len);
 
 	/* Warmup */
-	if (read_target_memory(session_fd, info.map_addr, buf, bench_len,
-			       &bytes_done, 0) < 0 ||
-	    bytes_done != bench_len)
+	if (run_mem_xfer_loops(session_fd, info.map_addr, buf, bench_len,
+			       chunk_len, 1, 0, "READ_MEM warmup") < 0)
 		goto out;
-	if (write_target_memory(session_fd, info.map_addr + bench_len, buf,
-				bench_len, &bytes_done, 0) < 0 ||
-	    bytes_done != bench_len)
+	if (run_mem_xfer_loops(session_fd, info.map_addr + bench_len, buf,
+			       bench_len, chunk_len, 1, 1,
+			       "WRITE_MEM warmup") < 0)
 		goto out;
 
 	t0 = now_ns();
-	for (i = 0; i < LOOPS_RW; i++) {
-		if (read_target_memory(session_fd, info.map_addr, buf, bench_len,
-				       &bytes_done, 0) < 0 ||
-		    bytes_done != bench_len) {
-			fprintf(stderr,
-				"example_perf_baseline: READ_MEM failed loop=%d bytes=%u\n",
-				i, bytes_done);
-			goto out;
-		}
-	}
+	if (run_mem_xfer_loops(session_fd, info.map_addr, buf, bench_len,
+			       chunk_len, LOOPS_RW, 0, "READ_MEM") < 0)
+		goto out;
 	t1 = now_ns();
 	ns_read = t1 - t0;
 
 	t0 = now_ns();
-	for (i = 0; i < LOOPS_RW; i++) {
-		if (write_target_memory(session_fd, info.map_addr + bench_len, buf,
-					bench_len, &bytes_done, 0) < 0 ||
-		    bytes_done != bench_len) {
-			fprintf(stderr,
-				"example_perf_baseline: WRITE_MEM failed loop=%d bytes=%u\n",
-				i, bytes_done);
-			goto out;
-		}
-	}
+	if (run_mem_xfer_loops(session_fd, info.map_addr + bench_len, buf,
+			       bench_len, chunk_len, LOOPS_RW, 1,
+			       "WRITE_MEM") < 0)
+		goto out;
 	t1 = now_ns();
 	ns_write = t1 - t0;
 
