@@ -3,7 +3,6 @@ package com.smlc666.lkmdbg.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -26,20 +25,24 @@ import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,10 +52,13 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.smlc666.lkmdbg.data.SessionBridgeController
+import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.shared.BridgeStatusSnapshot
 import com.smlc666.lkmdbg.shared.DashboardEvent
 import com.smlc666.lkmdbg.shared.DashboardProcess
 import com.smlc666.lkmdbg.shared.DashboardThread
+import kotlinx.coroutines.launch
 
 private enum class WorkspaceTab(val title: String, val icon: ImageVector) {
     Session("Session", Icons.Rounded.Dns),
@@ -63,7 +69,9 @@ private enum class WorkspaceTab(val title: String, val icon: ImageVector) {
 
 @Composable
 fun LkmdbgApp() {
-    val state = remember { sampleDashboardState() }
+    val dashboardState = remember { sampleDashboardState() }
+    val sessionController = remember { SessionBridgeController() }
+    val coroutineScope = rememberCoroutineScope()
     var selectedTab by remember { mutableStateOf(WorkspaceTab.Session) }
 
     BoxWithConstraints(
@@ -88,18 +96,30 @@ fun LkmdbgApp() {
                     onSelect = { selectedTab = it },
                 )
                 DashboardContent(
-                    state = state,
+                    dashboardState = dashboardState,
+                    sessionState = sessionController.state,
                     selectedTab = selectedTab,
                     padding = PaddingValues(24.dp),
+                    onConnect = { coroutineScope.launch { sessionController.connect() } },
+                    onOpenSession = { coroutineScope.launch { sessionController.openSession() } },
+                    onRefreshStatus = { coroutineScope.launch { sessionController.refreshStatus() } },
+                    onAttachTarget = { coroutineScope.launch { sessionController.attachTarget() } },
+                    onTargetPidChanged = sessionController::updateTargetPidInput,
                 )
             }
         } else {
             Column(modifier = Modifier.fillMaxSize()) {
                 DashboardContent(
-                    state = state,
+                    dashboardState = dashboardState,
+                    sessionState = sessionController.state,
                     selectedTab = selectedTab,
                     padding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
                     modifier = Modifier.weight(1f),
+                    onConnect = { coroutineScope.launch { sessionController.connect() } },
+                    onOpenSession = { coroutineScope.launch { sessionController.openSession() } },
+                    onRefreshStatus = { coroutineScope.launch { sessionController.refreshStatus() } },
+                    onAttachTarget = { coroutineScope.launch { sessionController.attachTarget() } },
+                    onTargetPidChanged = sessionController::updateTargetPidInput,
                 )
                 WorkspaceBar(
                     selectedTab = selectedTab,
@@ -143,9 +163,15 @@ private fun WorkspaceBar(selectedTab: WorkspaceTab, onSelect: (WorkspaceTab) -> 
 
 @Composable
 private fun DashboardContent(
-    state: DashboardState,
+    dashboardState: DashboardState,
+    sessionState: SessionBridgeState,
     selectedTab: WorkspaceTab,
     padding: PaddingValues,
+    onConnect: () -> Unit,
+    onOpenSession: () -> Unit,
+    onRefreshStatus: () -> Unit,
+    onAttachTarget: () -> Unit,
+    onTargetPidChanged: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -154,24 +180,31 @@ private fun DashboardContent(
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         item {
-            HeroHeader(state = state)
+            HeroHeader(dashboardState = dashboardState, sessionState = sessionState)
         }
         item {
-            StatusStrip(state = state)
+            StatusStrip(sessionState.snapshot)
         }
         item {
             when (selectedTab) {
-                WorkspaceTab.Session -> SessionPane(state)
-                WorkspaceTab.Memory -> MemoryPane(state)
-                WorkspaceTab.Threads -> ThreadPane(state)
-                WorkspaceTab.Events -> EventPane(state)
+                WorkspaceTab.Session -> SessionPane(
+                    state = sessionState,
+                    onConnect = onConnect,
+                    onOpenSession = onOpenSession,
+                    onRefreshStatus = onRefreshStatus,
+                    onAttachTarget = onAttachTarget,
+                    onTargetPidChanged = onTargetPidChanged,
+                )
+                WorkspaceTab.Memory -> MemoryPane(dashboardState)
+                WorkspaceTab.Threads -> ThreadPane(dashboardState)
+                WorkspaceTab.Events -> EventPane(dashboardState)
             }
         }
     }
 }
 
 @Composable
-private fun HeroHeader(state: DashboardState) {
+private fun HeroHeader(dashboardState: DashboardState, sessionState: SessionBridgeState) {
     Surface(
         shape = RoundedCornerShape(32.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
@@ -215,7 +248,7 @@ private fun HeroHeader(state: DashboardState) {
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                state.chips.forEach { chip ->
+                dashboardState.chips.plus("agent:${sessionState.agentPath}").forEach { chip ->
                     AssistChip(
                         onClick = {},
                         label = { Text(chip) },
@@ -234,14 +267,14 @@ private fun HeroHeader(state: DashboardState) {
 }
 
 @Composable
-private fun StatusStrip(state: DashboardState) {
+private fun StatusStrip(snapshot: BridgeStatusSnapshot) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        MetricCard("Transport", state.status.transport, Modifier.weight(1f))
-        MetricCard("Target", "${state.status.targetPid}/${state.status.targetTid}", Modifier.weight(1f))
-        MetricCard("Agent", state.status.agentPid.toString(), Modifier.weight(1f))
+        MetricCard("Transport", snapshot.transport, Modifier.weight(1f))
+        MetricCard("Target", "${snapshot.targetPid}/${snapshot.targetTid}", Modifier.weight(1f))
+        MetricCard("Agent", snapshot.agentPid.toString(), Modifier.weight(1f))
     }
 }
 
@@ -271,27 +304,60 @@ private fun MetricCard(title: String, value: String, modifier: Modifier = Modifi
 }
 
 @Composable
-private fun SessionPane(state: DashboardState) {
+private fun SessionPane(
+    state: SessionBridgeState,
+    onConnect: () -> Unit,
+    onOpenSession: () -> Unit,
+    onRefreshStatus: () -> Unit,
+    onAttachTarget: () -> Unit,
+    onTargetPidChanged: (String) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        PanelCard("Attach Queue", "Fast-select a process, then hand control to the root agent over stdio.") {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                state.processes.forEach { process ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(process.name, style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "${process.packageName}  |  pid=${process.pid}  |  ${process.arch}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        AssistChip(onClick = {}, label = { Text(process.state) })
-                    }
+        PanelCard("Pipe Bridge", "Launch the root stdio agent, open a session, then attach a target pid.") {
+            Text(
+                text = "last: ${state.lastMessage}",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FilledTonalButton(onClick = onConnect, enabled = !state.busy) {
+                    Text("Connect")
+                }
+                Button(onClick = onOpenSession, enabled = !state.busy) {
+                    Text("Open Session")
+                }
+                FilledTonalButton(onClick = onRefreshStatus, enabled = !state.busy) {
+                    Text("Refresh")
                 }
             }
+            Spacer(Modifier.height(14.dp))
+            OutlinedTextField(
+                value = state.targetPidInput,
+                onValueChange = onTargetPidChanged,
+                enabled = !state.busy,
+                singleLine = true,
+                label = { Text("Target PID") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = onAttachTarget, enabled = !state.busy) {
+                Text("Attach Target")
+            }
+            Spacer(Modifier.height(18.dp))
+            Text("session_open=${state.snapshot.sessionOpen}", style = MaterialTheme.typography.bodyMedium)
+            Text("connected=${state.snapshot.connected}", style = MaterialTheme.typography.bodyMedium)
+            Text("hook_active=${state.snapshot.hookActive}", style = MaterialTheme.typography.bodyMedium)
+            Text("owner_pid=${state.snapshot.ownerPid}", style = MaterialTheme.typography.bodyMedium)
+            Text("event_q=${state.snapshot.eventQueueDepth}", style = MaterialTheme.typography.bodyMedium)
+        }
+
+        PanelCard("Attach Queue", "Static mock rows stay here until process enumeration is wired through the bridge.") {
+            Text(
+                text = "The live transport is already real. Process list is still placeholder until we expose enumeration over pipe.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -406,7 +472,6 @@ private fun PanelCard(title: String, subtitle: String, content: @Composable () -
 }
 
 private data class DashboardState(
-    val status: BridgeStatusSnapshot,
     val chips: List<String>,
     val processes: List<DashboardProcess>,
     val threads: List<DashboardThread>,
@@ -417,15 +482,7 @@ private data class DashboardState(
 
 private fun sampleDashboardState(): DashboardState =
     DashboardState(
-        status = BridgeStatusSnapshot(
-            connected = true,
-            targetPid = 4321,
-            targetTid = 4321,
-            sessionOpen = true,
-            agentPid = 901,
-            transport = "su -> pipe(stdio)",
-        ),
-        chips = listOf("Root Present", "Pipe Agent", "MD3 Console", "GKI Session"),
+        chips = listOf("Root Expected", "Pipe Agent", "MD3 Console", "GKI Session"),
         processes = listOf(
             DashboardProcess(4321, "com.example.game", "com.example.game", "arm64", "Attached"),
             DashboardProcess(5544, "surfaceflinger", "system", "arm64", "Idle"),

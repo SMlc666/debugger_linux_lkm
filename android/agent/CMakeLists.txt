@@ -11,4 +11,5 @@ add_executable(lkmdbg-agent
 
 target_include_directories(lkmdbg-agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../..
 )
