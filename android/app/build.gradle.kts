@@ -94,6 +94,7 @@ val buildBundledAgentDebug by tasks.registering {
         file("${projectDir.parentFile}/../include/lkmdbg_ioctl.h"),
     )
     outputs.dir(assetDir)
+    notCompatibleWithConfigurationCache("Builds the bundled Android agent via project.exec and staged asset copying")
 
     doLast {
         val sdk = sdkRoot.orNull ?: throw GradleException("ANDROID_SDK_ROOT or ANDROID_HOME is required")
