@@ -18,6 +18,10 @@ object BridgeProtocol {
     const val STATUS_SNAPSHOT_REPLY_SIZE: Int = 140
     const val QUERY_PROCESSES_REPLY_HEADER_SIZE: Int = 72
     const val QUERY_PROCESS_RECORD_SIZE: Int = 200
+    const val READ_MEMORY_REQUEST_SIZE: Int = 16
+    const val READ_MEMORY_REPLY_HEADER_SIZE: Int = 88
+    const val WRITE_MEMORY_REQUEST_HEADER_SIZE: Int = 16
+    const val WRITE_MEMORY_REPLY_SIZE: Int = 88
     const val QUERY_THREADS_REPLY_HEADER_SIZE: Int = 80
     const val QUERY_THREAD_RECORD_SIZE: Int = 48
     const val GET_REGISTERS_REQUEST_SIZE: Int = 8
@@ -25,6 +29,8 @@ object BridgeProtocol {
     const val POLL_EVENTS_REQUEST_SIZE: Int = 8
     const val POLL_EVENTS_REPLY_HEADER_SIZE: Int = 72
     const val POLL_EVENT_RECORD_SIZE: Int = 64
+    const val QUERY_IMAGES_REPLY_HEADER_SIZE: Int = 72
+    const val QUERY_IMAGE_RECORD_SIZE: Int = 320
 }
 
 enum class BridgeCommand(val wireId: UInt) {
@@ -39,6 +45,7 @@ enum class BridgeCommand(val wireId: UInt) {
     PollEvent(9u),
     StatusSnapshot(10u),
     QueryProcesses(11u),
+    QueryImages(12u),
 }
 
 enum class BridgeStatusCode(val wireValue: Int) {
@@ -112,6 +119,27 @@ data class BridgeProcessListReply(
     val processes: List<BridgeProcessRecord>,
 )
 
+data class BridgeImageRecord(
+    val startAddr: ULong,
+    val endAddr: ULong,
+    val baseAddr: ULong,
+    val pgoff: ULong,
+    val inode: ULong,
+    val prot: UInt,
+    val flags: UInt,
+    val devMajor: UInt,
+    val devMinor: UInt,
+    val segmentCount: UInt,
+    val name: String,
+)
+
+data class BridgeImageListReply(
+    val status: Int,
+    val count: UInt,
+    val message: String,
+    val images: List<BridgeImageRecord>,
+)
+
 data class BridgeThreadRecord(
     val tid: Int,
     val tgid: Int,
@@ -143,6 +171,25 @@ data class BridgeThreadRegistersReply(
     val fpcr: UInt,
     val v0Lo: ULong,
     val v0Hi: ULong,
+    val message: String,
+)
+
+data class BridgeMemoryReadReply(
+    val status: Int,
+    val remoteAddr: ULong,
+    val requestedLength: UInt,
+    val flags: UInt,
+    val bytesDone: UInt,
+    val message: String,
+    val data: ByteArray,
+)
+
+data class BridgeMemoryWriteReply(
+    val status: Int,
+    val remoteAddr: ULong,
+    val requestedLength: UInt,
+    val flags: UInt,
+    val bytesDone: UInt,
     val message: String,
 )
 
@@ -201,6 +248,27 @@ object BridgeWireCodec {
             .order(ByteOrder.LITTLE_ENDIAN)
             .putInt(request.targetPid)
             .putInt(request.targetTid)
+            .array()
+
+    fun encodeMemoryRequest(remoteAddr: ULong, length: UInt, flags: UInt = 0u): ByteArray =
+        ByteBuffer.allocate(BridgeProtocol.READ_MEMORY_REQUEST_SIZE)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putLong(remoteAddr.toLong())
+            .putInt(length.toInt())
+            .putInt(flags.toInt())
+            .array()
+
+    fun encodeMemoryWriteRequest(
+        remoteAddr: ULong,
+        data: ByteArray,
+        flags: UInt = 0u,
+    ): ByteArray =
+        ByteBuffer.allocate(BridgeProtocol.WRITE_MEMORY_REQUEST_HEADER_SIZE + data.size)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putLong(remoteAddr.toLong())
+            .putInt(data.size)
+            .putInt(flags.toInt())
+            .put(data)
             .array()
 
     fun encodeThreadRequest(tid: Int, flags: UInt = 0u): ByteArray =
@@ -303,6 +371,39 @@ object BridgeWireCodec {
             count = count,
             message = message,
             processes = processes,
+        )
+    }
+
+    fun decodeReadMemoryReply(payload: ByteArray): BridgeMemoryReadReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.READ_MEMORY_REPLY_HEADER_SIZE)
+        val status = buffer.int
+        val bytesDone = buffer.int.toUInt()
+        val remoteAddr = buffer.long.toULong()
+        val requestedLength = buffer.int.toUInt()
+        val flags = buffer.int.toUInt()
+        val message = decodeCString(buffer, 64)
+        val data = ByteArray(payload.size - BridgeProtocol.READ_MEMORY_REPLY_HEADER_SIZE)
+        buffer.get(data)
+        return BridgeMemoryReadReply(
+            status = status,
+            remoteAddr = remoteAddr,
+            requestedLength = requestedLength,
+            flags = flags,
+            bytesDone = bytesDone,
+            message = message,
+            data = data,
+        )
+    }
+
+    fun decodeWriteMemoryReply(payload: ByteArray): BridgeMemoryWriteReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.WRITE_MEMORY_REPLY_SIZE)
+        return BridgeMemoryWriteReply(
+            status = buffer.int,
+            bytesDone = buffer.int.toUInt(),
+            remoteAddr = buffer.long.toULong(),
+            requestedLength = buffer.int.toUInt(),
+            flags = buffer.int.toUInt(),
+            message = decodeCString(buffer, 64),
         )
     }
 
@@ -413,6 +514,44 @@ object BridgeWireCodec {
             count = count,
             message = message,
             events = events,
+        )
+    }
+
+    fun decodeQueryImagesReply(payload: ByteArray): BridgeImageListReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.QUERY_IMAGES_REPLY_HEADER_SIZE)
+        val status = buffer.int
+        val count = buffer.int.toUInt()
+        val message = decodeCString(buffer, 64)
+        val remaining = payload.size - BridgeProtocol.QUERY_IMAGES_REPLY_HEADER_SIZE
+        require(remaining >= count.toInt() * BridgeProtocol.QUERY_IMAGE_RECORD_SIZE) {
+            "image payload too small: got=${payload.size} count=$count"
+        }
+
+        val images = ArrayList<BridgeImageRecord>(count.toInt())
+        repeat(count.toInt()) {
+            images += BridgeImageRecord(
+                startAddr = buffer.long.toULong(),
+                endAddr = buffer.long.toULong(),
+                baseAddr = buffer.long.toULong(),
+                pgoff = buffer.long.toULong(),
+                inode = buffer.long.toULong(),
+                prot = buffer.int.toUInt(),
+                flags = buffer.int.toUInt(),
+                devMajor = buffer.int.toUInt(),
+                devMinor = buffer.int.toUInt(),
+                segmentCount = buffer.int.toUInt(),
+                name = run {
+                    buffer.int
+                    decodeCString(buffer, 256)
+                },
+            )
+        }
+
+        return BridgeImageListReply(
+            status = status,
+            count = count,
+            message = message,
+            images = images,
         )
     }
 

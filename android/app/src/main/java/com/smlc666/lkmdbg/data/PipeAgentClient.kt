@@ -4,6 +4,9 @@ import android.content.Context
 import com.smlc666.lkmdbg.shared.BridgeCommand
 import com.smlc666.lkmdbg.shared.BridgeEventBatchReply
 import com.smlc666.lkmdbg.shared.BridgeHelloReply
+import com.smlc666.lkmdbg.shared.BridgeImageListReply
+import com.smlc666.lkmdbg.shared.BridgeMemoryReadReply
+import com.smlc666.lkmdbg.shared.BridgeMemoryWriteReply
 import com.smlc666.lkmdbg.shared.BridgeOpenSessionReply
 import com.smlc666.lkmdbg.shared.BridgeProcessListReply
 import com.smlc666.lkmdbg.shared.BridgeSetTargetReply
@@ -129,6 +132,78 @@ class PipeAgentClient(
                 )
             }
             BridgeWireCodec.decodeQueryProcessesReply(payload)
+        }
+    }
+
+    suspend fun queryImages(): BridgeImageListReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(requireOutputLocked(), BridgeCommand.QueryImages)
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.QueryImages.wireId) {
+                return@synchronized BridgeImageListReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    count = 0u,
+                    message = "unexpected query-images reply command=${header.command}",
+                    images = emptyList(),
+                )
+            }
+            BridgeWireCodec.decodeQueryImagesReply(payload)
+        }
+    }
+
+    suspend fun readMemory(
+        remoteAddr: ULong,
+        length: UInt,
+        flags: UInt = 0u,
+    ): BridgeMemoryReadReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(
+                requireOutputLocked(),
+                BridgeCommand.ReadMemory,
+                BridgeWireCodec.encodeMemoryRequest(remoteAddr, length, flags),
+            )
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.ReadMemory.wireId) {
+                return@synchronized BridgeMemoryReadReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    remoteAddr = remoteAddr,
+                    requestedLength = length,
+                    flags = flags,
+                    bytesDone = 0u,
+                    message = "unexpected read-memory reply command=${header.command}",
+                    data = ByteArray(0),
+                )
+            }
+            BridgeWireCodec.decodeReadMemoryReply(payload)
+        }
+    }
+
+    suspend fun writeMemory(
+        remoteAddr: ULong,
+        data: ByteArray,
+        flags: UInt = 0u,
+    ): BridgeMemoryWriteReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(
+                requireOutputLocked(),
+                BridgeCommand.WriteMemory,
+                BridgeWireCodec.encodeMemoryWriteRequest(remoteAddr, data, flags),
+            )
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.WriteMemory.wireId) {
+                return@synchronized BridgeMemoryWriteReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    remoteAddr = remoteAddr,
+                    requestedLength = data.size.toUInt(),
+                    flags = flags,
+                    bytesDone = 0u,
+                    message = "unexpected write-memory reply command=${header.command}",
+                )
+            }
+            BridgeWireCodec.decodeWriteMemoryReply(payload)
         }
     }
 

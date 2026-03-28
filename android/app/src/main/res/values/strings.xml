@@ -58,6 +58,18 @@
     <string name="memory_panel_title">Memory Snapshot</string>
     <string name="memory_panel_subtitle">Fast status cards for the memory toolchain and no-fault workflow health.</string>
     <string name="memory_recent_scan">Recent scan: %1$s</string>
+    <string name="memory_action_refresh_images">Refresh images</string>
+    <string name="memory_action_preview_pc">Preview selected PC</string>
+    <string name="memory_error_no_target">No active target. Attach a process first.</string>
+    <string name="memory_error_no_pc">No selected PC yet. Refresh threads first.</string>
+    <string name="memory_message_images">%1$d images refreshed</string>
+    <string name="memory_message_preview">previewed %1$s bytes at %2$s</string>
+    <string name="memory_images_count">Images: %1$d</string>
+    <string name="memory_images_empty">No image list yet. Attach a target and refresh.</string>
+    <string name="memory_image_range">range %1$s - %2$s base %3$s</string>
+    <string name="memory_image_flags">prot=%1$s flags=%2$s segments=%3$s</string>
+    <string name="memory_preview_title">Bytes at %1$s</string>
+    <string name="memory_preview_bytes">size=%1$d</string>
     <string name="thread_panel_title">Thread View</string>
     <string name="thread_panel_subtitle">Live thread inventory and a register snapshot for the selected target thread.</string>
     <string name="thread_action_refresh">Refresh threads</string>

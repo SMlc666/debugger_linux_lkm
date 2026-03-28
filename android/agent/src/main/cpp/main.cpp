@@ -138,6 +138,18 @@ static std::string read_proc_text(const std::string &path, bool cmdline_mode)
 	return trim_trailing_space(out);
 }
 
+static const char *image_name_ptr(const lkmdbg_image_query_request *reply,
+				  const lkmdbg_image_entry *entry,
+				  const char *names)
+{
+	if (!entry->name_size)
+		return "";
+	if (static_cast<uint64_t>(entry->name_offset) + entry->name_size >
+	    reply->names_used)
+		return "";
+	return names + entry->name_offset;
+}
+
 static void close_session(agent_state *state)
 {
 	if (!state)
@@ -353,6 +365,125 @@ static bool handle_query_processes(void)
 			   static_cast<uint32_t>(payload.size()));
 }
 
+static bool handle_read_memory(agent_state *state, const void *payload, uint32_t payload_size)
+{
+	lkmdbg_agent_memory_request request = {};
+	lkmdbg_agent_memory_reply reply = {};
+	lkmdbg_mem_request req = {};
+	lkmdbg_mem_op op = {};
+	std::vector<char> data;
+	std::vector<char> frame;
+
+	if (payload_size < sizeof(request)) {
+		reply.status = LKMDBG_AGENT_STATUS_INVALID_PAYLOAD;
+		copy_cstr(reply.message, sizeof(reply.message), "payload too small");
+		return write_frame(LKMDBG_AGENT_CMD_READ_MEMORY, &reply, sizeof(reply));
+	}
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(LKMDBG_AGENT_CMD_READ_MEMORY, &reply, sizeof(reply));
+	}
+
+	memcpy(&request, payload, sizeof(request));
+	if (!request.length || request.length > 65536u) {
+		reply.status = -EINVAL;
+		reply.remote_addr = request.remote_addr;
+		reply.requested_length = request.length;
+		reply.flags = request.flags;
+		copy_cstr(reply.message, sizeof(reply.message), "invalid read length");
+		return write_frame(LKMDBG_AGENT_CMD_READ_MEMORY, &reply, sizeof(reply));
+	}
+
+	data.resize(request.length);
+	op.remote_addr = request.remote_addr;
+	op.local_addr = reinterpret_cast<uintptr_t>(data.data());
+	op.length = request.length;
+	op.flags = request.flags;
+	req.version = LKMDBG_PROTO_VERSION;
+	req.size = sizeof(req);
+	req.ops_addr = reinterpret_cast<uintptr_t>(&op);
+	req.op_count = 1;
+	if (ioctl(state->session_fd, LKMDBG_IOC_READ_MEM, &req) < 0) {
+		reply.status = -errno;
+		reply.remote_addr = request.remote_addr;
+		reply.requested_length = request.length;
+		reply.flags = request.flags;
+		copy_cstr(reply.message, sizeof(reply.message), "READ_MEM failed");
+		return write_frame(LKMDBG_AGENT_CMD_READ_MEMORY, &reply, sizeof(reply));
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.bytes_done = op.bytes_done;
+	reply.remote_addr = request.remote_addr;
+	reply.requested_length = request.length;
+	reply.flags = request.flags;
+	copy_cstr(reply.message, sizeof(reply.message), "memory read ready");
+	frame.resize(sizeof(reply) + op.bytes_done);
+	memcpy(frame.data(), &reply, sizeof(reply));
+	if (op.bytes_done)
+		memcpy(frame.data() + sizeof(reply), data.data(), op.bytes_done);
+	return write_frame(LKMDBG_AGENT_CMD_READ_MEMORY, frame.data(),
+			   static_cast<uint32_t>(frame.size()));
+}
+
+static bool handle_write_memory(agent_state *state, const void *payload, uint32_t payload_size)
+{
+	lkmdbg_agent_memory_request request = {};
+	lkmdbg_agent_memory_reply reply = {};
+	lkmdbg_mem_request req = {};
+	lkmdbg_mem_op op = {};
+	const char *bytes;
+
+	if (payload_size < sizeof(request)) {
+		reply.status = LKMDBG_AGENT_STATUS_INVALID_PAYLOAD;
+		copy_cstr(reply.message, sizeof(reply.message), "payload too small");
+		return write_frame(LKMDBG_AGENT_CMD_WRITE_MEMORY, &reply, sizeof(reply));
+	}
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(LKMDBG_AGENT_CMD_WRITE_MEMORY, &reply, sizeof(reply));
+	}
+
+	memcpy(&request, payload, sizeof(request));
+	bytes = static_cast<const char *>(payload) + sizeof(request);
+	if (!request.length || request.length > 65536u ||
+	    payload_size < sizeof(request) + request.length) {
+		reply.status = -EINVAL;
+		reply.remote_addr = request.remote_addr;
+		reply.requested_length = request.length;
+		reply.flags = request.flags;
+		copy_cstr(reply.message, sizeof(reply.message), "invalid write payload");
+		return write_frame(LKMDBG_AGENT_CMD_WRITE_MEMORY, &reply, sizeof(reply));
+	}
+
+	op.remote_addr = request.remote_addr;
+	op.local_addr = reinterpret_cast<uintptr_t>(bytes);
+	op.length = request.length;
+	op.flags = request.flags;
+	req.version = LKMDBG_PROTO_VERSION;
+	req.size = sizeof(req);
+	req.ops_addr = reinterpret_cast<uintptr_t>(&op);
+	req.op_count = 1;
+	if (ioctl(state->session_fd, LKMDBG_IOC_WRITE_MEM, &req) < 0) {
+		reply.status = -errno;
+		reply.remote_addr = request.remote_addr;
+		reply.requested_length = request.length;
+		reply.flags = request.flags;
+		copy_cstr(reply.message, sizeof(reply.message), "WRITE_MEM failed");
+		return write_frame(LKMDBG_AGENT_CMD_WRITE_MEMORY, &reply, sizeof(reply));
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.bytes_done = op.bytes_done;
+	reply.remote_addr = request.remote_addr;
+	reply.requested_length = request.length;
+	reply.flags = request.flags;
+	copy_cstr(reply.message, sizeof(reply.message), "memory write complete");
+	return write_frame(LKMDBG_AGENT_CMD_WRITE_MEMORY, &reply, sizeof(reply));
+}
+
 static bool handle_query_threads(agent_state *state)
 {
 	lkmdbg_agent_query_threads_reply reply = {};
@@ -540,6 +671,77 @@ static bool handle_poll_events(agent_state *state, const void *payload, uint32_t
 			   static_cast<uint32_t>(frame.size()));
 }
 
+static bool handle_query_images(agent_state *state)
+{
+	lkmdbg_agent_query_images_reply reply = {};
+	std::vector<lkmdbg_agent_image_record> records;
+	std::vector<char> payload;
+	uint64_t cursor = 0;
+
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(LKMDBG_AGENT_CMD_QUERY_IMAGES, &reply, sizeof(reply));
+	}
+
+	for (;;) {
+		lkmdbg_image_entry entries[64] = {};
+		char names[8192] = {};
+		lkmdbg_image_query_request req = {};
+
+		req.version = LKMDBG_PROTO_VERSION;
+		req.size = sizeof(req);
+		req.start_addr = cursor;
+		req.entries_addr = reinterpret_cast<uintptr_t>(entries);
+		req.max_entries = static_cast<uint32_t>(sizeof(entries) / sizeof(entries[0]));
+		req.names_addr = reinterpret_cast<uintptr_t>(names);
+		req.names_size = sizeof(names);
+		if (ioctl(state->session_fd, LKMDBG_IOC_QUERY_IMAGES, &req) < 0) {
+			reply.status = -errno;
+			copy_cstr(reply.message, sizeof(reply.message), "QUERY_IMAGES failed");
+			return write_frame(LKMDBG_AGENT_CMD_QUERY_IMAGES, &reply, sizeof(reply));
+		}
+
+		for (uint32_t i = 0; i < req.entries_filled; ++i) {
+			lkmdbg_agent_image_record record = {};
+			record.start_addr = entries[i].start_addr;
+			record.end_addr = entries[i].end_addr;
+			record.base_addr = entries[i].base_addr;
+			record.pgoff = entries[i].pgoff;
+			record.inode = entries[i].inode;
+			record.prot = entries[i].prot;
+			record.flags = entries[i].flags;
+			record.dev_major = entries[i].dev_major;
+			record.dev_minor = entries[i].dev_minor;
+			record.segment_count = entries[i].segment_count;
+			copy_cstr(record.name, sizeof(record.name),
+				  image_name_ptr(&req, &entries[i], names));
+			records.push_back(record);
+		}
+
+		if (req.done)
+			break;
+		if (req.next_addr <= cursor) {
+			reply.status = -EIO;
+			copy_cstr(reply.message, sizeof(reply.message), "QUERY_IMAGES cursor stalled");
+			return write_frame(LKMDBG_AGENT_CMD_QUERY_IMAGES, &reply, sizeof(reply));
+		}
+		cursor = req.next_addr;
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.count = static_cast<uint32_t>(records.size());
+	copy_cstr(reply.message, sizeof(reply.message), "images ready");
+	payload.resize(sizeof(reply) + records.size() * sizeof(records[0]));
+	memcpy(payload.data(), &reply, sizeof(reply));
+	if (!records.empty()) {
+		memcpy(payload.data() + sizeof(reply), records.data(),
+		       records.size() * sizeof(records[0]));
+	}
+	return write_frame(LKMDBG_AGENT_CMD_QUERY_IMAGES, payload.data(),
+			   static_cast<uint32_t>(payload.size()));
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -589,6 +791,18 @@ int main(int argc, char **argv)
 				return 1;
 			}
 			break;
+		case LKMDBG_AGENT_CMD_READ_MEMORY:
+			if (!handle_read_memory(&state, payload.data(), remaining)) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_WRITE_MEMORY:
+			if (!handle_write_memory(&state, payload.data(), remaining)) {
+				close_session(&state);
+				return 1;
+			}
+			break;
 		case LKMDBG_AGENT_CMD_QUERY_THREADS:
 			if (!handle_query_threads(&state)) {
 				close_session(&state);
@@ -615,6 +829,12 @@ int main(int argc, char **argv)
 			break;
 		case LKMDBG_AGENT_CMD_QUERY_PROCESSES:
 			if (!handle_query_processes()) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_QUERY_IMAGES:
+			if (!handle_query_images(&state)) {
 				close_session(&state);
 				return 1;
 			}

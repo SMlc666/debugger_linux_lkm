@@ -1,3 +1,4 @@
+#include <linux/cacheflush.h>
 #include <linux/fs.h>
 #include <linux/highmem.h>
 #include <linux/kernel.h>
@@ -165,6 +166,21 @@ static unsigned int lkmdbg_mem_gup_flags(const struct lkmdbg_mem_op *op,
 	return flags;
 }
 
+static void lkmdbg_mem_sync_exec_page(struct mm_struct *mm, struct page *page,
+				      unsigned long remote_addr)
+{
+	struct vm_area_struct *vma;
+
+	flush_dcache_page(page);
+
+	mmap_read_lock(mm);
+	vma = find_vma(mm, remote_addr);
+	if (vma && remote_addr >= vma->vm_start && remote_addr < vma->vm_end &&
+	    (vma->vm_flags & VM_EXEC))
+		flush_icache_page(vma, page);
+	mmap_read_unlock(mm);
+}
+
 static long lkmdbg_mem_xfer_window(struct mm_struct *mm, u64 remote_addr,
 				   u64 local_addr, size_t length,
 				   unsigned int gup_flags, bool write)
@@ -216,6 +232,10 @@ static long lkmdbg_mem_xfer_window(struct mm_struct *mm, u64 remote_addr,
 					lkmdbg_put_remote_pages(pages, pinned);
 					return -EFAULT;
 				}
+				lkmdbg_mem_sync_exec_page(
+					mm, pages[i],
+					(unsigned long)remote_addr + total_done +
+						window_done);
 				set_page_dirty_lock(pages[i]);
 			} else if (copy_to_user(user_addr,
 						(u8 *)page_addr + page_offset,

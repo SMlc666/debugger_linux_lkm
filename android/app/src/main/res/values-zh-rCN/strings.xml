@@ -58,6 +58,18 @@
     <string name="memory_panel_title">内存快照</string>
     <string name="memory_panel_subtitle">展示内存工具链与 no-fault 工作流健康度的快速状态卡片。</string>
     <string name="memory_recent_scan">最近扫描：%1$s</string>
+    <string name="memory_action_refresh_images">刷新映像</string>
+    <string name="memory_action_preview_pc">预览当前 PC</string>
+    <string name="memory_error_no_target">当前没有活动目标，请先附加进程。</string>
+    <string name="memory_error_no_pc">当前还没有可用 PC，请先刷新线程。</string>
+    <string name="memory_message_images">已刷新 %1$d 个映像</string>
+    <string name="memory_message_preview">已在 %2$s 预览 %1$s 字节</string>
+    <string name="memory_images_count">映像数：%1$d</string>
+    <string name="memory_images_empty">还没有映像列表。请先附加目标并刷新。</string>
+    <string name="memory_image_range">范围 %1$s - %2$s 基址 %3$s</string>
+    <string name="memory_image_flags">prot=%1$s flags=%2$s segments=%3$s</string>
+    <string name="memory_preview_title">%1$s 的字节预览</string>
+    <string name="memory_preview_bytes">大小=%1$d</string>
     <string name="thread_panel_title">线程视图</string>
     <string name="thread_panel_subtitle">展示真实线程清单，以及当前选中线程的寄存器快照。</string>
     <string name="thread_action_refresh">刷新线程</string>

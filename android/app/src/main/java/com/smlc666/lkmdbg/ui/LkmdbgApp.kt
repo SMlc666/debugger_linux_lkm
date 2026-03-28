@@ -76,6 +76,8 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onRefreshProcesses = { coroutineScope.launch { repository.refreshProcesses() } },
                     onRefreshThreads = { coroutineScope.launch { repository.refreshThreads() } },
                     onRefreshEvents = { coroutineScope.launch { repository.refreshEvents() } },
+                    onRefreshImages = { coroutineScope.launch { repository.refreshImages() } },
+                    onPreviewSelectedPc = { coroutineScope.launch { repository.previewSelectedPc() } },
                     onAttachProcess = { processPid ->
                         coroutineScope.launch {
                             if (repository.attachProcess(processPid))
@@ -104,6 +106,8 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onRefreshProcesses = { coroutineScope.launch { repository.refreshProcesses() } },
                     onRefreshThreads = { coroutineScope.launch { repository.refreshThreads() } },
                     onRefreshEvents = { coroutineScope.launch { repository.refreshEvents() } },
+                    onRefreshImages = { coroutineScope.launch { repository.refreshImages() } },
+                    onPreviewSelectedPc = { coroutineScope.launch { repository.previewSelectedPc() } },
                     onAttachProcess = { processPid ->
                         coroutineScope.launch {
                             if (repository.attachProcess(processPid))
@@ -139,6 +143,8 @@ private fun DashboardContent(
     onRefreshProcesses: () -> Unit,
     onRefreshThreads: () -> Unit,
     onRefreshEvents: () -> Unit,
+    onRefreshImages: () -> Unit,
+    onPreviewSelectedPc: () -> Unit,
     onAttachProcess: (Int) -> Unit,
     onSelectThread: (Int) -> Unit,
     onTargetPidChanged: (String) -> Unit,
@@ -173,7 +179,12 @@ private fun DashboardContent(
                         onProcessFilterChanged = onProcessFilterChanged,
                     )
                 }
-                WorkspaceTab.Memory -> MemoryScreen(dashboardState)
+                WorkspaceTab.Memory -> MemoryScreen(
+                    dashboardState = dashboardState,
+                    state = sessionState,
+                    onRefreshImages = onRefreshImages,
+                    onPreviewSelectedPc = onPreviewSelectedPc,
+                )
                 WorkspaceTab.Threads -> ThreadScreen(
                     state = sessionState,
                     onRefreshThreads = onRefreshThreads,

@@ -5,6 +5,8 @@ import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.shared.BridgeEventBatchReply
 import com.smlc666.lkmdbg.shared.BridgeEventRecord
 import com.smlc666.lkmdbg.shared.BridgeHelloReply
+import com.smlc666.lkmdbg.shared.BridgeImageListReply
+import com.smlc666.lkmdbg.shared.BridgeImageRecord
 import com.smlc666.lkmdbg.shared.BridgeOpenSessionReply
 import com.smlc666.lkmdbg.shared.BridgeProcessListReply
 import com.smlc666.lkmdbg.shared.BridgeStatusSnapshot
@@ -20,6 +22,11 @@ import java.io.IOException
 data class SessionEventEntry(
     val record: BridgeEventRecord,
     val receivedAtMs: Long,
+)
+
+data class MemoryPreview(
+    val address: ULong,
+    val bytes: ByteArray,
 )
 
 data class SessionBridgeState(
@@ -48,6 +55,8 @@ data class SessionBridgeState(
     val selectedThreadTid: Int? = null,
     val selectedThreadRegisters: BridgeThreadRegistersReply? = null,
     val recentEvents: List<SessionEventEntry> = emptyList(),
+    val images: List<BridgeImageRecord> = emptyList(),
+    val memoryPreview: MemoryPreview? = null,
 )
 
 class SessionBridgeRepository(
@@ -103,6 +112,7 @@ class SessionBridgeRepository(
             ensureSessionReadyUnsafe()
             attachTargetUnsafe(targetPid)
             refreshThreadsUnsafe()
+            refreshImagesUnsafe()
             refreshEventsUnsafe(timeoutMs = 0, maxEvents = 16)
         }
     }
@@ -158,12 +168,53 @@ class SessionBridgeRepository(
         }
     }
 
+    suspend fun refreshImages() {
+        runOperation {
+            if (!hasActiveTarget()) {
+                _state.update { current -> current.copy(images = emptyList()) }
+                updateMessage(appContext.getString(R.string.memory_error_no_target))
+                return@runOperation
+            }
+            refreshImagesUnsafe()
+        }
+    }
+
+    suspend fun readMemoryPreview(remoteAddr: ULong, length: UInt = 64u) {
+        runOperation {
+            val reply = client.readMemory(remoteAddr, length)
+            _state.update { current ->
+                current.copy(
+                    memoryPreview = MemoryPreview(
+                        address = remoteAddr,
+                        bytes = reply.data.copyOf(reply.bytesDone.toInt()),
+                    ),
+                    lastMessage = reply.message.ifBlank {
+                        appContext.getString(R.string.memory_message_preview, reply.bytesDone.toString(), hex64(remoteAddr))
+                    },
+                )
+            }
+        }
+    }
+
+    suspend fun previewSelectedPc() {
+        runOperation {
+            val pc = state.value.selectedThreadRegisters?.pc
+                ?: state.value.threads.firstOrNull()?.userPc
+            if (pc == null || pc == 0uL) {
+                updateMessage(appContext.getString(R.string.memory_error_no_pc))
+                return@runOperation
+            }
+            readMemoryPreviewUnsafe(pc, 64u)
+        }
+    }
+
     suspend fun attachProcess(targetPid: Int): Boolean =
         runOperation {
             _state.update { current -> current.copy(targetPidInput = targetPid.toString()) }
             ensureSessionReadyUnsafe()
             attachTargetUnsafe(targetPid)
             refreshThreadsUnsafe()
+            refreshImagesUnsafe()
             refreshEventsUnsafe(timeoutMs = 0, maxEvents = 16)
             true
         } ?: false
@@ -266,6 +317,33 @@ class SessionBridgeRepository(
         }
     }
 
+    private suspend fun refreshImagesUnsafe() {
+        val reply: BridgeImageListReply = client.queryImages()
+        _state.update { current ->
+            current.copy(
+                images = reply.images,
+                lastMessage = reply.message.ifBlank {
+                    appContext.getString(R.string.memory_message_images, reply.images.size)
+                },
+            )
+        }
+    }
+
+    private suspend fun readMemoryPreviewUnsafe(remoteAddr: ULong, length: UInt) {
+        val reply = client.readMemory(remoteAddr, length)
+        _state.update { current ->
+            current.copy(
+                memoryPreview = MemoryPreview(
+                    address = remoteAddr,
+                    bytes = reply.data.copyOf(reply.bytesDone.toInt()),
+                ),
+                lastMessage = reply.message.ifBlank {
+                    appContext.getString(R.string.memory_message_preview, reply.bytesDone.toString(), hex64(remoteAddr))
+                },
+            )
+        }
+    }
+
     private fun selectThreadId(
         threads: List<BridgeThreadRecord>,
         preferredTid: Int?,
@@ -293,6 +371,8 @@ class SessionBridgeRepository(
     private fun updateMessage(message: String) {
         _state.update { current -> current.copy(lastMessage = message) }
     }
+
+    private fun hex64(value: ULong): String = "0x${value.toString(16)}"
 
     private suspend fun <T> runOperation(block: suspend () -> T): T? {
         _state.update { current -> current.copy(busy = true) }
