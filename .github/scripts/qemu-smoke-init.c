@@ -39,6 +39,10 @@
 #define EXAMPLE_THREADS_QUERY_TOOL "/lkmdbg_example_threads_query"
 #define EXAMPLE_REGS_FP_TOOL "/lkmdbg_example_regs_fp"
 #define EXAMPLE_STEALTH_ROUNDTRIP_TOOL "/lkmdbg_example_stealth_roundtrip"
+#define EXAMPLE_SYSRULE_COMBO_TOOL "/lkmdbg_example_sysrule_combo"
+#define EXAMPLE_VMA_PAGE_QUERY_TOOL "/lkmdbg_example_vma_page_query"
+#define EXAMPLE_REMOTE_ALLOC_RW_TOOL "/lkmdbg_example_remote_alloc_rw"
+#define EXAMPLE_PHYS_TRANSLATE_READ_TOOL "/lkmdbg_example_phys_translate_read"
 #define INPUT_QUERY_BATCH 16U
 #define QEMU_HOOK_SELFTEST_STRESS_REPEATS 5U
 #define QEMU_PROC_VERSION_REPEATS 5U
@@ -972,6 +976,14 @@ int main(void)
 	char *const ex_regs_fp_argv[] = { EXAMPLE_REGS_FP_TOOL, NULL };
 	char *const ex_stealth_roundtrip_argv[] = { EXAMPLE_STEALTH_ROUNDTRIP_TOOL,
 						    NULL };
+	char *const ex_sysrule_combo_argv[] = { EXAMPLE_SYSRULE_COMBO_TOOL, NULL };
+	char *const ex_vma_page_query_argv[] = { EXAMPLE_VMA_PAGE_QUERY_TOOL, NULL };
+	char *const ex_remote_alloc_rw_argv[] = { EXAMPLE_REMOTE_ALLOC_RW_TOOL,
+						  NULL };
+	char *const ex_phys_translate_read_argv[] = {
+		EXAMPLE_PHYS_TRANSLATE_READ_TOOL,
+		NULL,
+	};
 	int watchpoint_ctrl_status;
 	bool hook_soak_only;
 	unsigned int selftest_stress_repeats;
@@ -1092,6 +1104,10 @@ int main(void)
 				qemu_run_tool(ex_threads_query_argv);
 				qemu_run_tool(ex_regs_fp_argv);
 				qemu_run_tool(ex_stealth_roundtrip_argv);
+				qemu_run_tool(ex_sysrule_combo_argv);
+				qemu_run_tool(ex_vma_page_query_argv);
+				qemu_run_tool(ex_remote_alloc_rw_argv);
+				qemu_run_tool(ex_phys_translate_read_argv);
 				qemu_run_tool(mem_test_argv);
 				qemu_run_tool(mmu_test_argv);
 				qemu_run_input_smoke();

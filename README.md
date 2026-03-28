@@ -61,9 +61,25 @@ cc -O2 -Wall -Wextra -o tools/examples/example_mem_rw tools/examples/example_mem
 cc -O2 -Wall -Wextra -o tools/examples/example_threads_query tools/examples/example_threads_query.c tools/driver/bridge_c.c tools/driver/bridge_control.c
 cc -O2 -Wall -Wextra -o tools/examples/example_regs_fp tools/examples/example_regs_fp.c tools/driver/bridge_c.c tools/driver/bridge_control.c
 cc -O2 -Wall -Wextra -o tools/examples/example_stealth_roundtrip tools/examples/example_stealth_roundtrip.c tools/driver/bridge_c.c tools/driver/bridge_control.c
+cc -O2 -Wall -Wextra -o tools/examples/example_sysrule_combo tools/examples/example_sysrule_combo.c tools/driver/bridge_c.c tools/driver/bridge_control.c tools/driver/bridge_events.c
+cc -O2 -Wall -Wextra -o tools/examples/example_vma_page_query tools/examples/example_vma_page_query.c tools/driver/bridge_c.c
+cc -O2 -Wall -Wextra -o tools/examples/example_remote_alloc_rw tools/examples/example_remote_alloc_rw.c tools/driver/bridge_c.c tools/driver/bridge_memory.c
+cc -O2 -Wall -Wextra -o tools/examples/example_phys_translate_read tools/examples/example_phys_translate_read.c tools/driver/bridge_c.c tools/driver/bridge_memory.c
 ```
 
 `tools/examples/` now provides one-file runnable examples for core session-fd flows and is executed in QEMU smoke CI.
+
+Current composable examples:
+
+- `example_session_status`: session bootstrap + `GET_STATUS`
+- `example_mem_rw`: target attach + remote memory read/write
+- `example_threads_query`: target attach + thread enumeration
+- `example_regs_fp`: freeze/thaw + arm64 GPR/FP register round-trip
+- `example_stealth_roundtrip`: session stealth get/set/get flow
+- `example_sysrule_combo`: syscall control + rule config + rule events
+- `example_vma_page_query`: VMA walk + page-table view (`QUERY_PAGES`)
+- `example_remote_alloc_rw`: remote alloc lifecycle + memory read/write
+- `example_phys_translate_read`: target VA->PA translate + physical read
 
 `tools/lkmdbg_sysrule_ctl` provides fast syscall rule config and CRUD helpers:
 

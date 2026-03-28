@@ -297,6 +297,26 @@ jobs:
             "$GITHUB_WORKSPACE/tools/examples/example_stealth_roundtrip.c" \
             "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
             "$GITHUB_WORKSPACE/tools/driver/bridge_control.c"
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/lkmdbg_example_sysrule_combo" \
+            "$GITHUB_WORKSPACE/tools/examples/example_sysrule_combo.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_control.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_events.c"
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/lkmdbg_example_vma_page_query" \
+            "$GITHUB_WORKSPACE/tools/examples/example_vma_page_query.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c"
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/lkmdbg_example_remote_alloc_rw" \
+            "$GITHUB_WORKSPACE/tools/examples/example_remote_alloc_rw.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_memory.c"
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/lkmdbg_example_phys_translate_read" \
+            "$GITHUB_WORKSPACE/tools/examples/example_phys_translate_read.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_memory.c"
           mkdir -p "$INITRAMFS_DIR/dev" "$INITRAMFS_DIR/proc" \
             "$INITRAMFS_DIR/sys" "$INITRAMFS_DIR/sys/kernel" \
             "$INITRAMFS_DIR/sys/kernel/debug"
@@ -322,6 +342,14 @@ jobs:
             "$INITRAMFS_DIR/lkmdbg_example_regs_fp"
           install -m 0755 "$RUNNER_TEMP/lkmdbg_example_stealth_roundtrip" \
             "$INITRAMFS_DIR/lkmdbg_example_stealth_roundtrip"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_example_sysrule_combo" \
+            "$INITRAMFS_DIR/lkmdbg_example_sysrule_combo"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_example_vma_page_query" \
+            "$INITRAMFS_DIR/lkmdbg_example_vma_page_query"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_example_remote_alloc_rw" \
+            "$INITRAMFS_DIR/lkmdbg_example_remote_alloc_rw"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_example_phys_translate_read" \
+            "$INITRAMFS_DIR/lkmdbg_example_phys_translate_read"
           cp "$GITHUB_WORKSPACE/lkmdbg.ko" "$INITRAMFS_DIR/lkmdbg.ko"
           (
             cd "$INITRAMFS_DIR"
