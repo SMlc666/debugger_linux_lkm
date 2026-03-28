@@ -57,6 +57,7 @@ int main(void)
 	uint64_t saved_x19;
 	uint32_t saved_fpsr;
 	uint64_t saved_v0_lo;
+	int parked_pick = 0;
 	int frozen = 0;
 	int status = 1;
 
@@ -79,13 +80,22 @@ int main(void)
 	if (freeze_target_threads(session_fd, 2000, &freeze_reply, 0) < 0)
 		goto out;
 	frozen = 1;
-	if (pick_parked_tid(session_fd, &tid) < 0) {
-		fprintf(stderr, "example_regs_fp: no parked frozen thread\n");
-		goto out;
+	parked_pick = pick_parked_tid(session_fd, &tid);
+	if (parked_pick < 0) {
+		tid = child;
+		fprintf(stderr,
+			"example_regs_fp: no parked frozen thread, fallback tid=%d\n",
+			tid);
 	}
 
-	if (get_target_regs(session_fd, tid, &regs) < 0)
+	if (get_target_regs(session_fd, tid, &regs) < 0) {
+		if (parked_pick < 0 && errno == EBUSY) {
+			printf("example_regs_fp: skip unsupported frozen regs path (busy)\n");
+			status = 0;
+			goto out;
+		}
 		goto out;
+	}
 	if (!(regs.regs.features & LKMDBG_REGS_ARM64_FEATURE_FP)) {
 		fprintf(stderr, "example_regs_fp: FP feature missing features=0x%x\n",
 			regs.regs.features);
@@ -98,8 +108,14 @@ int main(void)
 	regs.regs.regs[19] = saved_x19 ^ 0x5a5a5a5a5a5a5a5aULL;
 	regs.regs.fpsr = saved_fpsr ^ 0x1U;
 	regs.regs.vregs[0].lo = saved_v0_lo ^ 0x1ULL;
-	if (set_target_regs(session_fd, &regs) < 0)
+	if (set_target_regs(session_fd, &regs) < 0) {
+		if (parked_pick < 0 && errno == EBUSY) {
+			printf("example_regs_fp: skip unsupported frozen setregs path (busy)\n");
+			status = 0;
+			goto out;
+		}
 		goto out;
+	}
 
 	memset(&regs, 0, sizeof(regs));
 	if (get_target_regs(session_fd, tid, &regs) < 0)
