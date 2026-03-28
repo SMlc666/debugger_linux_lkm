@@ -19,24 +19,31 @@ static int run_child(void)
 	return 0;
 }
 
-static int pick_thread_tid(int session_fd, pid_t child, pid_t *tid_out)
+static int pick_parked_tid(int session_fd, pid_t *tid_out)
 {
 	struct lkmdbg_thread_entry entries[32];
 	struct lkmdbg_thread_query_request reply;
+	int32_t cursor = 0;
 	uint32_t i;
 
-	memset(entries, 0, sizeof(entries));
-	memset(&reply, 0, sizeof(reply));
-	if (query_target_threads(session_fd, 0, entries,
-				 (uint32_t)(sizeof(entries) / sizeof(entries[0])),
-				 &reply) < 0)
-		return -1;
-	for (i = 0; i < reply.entries_filled; i++) {
-		if (entries[i].tid == child) {
+	for (;;) {
+		memset(entries, 0, sizeof(entries));
+		memset(&reply, 0, sizeof(reply));
+		if (query_target_threads(session_fd, cursor, entries,
+					 (uint32_t)(sizeof(entries) / sizeof(entries[0])),
+					 &reply) < 0)
+			return -1;
+		for (i = 0; i < reply.entries_filled; i++) {
+			if (!(entries[i].flags & LKMDBG_THREAD_FLAG_FREEZE_PARKED))
+				continue;
 			*tid_out = entries[i].tid;
 			return 0;
 		}
+		if (reply.done)
+			break;
+		cursor = reply.next_tid;
 	}
+
 	return -1;
 }
 
@@ -69,13 +76,13 @@ int main(void)
 		goto out;
 	if (set_target(session_fd, child) < 0)
 		goto out;
-	if (pick_thread_tid(session_fd, child, &tid) < 0) {
-		fprintf(stderr, "example_regs_fp: failed to pick target tid\n");
-		goto out;
-	}
 	if (freeze_target_threads(session_fd, 2000, &freeze_reply, 0) < 0)
 		goto out;
 	frozen = 1;
+	if (pick_parked_tid(session_fd, &tid) < 0) {
+		fprintf(stderr, "example_regs_fp: no parked frozen thread\n");
+		goto out;
+	}
 
 	if (get_target_regs(session_fd, tid, &regs) < 0)
 		goto out;
