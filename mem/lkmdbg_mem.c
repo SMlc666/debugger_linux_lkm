@@ -398,6 +398,31 @@ static bool lkmdbg_page_try_pin_nofault(struct mm_struct *mm,
 	return false;
 }
 
+static bool lkmdbg_page_force_write_fallback_available(
+	const struct lkmdbg_page_entry *entry, bool readable,
+	bool force_readable)
+{
+	if (!(lkmdbg_symbols.access_remote_vm_inner_sym ||
+	      lkmdbg_symbols.access_remote_vm_sym))
+		return false;
+
+	if (!(entry->flags & LKMDBG_PAGE_FLAG_MAPPED) ||
+	    !(entry->flags & LKMDBG_PAGE_FLAG_PT_PRESENT) ||
+	    !(entry->flags & LKMDBG_PAGE_FLAG_MAYWRITE))
+		return false;
+
+	if (entry->flags & (LKMDBG_PAGE_FLAG_PFNMAP | LKMDBG_PAGE_FLAG_IO))
+		return false;
+
+	/*
+	 * Older kernels can reject FOLL_FORCE|FOLL_WRITE in the nofault-GUP
+	 * probe path for protected present pages, while access_remote_vm-based
+	 * force writes still succeed. Advertise that effective backend
+	 * capability so QUERY_PAGES matches WRITE_MEM(force).
+	 */
+	return readable || force_readable;
+}
+
 static void lkmdbg_page_fill_vma_info(struct mm_struct *mm,
 				      struct lkmdbg_page_entry *entry,
 				      struct vm_area_struct *vma,
@@ -484,6 +509,10 @@ static void lkmdbg_page_probe_access(struct mm_struct *mm,
 		lkmdbg_page_try_pin_nofault(mm, entry->page_addr, FOLL_FORCE);
 	force_writable = lkmdbg_page_try_pin_nofault(
 		mm, entry->page_addr, FOLL_FORCE | FOLL_WRITE);
+	if (!force_writable &&
+	    lkmdbg_page_force_write_fallback_available(entry, readable,
+							 force_readable))
+		force_writable = true;
 
 	if (readable)
 		entry->flags |= LKMDBG_PAGE_FLAG_NOFAULT_READ;
