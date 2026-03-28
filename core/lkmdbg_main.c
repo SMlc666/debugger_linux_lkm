@@ -367,7 +367,7 @@ static void __exit lkmdbg_exit(void)
 MODULE_AUTHOR("OpenAI Codex");
 MODULE_DESCRIPTION("Minimal Linux kernel module scaffold for arm64 Android GKI debugger work");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
+MODULE_IMPORT_NS("VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver");
 
 module_init(lkmdbg_init);
 module_exit(lkmdbg_exit);
