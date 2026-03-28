@@ -70,17 +70,7 @@ static void *lkmdbg_lookup_runtime_symbol_variants(const char *name)
 		if (addr)
 			return (void *)addr;
 	}
-
-	for (i = 0; i < ARRAY_SIZE(candidates); i++) {
-		if (!candidates[i])
-			continue;
-		addr = lkmdbg_lookup_runtime_symbol_prefix(candidates[i]);
-		if (addr)
-			return (void *)addr;
-	}
-
-	addr = lkmdbg_lookup_runtime_symbol_prefix(name);
-	return (void *)addr;
+	return NULL;
 }
 
 static void *lkmdbg_lookup_proc_pid_lookup(void)

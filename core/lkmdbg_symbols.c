@@ -1,7 +1,5 @@
-#include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/kprobes.h>
-#include <linux/slab.h>
 
 #include "lkmdbg_internal.h"
 
@@ -25,27 +23,6 @@ static unsigned long lkmdbg_lookup_runtime_symbol(const char *name)
 	return addr;
 }
 
-static bool lkmdbg_symbol_prefix_match(const char *sym_name,
-				       const char *prefix)
-{
-	size_t prefix_len;
-
-	if (!sym_name || !prefix || !prefix[0])
-		return false;
-
-	prefix_len = strlen(prefix);
-	if (strncmp(sym_name, prefix, prefix_len) == 0 &&
-	    (sym_name[prefix_len] == '\0' || sym_name[prefix_len] == '.'))
-		return true;
-
-	if (strncmp(sym_name, "__pfx_", 6) != 0)
-		return false;
-
-	sym_name += 6;
-	return strncmp(sym_name, prefix, prefix_len) == 0 &&
-	       (sym_name[prefix_len] == '\0' || sym_name[prefix_len] == '.');
-}
-
 unsigned long lkmdbg_lookup_runtime_symbol_any(const char *name)
 {
 	return lkmdbg_lookup_runtime_symbol(name);
@@ -53,67 +30,8 @@ unsigned long lkmdbg_lookup_runtime_symbol_any(const char *name)
 
 unsigned long lkmdbg_lookup_runtime_symbol_prefix(const char *prefix)
 {
-	struct file *fp;
-	loff_t pos = 0;
-	char *buf;
-	char line[256];
-	size_t line_len = 0;
-	unsigned long match_addr = 0;
-	ssize_t nr;
-	int i;
-
-	if (!prefix || !prefix[0])
-		return 0;
-	if (!lkmdbg_symbols.filp_open || !lkmdbg_symbols.filp_close)
-		return 0;
-
-	fp = lkmdbg_symbols.filp_open("/proc/kallsyms", O_RDONLY, 0);
-	if (IS_ERR(fp))
-		return 0;
-
-	buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
-	if (!buf)
-		goto out_close;
-
-	for (;;) {
-		char sym_name[192];
-		char sym_type;
-		unsigned long addr;
-
-		nr = kernel_read(fp, buf, PAGE_SIZE, &pos);
-		if (nr <= 0)
-			break;
-
-		for (i = 0; i < nr; i++) {
-			char c = buf[i];
-
-			if (c == '\n') {
-				line[line_len] = '\0';
-				if (sscanf(line, "%lx %c %191s", &addr, &sym_type,
-					   sym_name) == 3 &&
-				    lkmdbg_symbol_prefix_match(sym_name,
-							       prefix)) {
-					match_addr =
-						lkmdbg_lookup_runtime_symbol(
-							sym_name);
-					if (!match_addr)
-						match_addr = addr;
-					goto out_free;
-				}
-				line_len = 0;
-				continue;
-			}
-
-			if (line_len < sizeof(line) - 1)
-				line[line_len++] = c;
-		}
-	}
-
-out_free:
-	kfree(buf);
-out_close:
-	lkmdbg_symbols.filp_close(fp, 0);
-	return match_addr;
+	(void)prefix;
+	return 0;
 }
 
 static int lkmdbg_resolve_runtime_symbols(void)
