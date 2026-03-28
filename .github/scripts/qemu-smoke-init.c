@@ -1104,14 +1104,14 @@ int main(void)
 				qemu_run_tool(ex_threads_query_argv);
 				qemu_run_tool(ex_regs_fp_argv);
 				qemu_run_tool(ex_stealth_roundtrip_argv);
-				qemu_run_tool(ex_sysrule_combo_argv);
-				qemu_run_tool(ex_vma_page_query_argv);
-				qemu_run_tool(ex_remote_alloc_rw_argv);
-				qemu_run_tool(ex_phys_translate_read_argv);
 				qemu_run_tool(mem_test_argv);
 				qemu_run_tool(mmu_test_argv);
 				qemu_run_input_smoke();
 			qemu_report_user_proc_exposure();
+				qemu_run_tool(ex_sysrule_combo_argv);
+				qemu_run_tool(ex_vma_page_query_argv);
+				qemu_run_tool(ex_remote_alloc_rw_argv);
+				qemu_run_tool(ex_phys_translate_read_argv);
 			printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
 			       qemu_read_status_u64("hwpoint_callback_total="),
 			       qemu_read_status_u64("breakpoint_callback_total="),
