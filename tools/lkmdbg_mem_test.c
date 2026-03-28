@@ -5610,9 +5610,6 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 					(uint64_t)event.value1);
 				goto fail;
 			}
-			if (remove_syscall_rule(session_fd,
-						rule_req.rule.rule_id) < 0)
-				goto fail;
 		}
 
 		memset(&rule_entry, 0, sizeof(rule_entry));
@@ -5623,8 +5620,8 @@ static int verify_syscall_trace(int session_fd, int cmd_fd, int resp_fd,
 		rule_entry.flags = LKMDBG_SYSCALL_RULE_FLAG_ENABLED;
 		rule_entry.priority = 200;
 		rule_entry.arg_match_mask = 0x1;
-		rule_entry.arg_values[0] = UINT64_MAX;
-		rule_entry.arg_value_masks[0] = UINT64_MAX;
+		rule_entry.arg_values[0] = UINT32_MAX;
+		rule_entry.arg_value_masks[0] = UINT32_MAX;
 		rule_entry.rewrite_mask = 0x1;
 		rule_entry.rewrite_args[0] = 0;
 		memset(&rule_req, 0, sizeof(rule_req));
