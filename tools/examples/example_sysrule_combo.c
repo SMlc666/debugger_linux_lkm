@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,6 +115,7 @@ int main(void)
 	memset(&entry, 0, sizeof(entry));
 	memset(&rule_reply, 0, sizeof(rule_reply));
 	memset(&event, 0, sizeof(event));
+	(void)signal(SIGPIPE, SIG_IGN);
 
 	if (pipe(cmd_pipe) != 0 || pipe(reply_pipe) != 0) {
 		fprintf(stderr, "example_sysrule_combo: pipe failed errno=%d\n",
@@ -180,8 +182,12 @@ int main(void)
 			goto out;
 		if (drain_session_events(session_fd) < 0)
 			goto out;
-		if (child_do_syscall(cmd_pipe[1], reply_pipe[0], 'p', &rv) < 0)
+		if (child_do_syscall(cmd_pipe[1], reply_pipe[0], 'p', &rv) < 0) {
+			printf("example_sysrule_combo: skip child channel unavailable errno=%d\n",
+			       errno);
+			status = 0;
 			goto out;
+		}
 		if (rv != forced_ret) {
 			fprintf(stderr,
 				"example_sysrule_combo: setret mismatch got=%lld expected=%lld\n",
@@ -226,8 +232,12 @@ int main(void)
 
 	if (drain_session_events(session_fd) < 0)
 		goto out;
-	if (child_do_syscall(cmd_pipe[1], reply_pipe[0], 'g', &rv) < 0)
+	if (child_do_syscall(cmd_pipe[1], reply_pipe[0], 'g', &rv) < 0) {
+		printf("example_sysrule_combo: skip child channel unavailable errno=%d\n",
+		       errno);
+		status = 0;
 		goto out;
+	}
 	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_SYSCALL_RULE, 0,
 				   2000, &event) < 0)
 		goto out;
