@@ -150,6 +150,18 @@ static const char *image_name_ptr(const lkmdbg_image_query_request *reply,
 	return names + entry->name_offset;
 }
 
+static const char *vma_name_ptr(const lkmdbg_vma_query_request *reply,
+				const lkmdbg_vma_entry *entry,
+				const char *names)
+{
+	if (!entry->name_size)
+		return "";
+	if (static_cast<uint64_t>(entry->name_offset) + entry->name_size >
+	    reply->names_used)
+		return "";
+	return names + entry->name_offset;
+}
+
 static void close_session(agent_state *state)
 {
 	if (!state)
@@ -742,6 +754,76 @@ static bool handle_query_images(agent_state *state)
 			   static_cast<uint32_t>(payload.size()));
 }
 
+static bool handle_query_vmas(agent_state *state)
+{
+	lkmdbg_agent_query_vmas_reply reply = {};
+	std::vector<lkmdbg_agent_vma_record> records;
+	std::vector<char> payload;
+	uint64_t cursor = 0;
+
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(LKMDBG_AGENT_CMD_QUERY_VMAS, &reply, sizeof(reply));
+	}
+
+	for (;;) {
+		lkmdbg_vma_entry entries[64] = {};
+		char names[8192] = {};
+		lkmdbg_vma_query_request req = {};
+
+		req.version = LKMDBG_PROTO_VERSION;
+		req.size = sizeof(req);
+		req.start_addr = cursor;
+		req.entries_addr = reinterpret_cast<uintptr_t>(entries);
+		req.max_entries = static_cast<uint32_t>(sizeof(entries) / sizeof(entries[0]));
+		req.names_addr = reinterpret_cast<uintptr_t>(names);
+		req.names_size = sizeof(names);
+		if (ioctl(state->session_fd, LKMDBG_IOC_QUERY_VMAS, &req) < 0) {
+			reply.status = -errno;
+			copy_cstr(reply.message, sizeof(reply.message), "QUERY_VMAS failed");
+			return write_frame(LKMDBG_AGENT_CMD_QUERY_VMAS, &reply, sizeof(reply));
+		}
+
+		for (uint32_t i = 0; i < req.entries_filled; ++i) {
+			lkmdbg_agent_vma_record record = {};
+			record.start_addr = entries[i].start_addr;
+			record.end_addr = entries[i].end_addr;
+			record.pgoff = entries[i].pgoff;
+			record.inode = entries[i].inode;
+			record.vm_flags_raw = entries[i].vm_flags_raw;
+			record.prot = entries[i].prot;
+			record.flags = entries[i].flags;
+			record.dev_major = entries[i].dev_major;
+			record.dev_minor = entries[i].dev_minor;
+			copy_cstr(record.name, sizeof(record.name),
+				  vma_name_ptr(&req, &entries[i], names));
+			records.push_back(record);
+		}
+
+		if (req.done)
+			break;
+		if (req.next_addr <= cursor) {
+			reply.status = -EIO;
+			copy_cstr(reply.message, sizeof(reply.message), "QUERY_VMAS cursor stalled");
+			return write_frame(LKMDBG_AGENT_CMD_QUERY_VMAS, &reply, sizeof(reply));
+		}
+		cursor = req.next_addr;
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.count = static_cast<uint32_t>(records.size());
+	copy_cstr(reply.message, sizeof(reply.message), "vmas ready");
+	payload.resize(sizeof(reply) + records.size() * sizeof(records[0]));
+	memcpy(payload.data(), &reply, sizeof(reply));
+	if (!records.empty()) {
+		memcpy(payload.data() + sizeof(reply), records.data(),
+		       records.size() * sizeof(records[0]));
+	}
+	return write_frame(LKMDBG_AGENT_CMD_QUERY_VMAS, payload.data(),
+			   static_cast<uint32_t>(payload.size()));
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -835,6 +917,12 @@ int main(int argc, char **argv)
 			break;
 		case LKMDBG_AGENT_CMD_QUERY_IMAGES:
 			if (!handle_query_images(&state)) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_QUERY_VMAS:
+			if (!handle_query_vmas(&state)) {
 				close_session(&state);
 				return 1;
 			}

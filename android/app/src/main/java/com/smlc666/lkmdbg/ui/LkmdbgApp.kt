@@ -77,7 +77,12 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onRefreshThreads = { coroutineScope.launch { repository.refreshThreads() } },
                     onRefreshEvents = { coroutineScope.launch { repository.refreshEvents() } },
                     onRefreshImages = { coroutineScope.launch { repository.refreshImages() } },
+                    onRefreshVmas = { coroutineScope.launch { repository.refreshVmas() } },
+                    onSearchMemory = { coroutineScope.launch { repository.runMemorySearch() } },
                     onPreviewSelectedPc = { coroutineScope.launch { repository.previewSelectedPc() } },
+                    onPreviewAddress = { address ->
+                        coroutineScope.launch { repository.readMemoryPreview(address, 64u) }
+                    },
                     onAttachProcess = { processPid ->
                         coroutineScope.launch {
                             if (repository.attachProcess(processPid))
@@ -89,6 +94,9 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     },
                     onTargetPidChanged = repository::updateTargetPidInput,
                     onProcessFilterChanged = repository::updateProcessFilter,
+                    onMemorySearchQueryChanged = repository::updateMemorySearchQuery,
+                    onMemorySearchValueTypeChanged = repository::updateMemorySearchValueType,
+                    onMemoryRegionPresetChanged = repository::updateMemoryRegionPreset,
                 )
             }
         } else {
@@ -107,7 +115,12 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onRefreshThreads = { coroutineScope.launch { repository.refreshThreads() } },
                     onRefreshEvents = { coroutineScope.launch { repository.refreshEvents() } },
                     onRefreshImages = { coroutineScope.launch { repository.refreshImages() } },
+                    onRefreshVmas = { coroutineScope.launch { repository.refreshVmas() } },
+                    onSearchMemory = { coroutineScope.launch { repository.runMemorySearch() } },
                     onPreviewSelectedPc = { coroutineScope.launch { repository.previewSelectedPc() } },
+                    onPreviewAddress = { address ->
+                        coroutineScope.launch { repository.readMemoryPreview(address, 64u) }
+                    },
                     onAttachProcess = { processPid ->
                         coroutineScope.launch {
                             if (repository.attachProcess(processPid))
@@ -119,6 +132,9 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     },
                     onTargetPidChanged = repository::updateTargetPidInput,
                     onProcessFilterChanged = repository::updateProcessFilter,
+                    onMemorySearchQueryChanged = repository::updateMemorySearchQuery,
+                    onMemorySearchValueTypeChanged = repository::updateMemorySearchValueType,
+                    onMemoryRegionPresetChanged = repository::updateMemoryRegionPreset,
                 )
                 WorkspaceBar(
                     selectedTab = selectedTab,
@@ -144,11 +160,17 @@ private fun DashboardContent(
     onRefreshThreads: () -> Unit,
     onRefreshEvents: () -> Unit,
     onRefreshImages: () -> Unit,
+    onRefreshVmas: () -> Unit,
+    onSearchMemory: () -> Unit,
     onPreviewSelectedPc: () -> Unit,
+    onPreviewAddress: (ULong) -> Unit,
     onAttachProcess: (Int) -> Unit,
     onSelectThread: (Int) -> Unit,
     onTargetPidChanged: (String) -> Unit,
     onProcessFilterChanged: (ProcessFilter) -> Unit,
+    onMemorySearchQueryChanged: (String) -> Unit,
+    onMemorySearchValueTypeChanged: (com.smlc666.lkmdbg.data.MemorySearchValueType) -> Unit,
+    onMemoryRegionPresetChanged: (com.smlc666.lkmdbg.data.MemoryRegionPreset) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val filteredProcesses = remember(sessionState.processes, sessionState.processFilter) {
@@ -183,7 +205,13 @@ private fun DashboardContent(
                     dashboardState = dashboardState,
                     state = sessionState,
                     onRefreshImages = onRefreshImages,
+                    onRefreshVmas = onRefreshVmas,
+                    onSearchMemory = onSearchMemory,
                     onPreviewSelectedPc = onPreviewSelectedPc,
+                    onPreviewAddress = onPreviewAddress,
+                    onSearchQueryChanged = onMemorySearchQueryChanged,
+                    onSearchValueTypeChanged = onMemorySearchValueTypeChanged,
+                    onRegionPresetChanged = onMemoryRegionPresetChanged,
                 )
                 WorkspaceTab.Threads -> ThreadScreen(
                     state = sessionState,

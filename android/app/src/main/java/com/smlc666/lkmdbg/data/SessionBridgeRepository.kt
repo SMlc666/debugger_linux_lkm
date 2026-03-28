@@ -13,6 +13,8 @@ import com.smlc666.lkmdbg.shared.BridgeStatusSnapshot
 import com.smlc666.lkmdbg.shared.BridgeThreadListReply
 import com.smlc666.lkmdbg.shared.BridgeThreadRecord
 import com.smlc666.lkmdbg.shared.BridgeThreadRegistersReply
+import com.smlc666.lkmdbg.shared.BridgeVmaListReply
+import com.smlc666.lkmdbg.shared.BridgeVmaRecord
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +29,14 @@ data class SessionEventEntry(
 data class MemoryPreview(
     val address: ULong,
     val bytes: ByteArray,
+)
+
+data class MemorySearchUiState(
+    val query: String = "",
+    val valueType: MemorySearchValueType = MemorySearchValueType.Int32,
+    val regionPreset: MemoryRegionPreset = MemoryRegionPreset.All,
+    val summary: String = "",
+    val results: List<MemorySearchResult> = emptyList(),
 )
 
 data class SessionBridgeState(
@@ -56,7 +66,9 @@ data class SessionBridgeState(
     val selectedThreadRegisters: BridgeThreadRegistersReply? = null,
     val recentEvents: List<SessionEventEntry> = emptyList(),
     val images: List<BridgeImageRecord> = emptyList(),
+    val vmas: List<BridgeVmaRecord> = emptyList(),
     val memoryPreview: MemoryPreview? = null,
+    val memorySearch: MemorySearchUiState = MemorySearchUiState(),
 )
 
 class SessionBridgeRepository(
@@ -65,6 +77,14 @@ class SessionBridgeRepository(
 ) {
     private val appContext = context.applicationContext
     private val processResolver = AndroidProcessResolver(appContext)
+    private val searchEngine = MemorySearchEngine(
+        object : MemorySearchEngine.Backend {
+            override suspend fun read(remoteAddr: ULong, length: UInt): ByteArray {
+                val reply = client.readMemory(remoteAddr, length)
+                return reply.data.copyOf(reply.bytesDone.toInt())
+            }
+        },
+    )
     private val _state = MutableStateFlow(
         SessionBridgeState(
             agentPath = client.agentPathHint,
@@ -82,6 +102,30 @@ class SessionBridgeRepository(
 
     fun updateProcessFilter(filter: ProcessFilter) {
         _state.update { current -> current.copy(processFilter = filter) }
+    }
+
+    fun updateMemorySearchQuery(value: String) {
+        _state.update { current ->
+            current.copy(
+                memorySearch = current.memorySearch.copy(query = value),
+            )
+        }
+    }
+
+    fun updateMemorySearchValueType(valueType: MemorySearchValueType) {
+        _state.update { current ->
+            current.copy(
+                memorySearch = current.memorySearch.copy(valueType = valueType),
+            )
+        }
+    }
+
+    fun updateMemoryRegionPreset(regionPreset: MemoryRegionPreset) {
+        _state.update { current ->
+            current.copy(
+                memorySearch = current.memorySearch.copy(regionPreset = regionPreset),
+            )
+        }
     }
 
     suspend fun connect() {
@@ -112,6 +156,7 @@ class SessionBridgeRepository(
             ensureSessionReadyUnsafe()
             attachTargetUnsafe(targetPid)
             refreshThreadsUnsafe()
+            refreshVmasUnsafe()
             refreshImagesUnsafe()
             refreshEventsUnsafe(timeoutMs = 0, maxEvents = 16)
         }
@@ -179,6 +224,51 @@ class SessionBridgeRepository(
         }
     }
 
+    suspend fun refreshVmas() {
+        runOperation {
+            if (!hasActiveTarget()) {
+                _state.update { current -> current.copy(vmas = emptyList()) }
+                updateMessage(appContext.getString(R.string.memory_error_no_target))
+                return@runOperation
+            }
+            refreshVmasUnsafe()
+        }
+    }
+
+    suspend fun runMemorySearch() {
+        runOperation {
+            if (!hasActiveTarget()) {
+                updateMessage(appContext.getString(R.string.memory_error_no_target))
+                return@runOperation
+            }
+            if (state.value.vmas.isEmpty())
+                refreshVmasUnsafe()
+
+            val search = state.value.memorySearch
+            val outcome = searchEngine.search(
+                vmas = state.value.vmas,
+                preset = search.regionPreset,
+                valueType = search.valueType,
+                query = search.query,
+            )
+            val summary = appContext.getString(
+                R.string.memory_search_summary,
+                outcome.results.size,
+                outcome.searchedVmaCount,
+                outcome.scannedBytes.toString(),
+            )
+            _state.update { current ->
+                current.copy(
+                    memorySearch = current.memorySearch.copy(
+                        summary = summary,
+                        results = outcome.results,
+                    ),
+                    lastMessage = summary,
+                )
+            }
+        }
+    }
+
     suspend fun readMemoryPreview(remoteAddr: ULong, length: UInt = 64u) {
         runOperation {
             val reply = client.readMemory(remoteAddr, length)
@@ -214,6 +304,7 @@ class SessionBridgeRepository(
             ensureSessionReadyUnsafe()
             attachTargetUnsafe(targetPid)
             refreshThreadsUnsafe()
+            refreshVmasUnsafe()
             refreshImagesUnsafe()
             refreshEventsUnsafe(timeoutMs = 0, maxEvents = 16)
             true
@@ -324,6 +415,18 @@ class SessionBridgeRepository(
                 images = reply.images,
                 lastMessage = reply.message.ifBlank {
                     appContext.getString(R.string.memory_message_images, reply.images.size)
+                },
+            )
+        }
+    }
+
+    private suspend fun refreshVmasUnsafe() {
+        val reply: BridgeVmaListReply = client.queryVmas()
+        _state.update { current ->
+            current.copy(
+                vmas = reply.vmas,
+                lastMessage = reply.message.ifBlank {
+                    appContext.getString(R.string.memory_message_vmas, reply.vmas.size)
                 },
             )
         }

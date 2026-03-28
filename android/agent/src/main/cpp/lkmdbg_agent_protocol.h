@@ -18,6 +18,7 @@ enum lkmdbg_agent_command {
 	LKMDBG_AGENT_CMD_STATUS_SNAPSHOT = 10u,
 	LKMDBG_AGENT_CMD_QUERY_PROCESSES = 11u,
 	LKMDBG_AGENT_CMD_QUERY_IMAGES = 12u,
+	LKMDBG_AGENT_CMD_QUERY_VMAS = 13u,
 };
 
 enum lkmdbg_agent_status {
@@ -163,6 +164,12 @@ struct __attribute__((packed)) lkmdbg_agent_query_images_reply {
 	char message[64];
 };
 
+struct __attribute__((packed)) lkmdbg_agent_query_vmas_reply {
+	int32_t status;
+	uint32_t count;
+	char message[64];
+};
+
 struct __attribute__((packed)) lkmdbg_agent_image_record {
 	uint64_t start_addr;
 	uint64_t end_addr;
@@ -175,6 +182,21 @@ struct __attribute__((packed)) lkmdbg_agent_image_record {
 	uint32_t dev_minor;
 	uint32_t segment_count;
 	uint32_t reserved0;
+	char name[256];
+};
+
+struct __attribute__((packed)) lkmdbg_agent_vma_record {
+	uint64_t start_addr;
+	uint64_t end_addr;
+	uint64_t pgoff;
+	uint64_t inode;
+	uint64_t vm_flags_raw;
+	uint32_t prot;
+	uint32_t flags;
+	uint32_t dev_major;
+	uint32_t dev_minor;
+	uint32_t reserved0;
+	uint32_t reserved1;
 	char name[256];
 };
 
@@ -195,5 +217,7 @@ static_assert(sizeof(struct lkmdbg_agent_memory_request) == 16, "memory request 
 static_assert(sizeof(struct lkmdbg_agent_memory_reply) == 88, "memory reply size");
 static_assert(sizeof(struct lkmdbg_agent_query_images_reply) == 72, "query-images reply size");
 static_assert(sizeof(struct lkmdbg_agent_image_record) == 320, "image record size");
+static_assert(sizeof(struct lkmdbg_agent_query_vmas_reply) == 72, "query-vmas reply size");
+static_assert(sizeof(struct lkmdbg_agent_vma_record) == 320, "vma record size");
 
 #endif

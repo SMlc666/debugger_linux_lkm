@@ -15,6 +15,7 @@ import com.smlc666.lkmdbg.shared.BridgeStatusCode
 import com.smlc666.lkmdbg.shared.BridgeStatusSnapshot
 import com.smlc666.lkmdbg.shared.BridgeThreadListReply
 import com.smlc666.lkmdbg.shared.BridgeThreadRegistersReply
+import com.smlc666.lkmdbg.shared.BridgeVmaListReply
 import com.smlc666.lkmdbg.shared.BridgeWireCodec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -149,6 +150,23 @@ class PipeAgentClient(
                 )
             }
             BridgeWireCodec.decodeQueryImagesReply(payload)
+        }
+    }
+
+    suspend fun queryVmas(): BridgeVmaListReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(requireOutputLocked(), BridgeCommand.QueryVmas)
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.QueryVmas.wireId) {
+                return@synchronized BridgeVmaListReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    count = 0u,
+                    message = "unexpected query-vmas reply command=${header.command}",
+                    vmas = emptyList(),
+                )
+            }
+            BridgeWireCodec.decodeQueryVmasReply(payload)
         }
     }
 

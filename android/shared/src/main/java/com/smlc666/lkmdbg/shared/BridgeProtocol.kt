@@ -31,6 +31,8 @@ object BridgeProtocol {
     const val POLL_EVENT_RECORD_SIZE: Int = 64
     const val QUERY_IMAGES_REPLY_HEADER_SIZE: Int = 72
     const val QUERY_IMAGE_RECORD_SIZE: Int = 320
+    const val QUERY_VMAS_REPLY_HEADER_SIZE: Int = 72
+    const val QUERY_VMA_RECORD_SIZE: Int = 320
 }
 
 enum class BridgeCommand(val wireId: UInt) {
@@ -46,6 +48,7 @@ enum class BridgeCommand(val wireId: UInt) {
     StatusSnapshot(10u),
     QueryProcesses(11u),
     QueryImages(12u),
+    QueryVmas(13u),
 }
 
 enum class BridgeStatusCode(val wireValue: Int) {
@@ -138,6 +141,26 @@ data class BridgeImageListReply(
     val count: UInt,
     val message: String,
     val images: List<BridgeImageRecord>,
+)
+
+data class BridgeVmaRecord(
+    val startAddr: ULong,
+    val endAddr: ULong,
+    val pgoff: ULong,
+    val inode: ULong,
+    val vmFlagsRaw: ULong,
+    val prot: UInt,
+    val flags: UInt,
+    val devMajor: UInt,
+    val devMinor: UInt,
+    val name: String,
+)
+
+data class BridgeVmaListReply(
+    val status: Int,
+    val count: UInt,
+    val message: String,
+    val vmas: List<BridgeVmaRecord>,
 )
 
 data class BridgeThreadRecord(
@@ -552,6 +575,44 @@ object BridgeWireCodec {
             count = count,
             message = message,
             images = images,
+        )
+    }
+
+    fun decodeQueryVmasReply(payload: ByteArray): BridgeVmaListReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.QUERY_VMAS_REPLY_HEADER_SIZE)
+        val status = buffer.int
+        val count = buffer.int.toUInt()
+        val message = decodeCString(buffer, 64)
+        val remaining = payload.size - BridgeProtocol.QUERY_VMAS_REPLY_HEADER_SIZE
+        require(remaining >= count.toInt() * BridgeProtocol.QUERY_VMA_RECORD_SIZE) {
+            "vma payload too small: got=${payload.size} count=$count"
+        }
+
+        val vmas = ArrayList<BridgeVmaRecord>(count.toInt())
+        repeat(count.toInt()) {
+            vmas += BridgeVmaRecord(
+                startAddr = buffer.long.toULong(),
+                endAddr = buffer.long.toULong(),
+                pgoff = buffer.long.toULong(),
+                inode = buffer.long.toULong(),
+                vmFlagsRaw = buffer.long.toULong(),
+                prot = buffer.int.toUInt(),
+                flags = buffer.int.toUInt(),
+                devMajor = buffer.int.toUInt(),
+                devMinor = buffer.int.toUInt(),
+                name = run {
+                    buffer.int
+                    buffer.int
+                    decodeCString(buffer, 256)
+                },
+            )
+        }
+
+        return BridgeVmaListReply(
+            status = status,
+            count = count,
+            message = message,
+            vmas = vmas,
         )
     }
 
