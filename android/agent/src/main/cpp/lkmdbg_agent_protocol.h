@@ -19,6 +19,7 @@ enum lkmdbg_agent_command {
 	LKMDBG_AGENT_CMD_QUERY_PROCESSES = 11u,
 	LKMDBG_AGENT_CMD_QUERY_IMAGES = 12u,
 	LKMDBG_AGENT_CMD_QUERY_VMAS = 13u,
+	LKMDBG_AGENT_CMD_SEARCH_MEMORY = 14u,
 };
 
 enum lkmdbg_agent_status {
@@ -170,6 +171,23 @@ struct __attribute__((packed)) lkmdbg_agent_query_vmas_reply {
 	char message[64];
 };
 
+struct __attribute__((packed)) lkmdbg_agent_search_memory_request {
+	uint32_t region_preset;
+	uint32_t max_results;
+	uint32_t pattern_size;
+	uint32_t reserved0;
+	uint8_t pattern[128];
+};
+
+struct __attribute__((packed)) lkmdbg_agent_search_memory_reply {
+	int32_t status;
+	uint32_t count;
+	uint32_t searched_vma_count;
+	uint32_t reserved0;
+	uint64_t scanned_bytes;
+	char message[64];
+};
+
 struct __attribute__((packed)) lkmdbg_agent_image_record {
 	uint64_t start_addr;
 	uint64_t end_addr;
@@ -200,6 +218,15 @@ struct __attribute__((packed)) lkmdbg_agent_vma_record {
 	char name[256];
 };
 
+struct __attribute__((packed)) lkmdbg_agent_search_result_record {
+	uint64_t address;
+	uint64_t region_start;
+	uint64_t region_end;
+	uint32_t preview_size;
+	uint32_t reserved0;
+	uint8_t preview[32];
+};
+
 static_assert(sizeof(struct lkmdbg_agent_hello_reply) == 80, "hello reply size");
 static_assert(sizeof(struct lkmdbg_agent_open_session_reply) == 80, "open-session reply size");
 static_assert(sizeof(struct lkmdbg_agent_set_target_request) == 8, "set-target request size");
@@ -219,5 +246,8 @@ static_assert(sizeof(struct lkmdbg_agent_query_images_reply) == 72, "query-image
 static_assert(sizeof(struct lkmdbg_agent_image_record) == 320, "image record size");
 static_assert(sizeof(struct lkmdbg_agent_query_vmas_reply) == 72, "query-vmas reply size");
 static_assert(sizeof(struct lkmdbg_agent_vma_record) == 320, "vma record size");
+static_assert(sizeof(struct lkmdbg_agent_search_memory_request) == 144, "search-memory request size");
+static_assert(sizeof(struct lkmdbg_agent_search_memory_reply) == 88, "search-memory reply size");
+static_assert(sizeof(struct lkmdbg_agent_search_result_record) == 64, "search result record size");
 
 #endif

@@ -79,9 +79,11 @@ class SessionBridgeRepository(
     private val processResolver = AndroidProcessResolver(appContext)
     private val searchEngine = MemorySearchEngine(
         object : MemorySearchEngine.Backend {
-            override suspend fun read(remoteAddr: ULong, length: UInt): ByteArray {
-                val reply = client.readMemory(remoteAddr, length)
-                return reply.data.copyOf(reply.bytesDone.toInt())
+            override suspend fun search(
+                regionPreset: UInt,
+                maxResults: UInt,
+                pattern: ByteArray,
+            ) = client.searchMemory(regionPreset, maxResults, pattern)
             }
         },
     )

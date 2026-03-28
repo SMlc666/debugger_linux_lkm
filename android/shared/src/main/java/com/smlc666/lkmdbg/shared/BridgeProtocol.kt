@@ -33,6 +33,9 @@ object BridgeProtocol {
     const val QUERY_IMAGE_RECORD_SIZE: Int = 320
     const val QUERY_VMAS_REPLY_HEADER_SIZE: Int = 72
     const val QUERY_VMA_RECORD_SIZE: Int = 320
+    const val SEARCH_MEMORY_REQUEST_SIZE: Int = 144
+    const val SEARCH_MEMORY_REPLY_HEADER_SIZE: Int = 88
+    const val SEARCH_MEMORY_RESULT_RECORD_SIZE: Int = 64
 }
 
 enum class BridgeCommand(val wireId: UInt) {
@@ -49,6 +52,7 @@ enum class BridgeCommand(val wireId: UInt) {
     QueryProcesses(11u),
     QueryImages(12u),
     QueryVmas(13u),
+    SearchMemory(14u),
 }
 
 enum class BridgeStatusCode(val wireValue: Int) {
@@ -161,6 +165,23 @@ data class BridgeVmaListReply(
     val count: UInt,
     val message: String,
     val vmas: List<BridgeVmaRecord>,
+)
+
+data class BridgeMemorySearchRecord(
+    val address: ULong,
+    val regionStart: ULong,
+    val regionEnd: ULong,
+    val previewSize: UInt,
+    val preview: ByteArray,
+)
+
+data class BridgeMemorySearchReply(
+    val status: Int,
+    val count: UInt,
+    val searchedVmaCount: UInt,
+    val scannedBytes: ULong,
+    val message: String,
+    val results: List<BridgeMemorySearchRecord>,
 )
 
 data class BridgeThreadRecord(
@@ -307,6 +328,26 @@ object BridgeWireCodec {
             .putInt(timeoutMs)
             .putInt(maxEvents)
             .array()
+
+    fun encodeSearchMemoryRequest(
+        regionPreset: UInt,
+        maxResults: UInt,
+        pattern: ByteArray,
+    ): ByteArray {
+        require(pattern.isNotEmpty()) { "pattern must not be empty" }
+        require(pattern.size <= 128) { "pattern too large: ${pattern.size}" }
+        val payload = ByteBuffer.allocate(BridgeProtocol.SEARCH_MEMORY_REQUEST_SIZE)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(regionPreset.toInt())
+            .putInt(maxResults.toInt())
+            .putInt(pattern.size)
+            .putInt(0)
+        payload.put(pattern)
+        repeat(128 - pattern.size) {
+            payload.put(0)
+        }
+        return payload.array()
+    }
 
     fun decodeHelloReply(payload: ByteArray): BridgeHelloReply {
         val buffer = payloadBuffer(payload, BridgeProtocol.HELLO_REPLY_SIZE)
@@ -613,6 +654,47 @@ object BridgeWireCodec {
             count = count,
             message = message,
             vmas = vmas,
+        )
+    }
+
+    fun decodeSearchMemoryReply(payload: ByteArray): BridgeMemorySearchReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.SEARCH_MEMORY_REPLY_HEADER_SIZE)
+        val status = buffer.int
+        val count = buffer.int.toUInt()
+        val searchedVmaCount = buffer.int.toUInt()
+        buffer.int
+        val scannedBytes = buffer.long.toULong()
+        val message = decodeCString(buffer, 64)
+        val remaining = payload.size - BridgeProtocol.SEARCH_MEMORY_REPLY_HEADER_SIZE
+        require(remaining >= count.toInt() * BridgeProtocol.SEARCH_MEMORY_RESULT_RECORD_SIZE) {
+            "search payload too small: got=${payload.size} count=$count"
+        }
+
+        val results = ArrayList<BridgeMemorySearchRecord>(count.toInt())
+        repeat(count.toInt()) {
+            val address = buffer.long.toULong()
+            val regionStart = buffer.long.toULong()
+            val regionEnd = buffer.long.toULong()
+            val previewSize = buffer.int.toUInt()
+            buffer.int
+            val preview = ByteArray(32)
+            buffer.get(preview)
+            results += BridgeMemorySearchRecord(
+                address = address,
+                regionStart = regionStart,
+                regionEnd = regionEnd,
+                previewSize = previewSize,
+                preview = preview,
+            )
+        }
+
+        return BridgeMemorySearchReply(
+            status = status,
+            count = count,
+            searchedVmaCount = searchedVmaCount,
+            scannedBytes = scannedBytes,
+            message = message,
+            results = results,
         )
     }
 

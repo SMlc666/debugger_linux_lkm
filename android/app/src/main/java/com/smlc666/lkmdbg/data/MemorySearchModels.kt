@@ -22,13 +22,16 @@ enum class MemorySearchValueType(@StringRes val labelRes: Int) {
     Ascii(R.string.memory_search_type_ascii),
 }
 
-enum class MemoryRegionPreset(@StringRes val labelRes: Int) {
-    All(R.string.memory_region_all),
-    Xa(R.string.memory_region_xa),
-    Cd(R.string.memory_region_cd),
-    Ca(R.string.memory_region_ca),
-    Ch(R.string.memory_region_ch),
-    Stack(R.string.memory_region_stack);
+enum class MemoryRegionPreset(
+    @StringRes val labelRes: Int,
+    val wireValue: UInt,
+) {
+    All(R.string.memory_region_all, 0u),
+    Xa(R.string.memory_region_xa, 1u),
+    Cd(R.string.memory_region_cd, 2u),
+    Ca(R.string.memory_region_ca, 3u),
+    Ch(R.string.memory_region_ch, 4u),
+    Stack(R.string.memory_region_stack, 5u);
 
     fun matches(vma: BridgeVmaRecord): Boolean {
         val flags = vma.flags.toInt()

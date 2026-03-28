@@ -1,124 +1,69 @@
 package com.smlc666.lkmdbg.data
 
+import com.smlc666.lkmdbg.shared.BridgeMemorySearchReply
+import com.smlc666.lkmdbg.shared.BridgeVmaRecord
 import kotlin.math.min
 
-private const val SEARCH_CHUNK_BYTES = 64 * 1024
 private const val SEARCH_MAX_RESULTS = 128
 
 class MemorySearchEngine(
     private val backend: Backend,
 ) {
     interface Backend {
-        suspend fun read(remoteAddr: ULong, length: UInt): ByteArray
+        suspend fun search(regionPreset: UInt, maxResults: UInt, pattern: ByteArray): BridgeMemorySearchReply
     }
 
     suspend fun search(
-        vmas: List<com.smlc666.lkmdbg.shared.BridgeVmaRecord>,
+        vmas: List<BridgeVmaRecord>,
         preset: MemoryRegionPreset,
         valueType: MemorySearchValueType,
         query: String,
         maxResults: Int = SEARCH_MAX_RESULTS,
     ): MemorySearchOutcome {
         val pattern = SearchPattern.parse(valueType, query)
-        val results = ArrayList<MemorySearchResult>(min(maxResults, SEARCH_MAX_RESULTS))
-        var searchedVmas = 0
-        var scannedBytes = 0UL
+        val reply = backend.search(
+            regionPreset = preset.wireValue,
+            maxResults = min(maxResults, SEARCH_MAX_RESULTS).toUInt(),
+            pattern = pattern.bytes,
+        )
+        require(reply.status == 0) { reply.message.ifBlank { "search failed status=${reply.status}" } }
 
-        for (vma in vmas) {
-            if (!preset.matches(vma))
-                continue
-            searchedVmas += 1
-            scannedBytes += searchVma(vma, pattern, results, maxResults)
-            if (results.size >= maxResults)
-                break
+        val results = ArrayList<MemorySearchResult>(reply.results.size)
+        for (record in reply.results) {
+            val previewSize = min(record.previewSize.toInt(), record.preview.size)
+            val preview = record.preview.copyOf(previewSize)
+            val region = vmas.firstOrNull {
+                record.address >= it.startAddr && record.address < it.endAddr
+            }
+            val regionName = if (region != null) {
+                region.name.ifBlank { describeVma(region) }
+            } else {
+                describeRange(record.regionStart, record.regionEnd)
+            }
+            results += MemorySearchResult(
+                address = record.address,
+                regionName = regionName,
+                regionStart = record.regionStart,
+                regionEnd = record.regionEnd,
+                previewHex = preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
+                valueSummary = pattern.describe(preview),
+            )
         }
 
         return MemorySearchOutcome(
-            searchedVmaCount = searchedVmas,
-            scannedBytes = scannedBytes,
+            searchedVmaCount = reply.searchedVmaCount.toInt(),
+            scannedBytes = reply.scannedBytes,
             results = results,
         )
     }
 
-    private suspend fun searchVma(
-        vma: com.smlc666.lkmdbg.shared.BridgeVmaRecord,
-        pattern: SearchPattern,
-        results: MutableList<MemorySearchResult>,
-        maxResults: Int,
-    ): ULong {
-        val overlap = (pattern.bytes.size - 1).coerceAtLeast(0)
-        var carry = ByteArray(0)
-        var cursor = vma.startAddr
-        var scanned = 0UL
+    private fun describeVma(it: BridgeVmaRecord): String = describeRange(it.startAddr, it.endAddr)
 
-        while (cursor < vma.endAddr && results.size < maxResults) {
-            val remaining = (vma.endAddr - cursor).toLong()
-            val requestSize = min(SEARCH_CHUNK_BYTES.toLong(), remaining).toInt()
-            if (requestSize <= 0)
-                break
-
-            val chunk = backend.read(cursor, requestSize.toUInt())
-            if (chunk.isEmpty())
-                break
-            scanned += chunk.size.toULong()
-
-            val combined = ByteArray(carry.size + chunk.size)
-            if (carry.isNotEmpty())
-                carry.copyInto(combined, endIndex = carry.size)
-            chunk.copyInto(combined, destinationOffset = carry.size)
-
-            var index = 0
-            while (index <= combined.size - pattern.bytes.size && results.size < maxResults) {
-                if (combined.regionMatches(index, pattern.bytes)) {
-                    if (index + pattern.bytes.size > carry.size || carry.isEmpty()) {
-                        val absolute = cursor - carry.size.toUInt().toULong() + index.toUInt().toULong()
-                        val preview = combined.copyOfRange(
-                            index,
-                            min(combined.size, index + maxOf(pattern.bytes.size, 16)),
-                        )
-                        results.add(
-                            MemorySearchResult(
-                            address = absolute,
-                            regionName = vma.name.ifBlank { describeVma(vma) },
-                            regionStart = vma.startAddr,
-                            regionEnd = vma.endAddr,
-                            previewHex = preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
-                            valueSummary = pattern.describe(preview),
-                            ),
-                        )
-                    }
-                    index += pattern.bytes.size.coerceAtLeast(1)
-                } else {
-                    index += 1
-                }
-            }
-
-            carry = if (overlap == 0) {
-                ByteArray(0)
-            } else {
-                combined.copyOfRange(maxOf(0, combined.size - overlap), combined.size)
-            }
-            cursor += chunk.size.toUInt().toULong()
-        }
-
-        return scanned
-    }
-
-    private fun ByteArray.regionMatches(offset: Int, other: ByteArray): Boolean {
-        if (offset < 0 || offset + other.size > size)
-            return false
-        for (i in other.indices) {
-            if (this[offset + i] != other[i])
-                return false
-        }
-        return true
-    }
-
-    private fun describeVma(vma: com.smlc666.lkmdbg.shared.BridgeVmaRecord): String =
+    private fun describeRange(start: ULong, end: ULong): String =
         buildString {
-            append(hex64(vma.startAddr))
+            append(hex64(start))
             append(" - ")
-            append(hex64(vma.endAddr))
+            append(hex64(end))
         }
 
     private fun hex64(value: ULong): String = "0x${value.toString(16)}"

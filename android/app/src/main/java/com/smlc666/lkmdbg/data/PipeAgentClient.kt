@@ -6,6 +6,7 @@ import com.smlc666.lkmdbg.shared.BridgeEventBatchReply
 import com.smlc666.lkmdbg.shared.BridgeHelloReply
 import com.smlc666.lkmdbg.shared.BridgeImageListReply
 import com.smlc666.lkmdbg.shared.BridgeMemoryReadReply
+import com.smlc666.lkmdbg.shared.BridgeMemorySearchReply
 import com.smlc666.lkmdbg.shared.BridgeMemoryWriteReply
 import com.smlc666.lkmdbg.shared.BridgeOpenSessionReply
 import com.smlc666.lkmdbg.shared.BridgeProcessListReply
@@ -195,6 +196,33 @@ class PipeAgentClient(
                 )
             }
             BridgeWireCodec.decodeReadMemoryReply(payload)
+        }
+    }
+
+    suspend fun searchMemory(
+        regionPreset: UInt,
+        maxResults: UInt,
+        pattern: ByteArray,
+    ): BridgeMemorySearchReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(
+                requireOutputLocked(),
+                BridgeCommand.SearchMemory,
+                BridgeWireCodec.encodeSearchMemoryRequest(regionPreset, maxResults, pattern),
+            )
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.SearchMemory.wireId) {
+                return@synchronized BridgeMemorySearchReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    count = 0u,
+                    searchedVmaCount = 0u,
+                    scannedBytes = 0u,
+                    message = "unexpected search-memory reply command=${header.command}",
+                    results = emptyList(),
+                )
+            }
+            BridgeWireCodec.decodeSearchMemoryReply(payload)
         }
     }
 

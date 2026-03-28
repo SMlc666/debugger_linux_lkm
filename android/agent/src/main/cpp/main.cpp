@@ -8,6 +8,7 @@
 #include <poll.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -25,6 +26,17 @@ struct agent_state {
 };
 
 static const char *k_bootstrap_path = "/proc/version";
+static const uint64_t k_search_remote_map_max_bytes = 16ULL * 1024ULL * 1024ULL;
+static const uint32_t k_search_read_chunk_bytes = 256U * 1024U;
+
+enum lkmdbg_agent_region_preset : uint32_t {
+	LKMDBG_AGENT_REGION_ALL = 0u,
+	LKMDBG_AGENT_REGION_XA = 1u,
+	LKMDBG_AGENT_REGION_CD = 2u,
+	LKMDBG_AGENT_REGION_CA = 3u,
+	LKMDBG_AGENT_REGION_CH = 4u,
+	LKMDBG_AGENT_REGION_STACK = 5u,
+};
 
 static bool read_full(int fd, void *buf, size_t len)
 {
@@ -160,6 +172,295 @@ static const char *vma_name_ptr(const lkmdbg_vma_query_request *reply,
 	    reply->names_used)
 		return "";
 	return names + entry->name_offset;
+}
+
+static bool query_vma_records(agent_state *state,
+			      std::vector<lkmdbg_agent_vma_record> *records,
+			      std::string *error)
+{
+	uint64_t cursor = 0;
+
+	if (!state || state->session_fd < 0 || !records)
+		return false;
+
+	records->clear();
+	for (;;) {
+		lkmdbg_vma_entry entries[64] = {};
+		char names[8192] = {};
+		lkmdbg_vma_query_request req = {};
+
+		req.version = LKMDBG_PROTO_VERSION;
+		req.size = sizeof(req);
+		req.start_addr = cursor;
+		req.entries_addr = reinterpret_cast<uintptr_t>(entries);
+		req.max_entries = static_cast<uint32_t>(sizeof(entries) / sizeof(entries[0]));
+		req.names_addr = reinterpret_cast<uintptr_t>(names);
+		req.names_size = sizeof(names);
+		if (ioctl(state->session_fd, LKMDBG_IOC_QUERY_VMAS, &req) < 0) {
+			if (error)
+				*error = "QUERY_VMAS failed";
+			return false;
+		}
+
+		for (uint32_t i = 0; i < req.entries_filled; ++i) {
+			lkmdbg_agent_vma_record record = {};
+
+			record.start_addr = entries[i].start_addr;
+			record.end_addr = entries[i].end_addr;
+			record.pgoff = entries[i].pgoff;
+			record.inode = entries[i].inode;
+			record.vm_flags_raw = entries[i].vm_flags_raw;
+			record.prot = entries[i].prot;
+			record.flags = entries[i].flags;
+			record.dev_major = entries[i].dev_major;
+			record.dev_minor = entries[i].dev_minor;
+			copy_cstr(record.name, sizeof(record.name),
+				  vma_name_ptr(&req, &entries[i], names));
+			records->push_back(record);
+		}
+
+		if (req.done)
+			break;
+		if (req.next_addr <= cursor) {
+			if (error)
+				*error = "QUERY_VMAS cursor stalled";
+			return false;
+		}
+		cursor = req.next_addr;
+	}
+
+	return true;
+}
+
+static bool vma_matches_preset(const lkmdbg_agent_vma_record &vma, uint32_t preset)
+{
+	const bool readable = (vma.prot & 0x00000001U) != 0;
+	const bool writable = (vma.prot & 0x00000002U) != 0;
+	const bool executable = (vma.prot & 0x00000004U) != 0;
+	const bool anon = (vma.flags & 0x00000001U) != 0;
+	const bool file = (vma.flags & 0x00000002U) != 0 || vma.name[0] != '\0';
+	const bool stack = (vma.flags & 0x00000008U) != 0;
+	const bool heap = (vma.flags & 0x00000010U) != 0;
+
+	if (!readable)
+		return false;
+
+	switch (preset) {
+	case LKMDBG_AGENT_REGION_ALL:
+		return true;
+	case LKMDBG_AGENT_REGION_XA:
+		return executable && file;
+	case LKMDBG_AGENT_REGION_CD:
+		return file && writable && !executable;
+	case LKMDBG_AGENT_REGION_CA:
+		return anon && writable && !heap && !stack && !executable;
+	case LKMDBG_AGENT_REGION_CH:
+		return heap;
+	case LKMDBG_AGENT_REGION_STACK:
+		return stack;
+	default:
+		return false;
+	}
+}
+
+static void append_search_result(
+	std::vector<lkmdbg_agent_search_result_record> *results,
+	const lkmdbg_agent_vma_record &vma, uint64_t address, const uint8_t *preview,
+	size_t preview_size)
+{
+	lkmdbg_agent_search_result_record record = {};
+
+	record.address = address;
+	record.region_start = vma.start_addr;
+	record.region_end = vma.end_addr;
+	record.preview_size = static_cast<uint32_t>(std::min<size_t>(preview_size,
+						sizeof(record.preview)));
+	if (record.preview_size && preview)
+		memcpy(record.preview, preview, record.preview_size);
+	results->push_back(record);
+}
+
+static void search_linear_buffer(
+	const uint8_t *data, size_t data_size, size_t start_offset,
+	const uint8_t *pattern, size_t pattern_size, uint64_t base_addr,
+	const lkmdbg_agent_vma_record &vma,
+	std::vector<lkmdbg_agent_search_result_record> *results, size_t max_results)
+{
+	size_t index;
+
+	if (!data || !pattern || !pattern_size || !results)
+		return;
+
+	index = start_offset;
+	while (index + pattern_size <= data_size && results->size() < max_results) {
+		if (memcmp(data + index, pattern, pattern_size) == 0) {
+			append_search_result(results, vma, base_addr + index, data + index,
+					     data_size - index);
+			index += std::max<size_t>(pattern_size, 1);
+			continue;
+		}
+		++index;
+	}
+}
+
+static void search_combined_buffer(
+	const uint8_t *data, size_t data_size, size_t carry_size,
+	const uint8_t *pattern, size_t pattern_size, uint64_t base_addr,
+	const lkmdbg_agent_vma_record &vma,
+	std::vector<lkmdbg_agent_search_result_record> *results, size_t max_results)
+{
+	size_t index = 0;
+
+	if (!data || !pattern || !pattern_size || !results)
+		return;
+
+	while (index + pattern_size <= data_size && results->size() < max_results) {
+		if (memcmp(data + index, pattern, pattern_size) == 0) {
+			if (!carry_size || index + pattern_size > carry_size) {
+				append_search_result(results, vma, base_addr + index,
+						     data + index, data_size - index);
+			}
+			index += std::max<size_t>(pattern_size, 1);
+			continue;
+		}
+		++index;
+	}
+}
+
+static bool remove_remote_map(agent_state *state,
+			      const lkmdbg_remote_map_request &map_reply)
+{
+	lkmdbg_remote_map_handle_request req = {};
+
+	if (!state || state->session_fd < 0 || !map_reply.map_id)
+		return true;
+
+	req.version = LKMDBG_PROTO_VERSION;
+	req.size = sizeof(req);
+	req.map_id = map_reply.map_id;
+	return ioctl(state->session_fd, LKMDBG_IOC_REMOVE_REMOTE_MAP, &req) == 0;
+}
+
+static bool search_range_via_readmem(
+	agent_state *state, const lkmdbg_agent_vma_record &vma, uint64_t start,
+	uint64_t end, const uint8_t *pattern, size_t pattern_size,
+	std::vector<lkmdbg_agent_search_result_record> *results, size_t max_results,
+	uint64_t *scanned_bytes, std::string *error)
+{
+	const size_t overlap = pattern_size > 0 ? pattern_size - 1 : 0;
+	std::vector<uint8_t> carry;
+	uint64_t cursor = start;
+
+	while (cursor < end && results->size() < max_results) {
+		const uint64_t remaining = end - cursor;
+		const uint32_t request_size = static_cast<uint32_t>(
+			std::min<uint64_t>(remaining, k_search_read_chunk_bytes));
+		std::vector<uint8_t> chunk(request_size);
+		std::vector<uint8_t> combined;
+		lkmdbg_mem_op op = {};
+		lkmdbg_mem_request req = {};
+
+		op.remote_addr = cursor;
+		op.local_addr = reinterpret_cast<uintptr_t>(chunk.data());
+		op.length = request_size;
+		req.version = LKMDBG_PROTO_VERSION;
+		req.size = sizeof(req);
+		req.ops_addr = reinterpret_cast<uintptr_t>(&op);
+		req.op_count = 1;
+		if (ioctl(state->session_fd, LKMDBG_IOC_READ_MEM, &req) < 0) {
+			if (error)
+				*error = "READ_MEM fallback failed";
+			return false;
+		}
+		if (!op.bytes_done)
+			break;
+
+		chunk.resize(op.bytes_done);
+		if (scanned_bytes)
+			*scanned_bytes += op.bytes_done;
+		combined.reserve(carry.size() + chunk.size());
+		combined.insert(combined.end(), carry.begin(), carry.end());
+		combined.insert(combined.end(), chunk.begin(), chunk.end());
+		search_combined_buffer(combined.data(), combined.size(), carry.size(),
+				       pattern, pattern_size,
+				       cursor - static_cast<uint64_t>(carry.size()), vma,
+				       results, max_results);
+
+		if (!overlap) {
+			carry.clear();
+		} else if (combined.size() <= overlap) {
+			carry = combined;
+		} else {
+			carry.assign(combined.end() - overlap, combined.end());
+		}
+		cursor += op.bytes_done;
+	}
+
+	return true;
+}
+
+static bool search_range(
+	agent_state *state, const lkmdbg_agent_vma_record &vma, uint64_t start,
+	uint64_t end, const uint8_t *pattern, size_t pattern_size,
+	std::vector<lkmdbg_agent_search_result_record> *results, size_t max_results,
+	uint64_t *scanned_bytes, std::string *error)
+{
+	const uint64_t overlap = pattern_size > 0 ? pattern_size - 1 : 0;
+	uint64_t cursor = start;
+
+	while (cursor < end && results->size() < max_results) {
+		const uint64_t segment_start =
+			(cursor > start && overlap) ? (cursor - std::min<uint64_t>(overlap, cursor - start))
+						    : cursor;
+		const uint64_t segment_end =
+			std::min<uint64_t>(end, cursor + k_search_remote_map_max_bytes);
+		lkmdbg_remote_map_request map_req = {};
+		void *view;
+
+		map_req.version = LKMDBG_PROTO_VERSION;
+		map_req.size = sizeof(map_req);
+		map_req.remote_addr = segment_start;
+		map_req.length = segment_end - segment_start;
+		map_req.prot = LKMDBG_REMOTE_MAP_PROT_READ;
+		map_req.timeout_ms = 1000;
+		if (ioctl(state->session_fd, LKMDBG_IOC_CREATE_REMOTE_MAP, &map_req) < 0) {
+			return search_range_via_readmem(state, vma, cursor, end, pattern,
+							pattern_size, results, max_results,
+							scanned_bytes, error);
+		}
+
+		view = mmap(NULL, map_req.mapped_length, PROT_READ, MAP_SHARED, map_req.map_fd, 0);
+		if (view == MAP_FAILED) {
+			close(map_req.map_fd);
+			remove_remote_map(state, map_req);
+			return search_range_via_readmem(state, vma, cursor, end, pattern,
+							pattern_size, results, max_results,
+							scanned_bytes, error);
+		}
+
+		search_linear_buffer(static_cast<const uint8_t *>(view),
+				     static_cast<size_t>(map_req.mapped_length),
+				     static_cast<size_t>(cursor - segment_start), pattern,
+				     pattern_size, segment_start, vma, results, max_results);
+		if (scanned_bytes)
+			*scanned_bytes += map_req.mapped_length - (cursor - segment_start);
+		munmap(view, map_req.mapped_length);
+		close(map_req.map_fd);
+		if (!remove_remote_map(state, map_req)) {
+			if (error)
+				*error = "REMOVE_REMOTE_MAP failed";
+			return false;
+		}
+
+		if (segment_end <= cursor) {
+			if (error)
+				*error = "search cursor stalled";
+			return false;
+		}
+		cursor = segment_end;
+	}
+
+	return true;
 }
 
 static void close_session(agent_state *state)
@@ -759,56 +1060,17 @@ static bool handle_query_vmas(agent_state *state)
 	lkmdbg_agent_query_vmas_reply reply = {};
 	std::vector<lkmdbg_agent_vma_record> records;
 	std::vector<char> payload;
-	uint64_t cursor = 0;
+	std::string error;
 
 	if (state->session_fd < 0) {
 		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
 		copy_cstr(reply.message, sizeof(reply.message), "session not open");
 		return write_frame(LKMDBG_AGENT_CMD_QUERY_VMAS, &reply, sizeof(reply));
 	}
-
-	for (;;) {
-		lkmdbg_vma_entry entries[64] = {};
-		char names[8192] = {};
-		lkmdbg_vma_query_request req = {};
-
-		req.version = LKMDBG_PROTO_VERSION;
-		req.size = sizeof(req);
-		req.start_addr = cursor;
-		req.entries_addr = reinterpret_cast<uintptr_t>(entries);
-		req.max_entries = static_cast<uint32_t>(sizeof(entries) / sizeof(entries[0]));
-		req.names_addr = reinterpret_cast<uintptr_t>(names);
-		req.names_size = sizeof(names);
-		if (ioctl(state->session_fd, LKMDBG_IOC_QUERY_VMAS, &req) < 0) {
-			reply.status = -errno;
-			copy_cstr(reply.message, sizeof(reply.message), "QUERY_VMAS failed");
-			return write_frame(LKMDBG_AGENT_CMD_QUERY_VMAS, &reply, sizeof(reply));
-		}
-
-		for (uint32_t i = 0; i < req.entries_filled; ++i) {
-			lkmdbg_agent_vma_record record = {};
-			record.start_addr = entries[i].start_addr;
-			record.end_addr = entries[i].end_addr;
-			record.pgoff = entries[i].pgoff;
-			record.inode = entries[i].inode;
-			record.vm_flags_raw = entries[i].vm_flags_raw;
-			record.prot = entries[i].prot;
-			record.flags = entries[i].flags;
-			record.dev_major = entries[i].dev_major;
-			record.dev_minor = entries[i].dev_minor;
-			copy_cstr(record.name, sizeof(record.name),
-				  vma_name_ptr(&req, &entries[i], names));
-			records.push_back(record);
-		}
-
-		if (req.done)
-			break;
-		if (req.next_addr <= cursor) {
-			reply.status = -EIO;
-			copy_cstr(reply.message, sizeof(reply.message), "QUERY_VMAS cursor stalled");
-			return write_frame(LKMDBG_AGENT_CMD_QUERY_VMAS, &reply, sizeof(reply));
-		}
-		cursor = req.next_addr;
+	if (!query_vma_records(state, &records, &error)) {
+		reply.status = errno ? -errno : LKMDBG_AGENT_STATUS_INTERNAL;
+		copy_cstr(reply.message, sizeof(reply.message), error);
+		return write_frame(LKMDBG_AGENT_CMD_QUERY_VMAS, &reply, sizeof(reply));
 	}
 
 	reply.status = LKMDBG_AGENT_STATUS_OK;
@@ -822,6 +1084,74 @@ static bool handle_query_vmas(agent_state *state)
 	}
 	return write_frame(LKMDBG_AGENT_CMD_QUERY_VMAS, payload.data(),
 			   static_cast<uint32_t>(payload.size()));
+}
+
+static bool handle_search_memory(agent_state *state, const void *payload,
+				 uint32_t payload_size)
+{
+	lkmdbg_agent_search_memory_request request = {};
+	lkmdbg_agent_search_memory_reply reply = {};
+	std::vector<lkmdbg_agent_vma_record> vmas;
+	std::vector<lkmdbg_agent_search_result_record> results;
+	std::vector<char> out;
+	std::string error;
+	uint64_t scanned_bytes = 0;
+	size_t max_results;
+
+	if (payload_size < sizeof(request)) {
+		reply.status = LKMDBG_AGENT_STATUS_INVALID_PAYLOAD;
+		copy_cstr(reply.message, sizeof(reply.message), "payload too small");
+		return write_frame(LKMDBG_AGENT_CMD_SEARCH_MEMORY, &reply, sizeof(reply));
+	}
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(LKMDBG_AGENT_CMD_SEARCH_MEMORY, &reply, sizeof(reply));
+	}
+
+	memcpy(&request, payload, sizeof(request));
+	if (!request.pattern_size || request.pattern_size > sizeof(request.pattern)) {
+		reply.status = LKMDBG_AGENT_STATUS_INVALID_PAYLOAD;
+		copy_cstr(reply.message, sizeof(reply.message), "invalid pattern size");
+		return write_frame(LKMDBG_AGENT_CMD_SEARCH_MEMORY, &reply, sizeof(reply));
+	}
+	if (!query_vma_records(state, &vmas, &error)) {
+		reply.status = errno ? -errno : LKMDBG_AGENT_STATUS_INTERNAL;
+		copy_cstr(reply.message, sizeof(reply.message), error);
+		return write_frame(LKMDBG_AGENT_CMD_SEARCH_MEMORY, &reply, sizeof(reply));
+	}
+
+	max_results = request.max_results ? request.max_results : 128U;
+	max_results = std::min<size_t>(max_results, 512U);
+	results.reserve(max_results);
+	for (const auto &vma : vmas) {
+		if (!vma_matches_preset(vma, request.region_preset))
+			continue;
+		++reply.searched_vma_count;
+		if (!search_range(state, vma, vma.start_addr, vma.end_addr, request.pattern,
+				  request.pattern_size, &results, max_results,
+				  &scanned_bytes, &error)) {
+			reply.status = errno ? -errno : LKMDBG_AGENT_STATUS_INTERNAL;
+			copy_cstr(reply.message, sizeof(reply.message), error);
+			return write_frame(LKMDBG_AGENT_CMD_SEARCH_MEMORY, &reply,
+					   sizeof(reply));
+		}
+		if (results.size() >= max_results)
+			break;
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.count = static_cast<uint32_t>(results.size());
+	reply.scanned_bytes = scanned_bytes;
+	copy_cstr(reply.message, sizeof(reply.message), "memory search ready");
+	out.resize(sizeof(reply) + results.size() * sizeof(results[0]));
+	memcpy(out.data(), &reply, sizeof(reply));
+	if (!results.empty()) {
+		memcpy(out.data() + sizeof(reply), results.data(),
+		       results.size() * sizeof(results[0]));
+	}
+	return write_frame(LKMDBG_AGENT_CMD_SEARCH_MEMORY, out.data(),
+			   static_cast<uint32_t>(out.size()));
 }
 
 } // namespace
@@ -923,6 +1253,12 @@ int main(int argc, char **argv)
 			break;
 		case LKMDBG_AGENT_CMD_QUERY_VMAS:
 			if (!handle_query_vmas(&state)) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_SEARCH_MEMORY:
+			if (!handle_search_memory(&state, payload.data(), remaining)) {
 				close_session(&state);
 				return 1;
 			}
