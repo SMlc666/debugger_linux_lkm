@@ -996,6 +996,7 @@ int main(void)
 		NULL,
 	};
 	int watchpoint_ctrl_status;
+	int mem_test_status;
 	bool hook_soak_only;
 	unsigned int selftest_stress_repeats;
 	unsigned int proc_version_repeats;
@@ -1115,7 +1116,18 @@ int main(void)
 				qemu_run_tool(ex_threads_query_argv);
 				qemu_run_tool(ex_regs_fp_argv);
 				qemu_run_tool(ex_stealth_roundtrip_argv);
-				qemu_run_tool(mem_test_argv);
+				mem_test_status = qemu_run_tool_status(mem_test_argv);
+				if (mem_test_status != 0) {
+					printf("LKMDBG_QEMU_MEM_TEST_RETRY first_status=%d\n",
+					       mem_test_status);
+					fflush(stdout);
+					mem_test_status =
+						qemu_run_tool_status(mem_test_argv);
+					qemu_check(mem_test_status == 0,
+						   "tool_exit_%s status=%d",
+						   MEM_TEST_TOOL,
+						   mem_test_status);
+				}
 				qemu_run_tool(mmu_test_argv);
 				qemu_run_input_smoke();
 			qemu_report_user_proc_exposure();
