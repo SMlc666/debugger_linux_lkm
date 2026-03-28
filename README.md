@@ -55,7 +55,14 @@ Build the user-space bootstrap test tool:
 cc -O2 -Wall -Wextra -o tools/lkmdbg_open_session tools/lkmdbg_open_session.c tools/driver/bridge_c.c
 cc -O2 -Wall -Wextra -o tools/lkmdbg_stealth_ctl tools/lkmdbg_stealth_ctl.c
 cc -O2 -Wall -Wextra -pthread -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c tools/driver/bridge_c.c tools/driver/bridge_events.c tools/driver/bridge_memory.c tools/driver/bridge_control.c
+cc -O2 -Wall -Wextra -o tools/examples/example_session_status tools/examples/example_session_status.c tools/driver/bridge_c.c
+cc -O2 -Wall -Wextra -o tools/examples/example_mem_rw tools/examples/example_mem_rw.c tools/driver/bridge_c.c tools/driver/bridge_memory.c
+cc -O2 -Wall -Wextra -o tools/examples/example_threads_query tools/examples/example_threads_query.c tools/driver/bridge_c.c tools/driver/bridge_control.c
+cc -O2 -Wall -Wextra -o tools/examples/example_regs_fp tools/examples/example_regs_fp.c tools/driver/bridge_c.c tools/driver/bridge_control.c
+cc -O2 -Wall -Wextra -o tools/examples/example_stealth_roundtrip tools/examples/example_stealth_roundtrip.c tools/driver/bridge_c.c tools/driver/bridge_control.c
 ```
+
+`tools/examples/` now provides one-file runnable examples for core session-fd flows and is executed in QEMU smoke CI.
 
 User-space driver code is split under `tools/driver/`:
 
@@ -339,6 +346,7 @@ The current `selftest` path exercises:
 - signal, syscall event/stop/control flows
 - hardware and MMU break/watchpoints
 - single-step stop delivery
+- arm64 thread register get/set for GPR and FP/SIMD state (`v0..v31`, `fpsr`, `fpcr`)
 - remote call, `x8` override, and remote thread create
 - stealth controls and event queue behavior
 

@@ -12,6 +12,7 @@
 
 #ifdef CONFIG_ARM64
 #include <asm/ptrace.h>
+#include <asm/processor.h>
 #endif
 
 #include "lkmdbg_internal.h"
@@ -24,8 +25,69 @@ typedef int (*lkmdbg_task_work_add_fn)(struct task_struct *task,
 typedef void (*lkmdbg_perf_event_disable_local_fn)(struct perf_event *event);
 
 #ifdef CONFIG_ARM64
+static inline void lkmdbg_u128_split(__uint128_t value, u64 *lo, u64 *hi)
+{
+	*lo = (u64)value;
+	*hi = (u64)(value >> 64);
+}
+
+static inline __uint128_t lkmdbg_u128_join(u64 lo, u64 hi)
+{
+	return ((__uint128_t)hi << 64) | (__uint128_t)lo;
+}
+
+static void lkmdbg_regs_arm64_export_fp(struct lkmdbg_regs_arm64 *dst,
+					struct task_struct *task)
+{
+	const struct user_fpsimd_state *fpsimd;
+	unsigned int i;
+
+	if (!task)
+		return;
+
+	if (task == current)
+		fpsimd_preserve_current_state();
+
+	fpsimd = &task->thread.uw.fpsimd_state;
+	dst->features |= LKMDBG_REGS_ARM64_FEATURE_FP;
+	dst->fpsr = fpsimd->fpsr;
+	dst->fpcr = fpsimd->fpcr;
+	for (i = 0; i < ARRAY_SIZE(dst->vregs); i++) {
+		u64 lo = 0;
+		u64 hi = 0;
+
+		lkmdbg_u128_split(fpsimd->vregs[i], &lo, &hi);
+		dst->vregs[i].lo = lo;
+		dst->vregs[i].hi = hi;
+	}
+}
+
+static void lkmdbg_regs_arm64_import_fp(struct task_struct *task,
+					const struct lkmdbg_regs_arm64 *src)
+{
+	struct user_fpsimd_state *fpsimd;
+	unsigned int i;
+
+	if (!task || !(src->features & LKMDBG_REGS_ARM64_FEATURE_FP))
+		return;
+
+	fpsimd = &task->thread.uw.fpsimd_state;
+	fpsimd->fpsr = src->fpsr;
+	fpsimd->fpcr = src->fpcr;
+	for (i = 0; i < ARRAY_SIZE(src->vregs); i++) {
+		fpsimd->vregs[i] =
+			lkmdbg_u128_join(src->vregs[i].lo, src->vregs[i].hi);
+	}
+
+	if (task == current)
+		fpsimd_update_current_state(fpsimd);
+	else
+		fpsimd_flush_task_state(task);
+}
+
 static void lkmdbg_regs_arm64_export(struct lkmdbg_regs_arm64 *dst,
-				     const struct pt_regs *src)
+				     const struct pt_regs *src,
+				     struct task_struct *task)
 {
 	unsigned int i;
 
@@ -35,9 +97,11 @@ static void lkmdbg_regs_arm64_export(struct lkmdbg_regs_arm64 *dst,
 	dst->sp = src->sp;
 	dst->pc = src->pc;
 	dst->pstate = src->pstate;
+	lkmdbg_regs_arm64_export_fp(dst, task);
 }
 static void lkmdbg_regs_arm64_import(struct pt_regs *dst,
-				     const struct lkmdbg_regs_arm64 *src)
+				     const struct lkmdbg_regs_arm64 *src,
+				     struct task_struct *task)
 {
 	unsigned int i;
 
@@ -46,6 +110,7 @@ static void lkmdbg_regs_arm64_import(struct pt_regs *dst,
 	dst->sp = src->sp;
 	dst->pc = src->pc;
 	dst->pstate = src->pstate;
+	lkmdbg_regs_arm64_import_fp(task, src);
 }
 #endif
 
@@ -241,7 +306,7 @@ static void lkmdbg_remote_call_breakpoint(struct perf_event *bp,
 	state->park_work_queued = true;
 	mutex_unlock(&session->lock);
 
-	lkmdbg_regs_arm64_import(regs, &stop_regs);
+	lkmdbg_regs_arm64_import(regs, &stop_regs, current);
 
 	ret = lkmdbg_remote_call_queue_park(session);
 	if (ret) {
@@ -283,7 +348,7 @@ static void lkmdbg_remote_call_restore_prepared_regs(
 
 	regs = task_pt_regs(task);
 	if (regs)
-		lkmdbg_regs_arm64_import(regs, &snapshot->saved_regs);
+		lkmdbg_regs_arm64_import(regs, &snapshot->saved_regs, task);
 	put_task_struct(task);
 #endif
 }
@@ -390,7 +455,7 @@ static int lkmdbg_remote_call_prepare(struct lkmdbg_session *session,
 		return -ESRCH;
 	}
 
-	lkmdbg_regs_arm64_export(&session->remote_call.saved_regs, regs);
+	lkmdbg_regs_arm64_export(&session->remote_call.saved_regs, regs, task);
 	session->next_remote_call_id++;
 	session->remote_call.call_id = session->next_remote_call_id;
 	session->remote_call.tgid = task->tgid;
@@ -432,7 +497,7 @@ static int lkmdbg_remote_call_prepare(struct lkmdbg_session *session,
 		ret = -ESRCH;
 		goto out_abort;
 	}
-	lkmdbg_regs_arm64_import(regs, &prepared);
+	lkmdbg_regs_arm64_import(regs, &prepared, task);
 	put_task_struct(task);
 	return 0;
 

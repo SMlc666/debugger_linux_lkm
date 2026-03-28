@@ -435,7 +435,17 @@ struct lkmdbg_regs_arm64 {
 	__u64 sp;
 	__u64 pc;
 	__u64 pstate;
+	__u32 features;
+	__u32 reserved0;
+	__u32 fpsr;
+	__u32 fpcr;
+	struct {
+		__u64 lo;
+		__u64 hi;
+	} vregs[32];
 };
+
+#define LKMDBG_REGS_ARM64_FEATURE_FP 0x00000001U
 
 struct lkmdbg_thread_regs_request {
 	__u32 version;

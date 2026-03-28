@@ -3569,6 +3569,17 @@ static void print_arm64_regs(const struct lkmdbg_thread_regs_request *req)
 	printf("sp=0x%016" PRIx64 "\n", (uint64_t)req->regs.sp);
 	printf("pc=0x%016" PRIx64 "\n", (uint64_t)req->regs.pc);
 	printf("pstate=0x%016" PRIx64 "\n", (uint64_t)req->regs.pstate);
+	printf("features=0x%08x\n", req->regs.features);
+	if (req->regs.features & LKMDBG_REGS_ARM64_FEATURE_FP) {
+		printf("fpsr=0x%08x\n", req->regs.fpsr);
+		printf("fpcr=0x%08x\n", req->regs.fpcr);
+		for (i = 0; i < 32; i++) {
+			printf("v%u_lo=0x%016" PRIx64 "\n", i,
+			       (uint64_t)req->regs.vregs[i].lo);
+			printf("v%u_hi=0x%016" PRIx64 "\n", i,
+			       (uint64_t)req->regs.vregs[i].hi);
+		}
+	}
 }
 
 static int set_named_arm64_reg(struct lkmdbg_thread_regs_request *req,
@@ -3576,6 +3587,7 @@ static int set_named_arm64_reg(struct lkmdbg_thread_regs_request *req,
 {
 	unsigned long index;
 	char *endp;
+	char lane[8];
 
 	if (strcmp(name, "sp") == 0) {
 		req->regs.sp = value;
@@ -3590,6 +3602,36 @@ static int set_named_arm64_reg(struct lkmdbg_thread_regs_request *req,
 	if (strcmp(name, "pstate") == 0) {
 		req->regs.pstate = value;
 		return 0;
+	}
+
+	if (strcmp(name, "fpsr") == 0) {
+		req->regs.features |= LKMDBG_REGS_ARM64_FEATURE_FP;
+		req->regs.fpsr = (uint32_t)value;
+		return 0;
+	}
+
+	if (strcmp(name, "fpcr") == 0) {
+		req->regs.features |= LKMDBG_REGS_ARM64_FEATURE_FP;
+		req->regs.fpcr = (uint32_t)value;
+		return 0;
+	}
+
+	if (name[0] == 'v') {
+		index = strtoul(name + 1, &endp, 10);
+		if (*endp != '_' || index >= 32)
+			return -1;
+		if (snprintf(lane, sizeof(lane), "%s", endp + 1) < 0)
+			return -1;
+		req->regs.features |= LKMDBG_REGS_ARM64_FEATURE_FP;
+		if (strcmp(lane, "lo") == 0) {
+			req->regs.vregs[index].lo = value;
+			return 0;
+		}
+		if (strcmp(lane, "hi") == 0) {
+			req->regs.vregs[index].hi = value;
+			return 0;
+		}
+		return -1;
 	}
 
 	if (name[0] != 'x')
@@ -4199,6 +4241,8 @@ static int verify_thread_freeze(int session_fd, pid_t child,
 	struct lkmdbg_thread_entry parked_entry;
 	struct lkmdbg_thread_regs_request regs_req;
 	uint64_t saved_x19 = 0;
+	uint32_t saved_fpsr = 0;
+	uint64_t saved_v0_lo = 0;
 	uint64_t before[SELFTEST_FREEZE_THREADS];
 	uint64_t frozen_a[SELFTEST_FREEZE_THREADS];
 	uint64_t frozen_b[SELFTEST_FREEZE_THREADS];
@@ -4261,7 +4305,16 @@ static int verify_thread_freeze(int session_fd, pid_t child,
 	}
 
 	saved_x19 = regs_req.regs.regs[19];
+	if (!(regs_req.regs.features & LKMDBG_REGS_ARM64_FEATURE_FP)) {
+		fprintf(stderr, "SET_REGS missing FP feature bit\n");
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
+	saved_fpsr = regs_req.regs.fpsr;
+	saved_v0_lo = regs_req.regs.vregs[0].lo;
 	regs_req.regs.regs[19] = SELFTEST_REG_SENTINEL;
+	regs_req.regs.fpsr = saved_fpsr ^ 0x1U;
+	regs_req.regs.vregs[0].lo = saved_v0_lo ^ 0x1ULL;
 	if (set_target_regs(session_fd, &regs_req) < 0) {
 		thaw_target_threads(session_fd, 2000, NULL, 0);
 		return -1;
@@ -4279,8 +4332,20 @@ static int verify_thread_freeze(int session_fd, pid_t child,
 		thaw_target_threads(session_fd, 2000, NULL, 0);
 		return -1;
 	}
+	if (!(regs_req.regs.features & LKMDBG_REGS_ARM64_FEATURE_FP) ||
+	    regs_req.regs.fpsr != (saved_fpsr ^ 0x1U) ||
+	    regs_req.regs.vregs[0].lo != (saved_v0_lo ^ 0x1ULL)) {
+		fprintf(stderr,
+			"SET_REGS FP values did not stick features=0x%x fpsr=0x%x v0_lo=0x%" PRIx64 "\n",
+			regs_req.regs.features, regs_req.regs.fpsr,
+			(uint64_t)regs_req.regs.vregs[0].lo);
+		thaw_target_threads(session_fd, 2000, NULL, 0);
+		return -1;
+	}
 
 	regs_req.regs.regs[19] = saved_x19;
+	regs_req.regs.fpsr = saved_fpsr;
+	regs_req.regs.vregs[0].lo = saved_v0_lo;
 	if (set_target_regs(session_fd, &regs_req) < 0) {
 		thaw_target_threads(session_fd, 2000, NULL, 0);
 		return -1;
@@ -6121,7 +6186,7 @@ static void usage(const char *prog)
 		"  %s threads <pid>\n"
 		"  %s images <pid>\n"
 		"  %s getregs <pid> <tid>\n"
-		"  %s setreg <pid> <tid> <reg> <value_hex>\n"
+		"  %s setreg <pid> <tid> <reg> <value_hex>  (reg: xN|sp|pc|pstate|fpsr|fpcr|vN_lo|vN_hi)\n"
 		"  %s hwadd <pid> <tid> <r|w|rw|x|rx|wx|rwx> <addr_hex> <len> [stop|counter|mmu|flags] [after_hits] [oneshot|autocont|actions]\n"
 		"  %s hwdel <pid> <id>\n"
 		"  %s hwrearm <pid> <id>\n"

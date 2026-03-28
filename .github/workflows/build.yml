@@ -273,6 +273,30 @@ jobs:
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
             -o "$RUNNER_TEMP/lkmdbg_mmu_test" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_mmu_test.c"
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/lkmdbg_example_session_status" \
+            "$GITHUB_WORKSPACE/tools/examples/example_session_status.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c"
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/lkmdbg_example_mem_rw" \
+            "$GITHUB_WORKSPACE/tools/examples/example_mem_rw.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_memory.c"
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/lkmdbg_example_threads_query" \
+            "$GITHUB_WORKSPACE/tools/examples/example_threads_query.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_control.c"
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/lkmdbg_example_regs_fp" \
+            "$GITHUB_WORKSPACE/tools/examples/example_regs_fp.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_control.c"
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/lkmdbg_example_stealth_roundtrip" \
+            "$GITHUB_WORKSPACE/tools/examples/example_stealth_roundtrip.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_control.c"
           mkdir -p "$INITRAMFS_DIR/dev" "$INITRAMFS_DIR/proc" \
             "$INITRAMFS_DIR/sys" "$INITRAMFS_DIR/sys/kernel" \
             "$INITRAMFS_DIR/sys/kernel/debug"
@@ -288,6 +312,16 @@ jobs:
             "$INITRAMFS_DIR/lkmdbg_mem_test"
           install -m 0755 "$RUNNER_TEMP/lkmdbg_mmu_test" \
             "$INITRAMFS_DIR/lkmdbg_mmu_test"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_example_session_status" \
+            "$INITRAMFS_DIR/lkmdbg_example_session_status"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_example_mem_rw" \
+            "$INITRAMFS_DIR/lkmdbg_example_mem_rw"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_example_threads_query" \
+            "$INITRAMFS_DIR/lkmdbg_example_threads_query"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_example_regs_fp" \
+            "$INITRAMFS_DIR/lkmdbg_example_regs_fp"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_example_stealth_roundtrip" \
+            "$INITRAMFS_DIR/lkmdbg_example_stealth_roundtrip"
           cp "$GITHUB_WORKSPACE/lkmdbg.ko" "$INITRAMFS_DIR/lkmdbg.ko"
           (
             cd "$INITRAMFS_DIR"

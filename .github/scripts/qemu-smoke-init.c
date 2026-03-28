@@ -34,6 +34,11 @@
 #define MEM_TEST_TOOL "/lkmdbg_mem_test"
 #define MMU_TEST_TOOL "/lkmdbg_mmu_test"
 #define WATCHPOINT_CTRL_TOOL "/qemu_watchpoint_control"
+#define EXAMPLE_SESSION_STATUS_TOOL "/lkmdbg_example_session_status"
+#define EXAMPLE_MEM_RW_TOOL "/lkmdbg_example_mem_rw"
+#define EXAMPLE_THREADS_QUERY_TOOL "/lkmdbg_example_threads_query"
+#define EXAMPLE_REGS_FP_TOOL "/lkmdbg_example_regs_fp"
+#define EXAMPLE_STEALTH_ROUNDTRIP_TOOL "/lkmdbg_example_stealth_roundtrip"
 #define INPUT_QUERY_BATCH 16U
 #define QEMU_HOOK_SELFTEST_STRESS_REPEATS 5U
 #define QEMU_PROC_VERSION_REPEATS 5U
@@ -961,6 +966,12 @@ int main(void)
 	char *const mem_test_argv[] = { MEM_TEST_TOOL, "selftest", NULL };
 	char *const mmu_test_argv[] = { MMU_TEST_TOOL, "selftest", NULL };
 	char *const watchpoint_ctrl_argv[] = { WATCHPOINT_CTRL_TOOL, NULL };
+	char *const ex_session_status_argv[] = { EXAMPLE_SESSION_STATUS_TOOL, NULL };
+	char *const ex_mem_rw_argv[] = { EXAMPLE_MEM_RW_TOOL, NULL };
+	char *const ex_threads_query_argv[] = { EXAMPLE_THREADS_QUERY_TOOL, NULL };
+	char *const ex_regs_fp_argv[] = { EXAMPLE_REGS_FP_TOOL, NULL };
+	char *const ex_stealth_roundtrip_argv[] = { EXAMPLE_STEALTH_ROUNDTRIP_TOOL,
+						    NULL };
 	int watchpoint_ctrl_status;
 	bool hook_soak_only;
 	unsigned int selftest_stress_repeats;
@@ -1070,15 +1081,20 @@ int main(void)
 			qemu_check(strstr(report_buf,
 					  "report.exposure.debugfs_status=hidden") != NULL,
 				   "missing_report_debugfs_status");
-			qemu_check(strstr(report_buf,
-					  "report.exposure.debugfs_hooks=hidden") != NULL,
-				   "missing_report_debugfs_hooks");
-			qemu_check(strstr(report_buf,
-					  "report.exposure.kallsyms_symbols=") != NULL,
-				   "missing_report_kallsyms_symbols");
-			qemu_run_tool(mem_test_argv);
-			qemu_run_tool(mmu_test_argv);
-			qemu_run_input_smoke();
+				qemu_check(strstr(report_buf,
+						  "report.exposure.debugfs_hooks=hidden") != NULL,
+					   "missing_report_debugfs_hooks");
+				qemu_check(strstr(report_buf,
+						  "report.exposure.kallsyms_symbols=") != NULL,
+					   "missing_report_kallsyms_symbols");
+				qemu_run_tool(ex_session_status_argv);
+				qemu_run_tool(ex_mem_rw_argv);
+				qemu_run_tool(ex_threads_query_argv);
+				qemu_run_tool(ex_regs_fp_argv);
+				qemu_run_tool(ex_stealth_roundtrip_argv);
+				qemu_run_tool(mem_test_argv);
+				qemu_run_tool(mmu_test_argv);
+				qemu_run_input_smoke();
 			qemu_report_user_proc_exposure();
 			printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
 			       qemu_read_status_u64("hwpoint_callback_total="),

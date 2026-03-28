@@ -24,6 +24,7 @@
 #include <asm/syscall.h>
 #include <asm/esr.h>
 #include <asm/pgtable.h>
+#include <asm/processor.h>
 #include <asm/tlbflush.h>
 #include <asm/debug-monitors.h>
 #else
@@ -97,9 +98,16 @@ typedef unsigned int lkmdbg_step_hook_esr_t;
 #define LKMDBG_ARM64_USER_STEP_HOOKS 0
 #endif
 
+static inline void lkmdbg_u128_split(__uint128_t value, u64 *lo, u64 *hi)
+{
+	*lo = (u64)value;
+	*hi = (u64)(value >> 64);
+}
+
 static void lkmdbg_regs_arm64_export_stop(struct lkmdbg_regs_arm64 *dst,
 					  const struct pt_regs *src)
 {
+	const struct user_fpsimd_state *fpsimd;
 	unsigned int i;
 
 	memset(dst, 0, sizeof(*dst));
@@ -108,6 +116,20 @@ static void lkmdbg_regs_arm64_export_stop(struct lkmdbg_regs_arm64 *dst,
 	dst->sp = src->sp;
 	dst->pc = src->pc;
 	dst->pstate = src->pstate;
+
+	fpsimd_preserve_current_state();
+	fpsimd = &current->thread.uw.fpsimd_state;
+	dst->features |= LKMDBG_REGS_ARM64_FEATURE_FP;
+	dst->fpsr = fpsimd->fpsr;
+	dst->fpcr = fpsimd->fpcr;
+	for (i = 0; i < ARRAY_SIZE(dst->vregs); i++) {
+		u64 lo = 0;
+		u64 hi = 0;
+
+		lkmdbg_u128_split(fpsimd->vregs[i], &lo, &hi);
+		dst->vregs[i].lo = lo;
+		dst->vregs[i].hi = hi;
+	}
 }
 #endif
 typedef void (*lkmdbg_for_each_kernel_tracepoint_fn)(
