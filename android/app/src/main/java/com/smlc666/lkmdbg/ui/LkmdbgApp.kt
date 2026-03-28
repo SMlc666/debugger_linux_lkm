@@ -1,5 +1,6 @@
 package com.smlc666.lkmdbg.ui
 
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -69,8 +70,9 @@ private enum class WorkspaceTab(val title: String, val icon: ImageVector) {
 
 @Composable
 fun LkmdbgApp() {
+    val context = LocalContext.current
     val dashboardState = remember { sampleDashboardState() }
-    val sessionController = remember { SessionBridgeController() }
+    val sessionController = remember(context) { SessionBridgeController(context.applicationContext) }
     val coroutineScope = rememberCoroutineScope()
     var selectedTab by remember { mutableStateOf(WorkspaceTab.Session) }
 

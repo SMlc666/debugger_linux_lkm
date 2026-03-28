@@ -1,5 +1,6 @@
 package com.smlc666.lkmdbg.data
 
+import android.content.Context
 import com.smlc666.lkmdbg.shared.BridgeCommand
 import com.smlc666.lkmdbg.shared.BridgeHelloReply
 import com.smlc666.lkmdbg.shared.BridgeOpenSessionReply
@@ -13,15 +14,16 @@ import kotlinx.coroutines.withContext
 import java.io.InputStream
 import java.io.OutputStream
 
-private const val DEFAULT_AGENT_PATH = "/data/local/tmp/lkmdbg-agent"
-
 class PipeAgentClient(
-    private val agentPath: String = DEFAULT_AGENT_PATH,
+    private val context: Context,
 ) {
     private val lock = Any()
     private var process: Process? = null
     private var input: InputStream? = null
     private var output: OutputStream? = null
+
+    val agentPathHint: String
+        get() = BundledAgentInstaller.installedAgentPath(context)
 
     suspend fun connect(): BridgeHelloReply = withContext(Dispatchers.IO) {
         synchronized(lock) {
@@ -123,6 +125,7 @@ class PipeAgentClient(
         if (current != null && current.isAlive)
             return
 
+        val agentPath = BundledAgentInstaller.install(context)
         val started = ProcessBuilder("su", "-c", "$agentPath --stdio").start()
         process = started
         input = started.inputStream

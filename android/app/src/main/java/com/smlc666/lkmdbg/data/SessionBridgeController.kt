@@ -1,5 +1,6 @@
 package com.smlc666.lkmdbg.data
 
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -10,7 +11,7 @@ import java.io.IOException
 
 data class SessionBridgeState(
     val busy: Boolean = false,
-    val agentPath: String = "/data/local/tmp/lkmdbg-agent",
+    val agentPath: String,
     val targetPidInput: String = "",
     val hello: BridgeHelloReply? = null,
     val snapshot: BridgeStatusSnapshot = BridgeStatusSnapshot(
@@ -31,10 +32,16 @@ data class SessionBridgeState(
 )
 
 class SessionBridgeController(
-    private val client: PipeAgentClient = PipeAgentClient(),
+    private val client: PipeAgentClient,
 ) {
-    var state by mutableStateOf(SessionBridgeState())
+    var state by mutableStateOf(
+        SessionBridgeState(
+            agentPath = client.agentPathHint,
+        ),
+    )
         private set
+
+    constructor(context: Context) : this(PipeAgentClient(context))
 
     fun updateTargetPidInput(value: String) {
         state = state.copy(targetPidInput = value.filter { it.isDigit() })
