@@ -2694,6 +2694,7 @@ static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
 	size_t payload_len = strlen(payload) + 1;
 	size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
 	void *fault_src;
+	int attempt;
 	int ret = -1;
 
 	if (!page_size) {
@@ -2728,21 +2729,34 @@ static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
 	req.ops_addr = (uintptr_t)ops;
 	req.op_count = 2;
 
-	errno = 0;
-	if (ioctl(session_fd, LKMDBG_IOC_WRITE_MEM, &req) == 0) {
-		printf("partial WRITE_MEM ioctl success ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
-		       req.ops_done, (uint64_t)req.bytes_done,
-		       ops[0].bytes_done, ops[1].bytes_done);
-	} else {
-		if (errno != EFAULT) {
-			fprintf(stderr,
-				"partial WRITE_MEM errno=%d expected=%d\n",
-				errno, EFAULT);
-			goto out;
+	for (attempt = 0; attempt < 8; attempt++) {
+		errno = 0;
+		if (ioctl(session_fd, LKMDBG_IOC_WRITE_MEM, &req) == 0) {
+			printf("partial WRITE_MEM ioctl success ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
+			       req.ops_done, (uint64_t)req.bytes_done,
+			       ops[0].bytes_done, ops[1].bytes_done);
+		} else {
+			if (errno != EFAULT) {
+				fprintf(stderr,
+					"partial WRITE_MEM errno=%d expected=%d\n",
+					errno, EFAULT);
+				goto out;
+			}
+			printf("partial WRITE_MEM ioctl fault ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
+			       req.ops_done, (uint64_t)req.bytes_done,
+			       ops[0].bytes_done, ops[1].bytes_done);
 		}
-		printf("partial WRITE_MEM ioctl fault ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
-		       req.ops_done, (uint64_t)req.bytes_done,
-		       ops[0].bytes_done, ops[1].bytes_done);
+
+		if (ops[0].bytes_done == payload_len)
+			break;
+		usleep(1000);
+	}
+	if (ops[0].bytes_done != payload_len) {
+		fprintf(stderr,
+			"partial WRITE_MEM no progress after retries ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
+			req.ops_done, (uint64_t)req.bytes_done,
+			ops[0].bytes_done, ops[1].bytes_done);
+		goto out;
 	}
 
 	memset(readback, 0, sizeof(readback));
