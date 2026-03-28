@@ -406,7 +406,6 @@ static int lkmdbg_remote_call_prepare(struct lkmdbg_session *session,
 	return -EOPNOTSUPP;
 #else
 	struct lkmdbg_remote_call_state snapshot;
-	struct lkmdbg_stop_state stop;
 	struct task_struct *task = NULL;
 	struct pt_regs *regs;
 	struct perf_event *event = NULL;
