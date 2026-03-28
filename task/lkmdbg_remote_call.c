@@ -429,9 +429,9 @@ static int lkmdbg_remote_call_prepare(struct lkmdbg_session *session,
 	}
 
 	mutex_lock(&session->lock);
-	stop = session->stop_state;
-	if (!stop.reason || !(stop.flags & LKMDBG_STOP_FLAG_ACTIVE) ||
-	    !(stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
+	if (!session->stop_state.reason ||
+	    !(session->stop_state.flags & LKMDBG_STOP_FLAG_ACTIVE) ||
+	    !(session->stop_state.flags & LKMDBG_STOP_FLAG_FROZEN) ||
 	    lkmdbg_remote_call_phase_active(session->remote_call.phase) ||
 	    session->step_armed) {
 		mutex_unlock(&session->lock);
