@@ -10,6 +10,9 @@ enum lkmdbg_agent_command {
 	LKMDBG_AGENT_CMD_HELLO = 1u,
 	LKMDBG_AGENT_CMD_OPEN_SESSION = 2u,
 	LKMDBG_AGENT_CMD_SET_TARGET = 3u,
+	LKMDBG_AGENT_CMD_QUERY_THREADS = 6u,
+	LKMDBG_AGENT_CMD_GET_REGISTERS = 7u,
+	LKMDBG_AGENT_CMD_POLL_EVENTS = 9u,
 	LKMDBG_AGENT_CMD_STATUS_SNAPSHOT = 10u,
 	LKMDBG_AGENT_CMD_QUERY_PROCESSES = 11u,
 };
@@ -84,6 +87,58 @@ struct __attribute__((packed)) lkmdbg_agent_process_record {
 	char cmdline[128];
 };
 
+struct __attribute__((packed)) lkmdbg_agent_query_threads_reply {
+	int32_t status;
+	uint32_t count;
+	int32_t next_tid;
+	uint32_t done;
+	char message[64];
+};
+
+struct __attribute__((packed)) lkmdbg_agent_thread_record {
+	int32_t tid;
+	int32_t tgid;
+	uint32_t flags;
+	uint32_t reserved0;
+	uint64_t user_pc;
+	uint64_t user_sp;
+	char comm[16];
+};
+
+struct __attribute__((packed)) lkmdbg_agent_thread_request {
+	int32_t tid;
+	uint32_t flags;
+};
+
+struct __attribute__((packed)) lkmdbg_agent_get_registers_reply {
+	int32_t status;
+	int32_t tid;
+	uint32_t flags;
+	uint32_t reserved0;
+	uint64_t regs[31];
+	uint64_t sp;
+	uint64_t pc;
+	uint64_t pstate;
+	uint32_t features;
+	uint32_t fpsr;
+	uint32_t fpcr;
+	uint32_t reserved1;
+	uint64_t v0_lo;
+	uint64_t v0_hi;
+	char message[64];
+};
+
+struct __attribute__((packed)) lkmdbg_agent_poll_events_request {
+	uint32_t timeout_ms;
+	uint32_t max_events;
+};
+
+struct __attribute__((packed)) lkmdbg_agent_poll_events_reply {
+	int32_t status;
+	uint32_t count;
+	char message[64];
+};
+
 static_assert(sizeof(struct lkmdbg_agent_hello_reply) == 80, "hello reply size");
 static_assert(sizeof(struct lkmdbg_agent_open_session_reply) == 80, "open-session reply size");
 static_assert(sizeof(struct lkmdbg_agent_set_target_request) == 8, "set-target request size");
@@ -91,5 +146,11 @@ static_assert(sizeof(struct lkmdbg_agent_set_target_reply) == 72, "set-target re
 static_assert(sizeof(struct lkmdbg_agent_status_snapshot) == 140, "status snapshot size");
 static_assert(sizeof(struct lkmdbg_agent_query_processes_reply) == 72, "query-processes reply size");
 static_assert(sizeof(struct lkmdbg_agent_process_record) == 200, "process record size");
+static_assert(sizeof(struct lkmdbg_agent_query_threads_reply) == 80, "query-threads reply size");
+static_assert(sizeof(struct lkmdbg_agent_thread_record) == 48, "thread record size");
+static_assert(sizeof(struct lkmdbg_agent_thread_request) == 8, "thread request size");
+static_assert(sizeof(struct lkmdbg_agent_get_registers_reply) == 384, "get-registers reply size");
+static_assert(sizeof(struct lkmdbg_agent_poll_events_request) == 8, "poll-events request size");
+static_assert(sizeof(struct lkmdbg_agent_poll_events_reply) == 72, "poll-events reply size");
 
 #endif

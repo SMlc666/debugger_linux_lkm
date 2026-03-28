@@ -5,6 +5,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -352,6 +353,193 @@ static bool handle_query_processes(void)
 			   static_cast<uint32_t>(payload.size()));
 }
 
+static bool handle_query_threads(agent_state *state)
+{
+	lkmdbg_agent_query_threads_reply reply = {};
+	std::vector<char> payload;
+	std::vector<lkmdbg_agent_thread_record> records;
+	int32_t cursor = 0;
+
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(LKMDBG_AGENT_CMD_QUERY_THREADS, &reply, sizeof(reply));
+	}
+
+	for (;;) {
+		lkmdbg_thread_query_request req = {};
+		lkmdbg_thread_entry entries[64] = {};
+
+		req.version = LKMDBG_PROTO_VERSION;
+		req.size = sizeof(req);
+		req.entries_addr = reinterpret_cast<uintptr_t>(entries);
+		req.max_entries = static_cast<uint32_t>(sizeof(entries) / sizeof(entries[0]));
+		req.start_tid = cursor;
+
+		if (ioctl(state->session_fd, LKMDBG_IOC_QUERY_THREADS, &req) < 0) {
+			reply.status = -errno;
+			copy_cstr(reply.message, sizeof(reply.message), "QUERY_THREADS failed");
+			return write_frame(LKMDBG_AGENT_CMD_QUERY_THREADS, &reply, sizeof(reply));
+		}
+
+		for (uint32_t i = 0; i < req.entries_filled; ++i) {
+			lkmdbg_agent_thread_record record = {};
+
+			record.tid = entries[i].tid;
+			record.tgid = entries[i].tgid;
+			record.flags = entries[i].flags;
+			record.user_pc = entries[i].user_pc;
+			record.user_sp = entries[i].user_sp;
+			memcpy(record.comm, entries[i].comm, sizeof(record.comm));
+			records.push_back(record);
+		}
+
+		reply.done = req.done;
+		reply.next_tid = req.next_tid;
+		if (req.done)
+			break;
+		cursor = req.next_tid;
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.count = static_cast<uint32_t>(records.size());
+	copy_cstr(reply.message, sizeof(reply.message), "threads ready");
+	payload.resize(sizeof(reply) + records.size() * sizeof(records[0]));
+	memcpy(payload.data(), &reply, sizeof(reply));
+	if (!records.empty()) {
+		memcpy(payload.data() + sizeof(reply), records.data(),
+		       records.size() * sizeof(records[0]));
+	}
+	return write_frame(LKMDBG_AGENT_CMD_QUERY_THREADS, payload.data(),
+			   static_cast<uint32_t>(payload.size()));
+}
+
+static bool handle_get_registers(agent_state *state, const void *payload, uint32_t payload_size)
+{
+	lkmdbg_agent_get_registers_reply reply = {};
+	lkmdbg_agent_thread_request request = {};
+	lkmdbg_thread_regs_request req = {};
+
+	if (payload_size < sizeof(request)) {
+		reply.status = LKMDBG_AGENT_STATUS_INVALID_PAYLOAD;
+		copy_cstr(reply.message, sizeof(reply.message), "payload too small");
+		return write_frame(LKMDBG_AGENT_CMD_GET_REGISTERS, &reply, sizeof(reply));
+	}
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(LKMDBG_AGENT_CMD_GET_REGISTERS, &reply, sizeof(reply));
+	}
+
+	memcpy(&request, payload, sizeof(request));
+	req.version = LKMDBG_PROTO_VERSION;
+	req.size = sizeof(req);
+	req.tid = request.tid;
+	req.flags = request.flags;
+	if (ioctl(state->session_fd, LKMDBG_IOC_GET_REGS, &req) < 0) {
+		reply.status = -errno;
+		reply.tid = request.tid;
+		copy_cstr(reply.message, sizeof(reply.message), "GET_REGS failed");
+		return write_frame(LKMDBG_AGENT_CMD_GET_REGISTERS, &reply, sizeof(reply));
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.tid = req.tid;
+	reply.flags = req.flags;
+	memcpy(reply.regs, req.regs.regs, sizeof(reply.regs));
+	reply.sp = req.regs.sp;
+	reply.pc = req.regs.pc;
+	reply.pstate = req.regs.pstate;
+	reply.features = req.regs.features;
+	reply.fpsr = req.regs.fpsr;
+	reply.fpcr = req.regs.fpcr;
+	reply.v0_lo = req.regs.vregs[0].lo;
+	reply.v0_hi = req.regs.vregs[0].hi;
+	copy_cstr(reply.message, sizeof(reply.message), "registers ready");
+	return write_frame(LKMDBG_AGENT_CMD_GET_REGISTERS, &reply, sizeof(reply));
+}
+
+static bool handle_poll_events(agent_state *state, const void *payload, uint32_t payload_size)
+{
+	lkmdbg_agent_poll_events_request request = {};
+	lkmdbg_agent_poll_events_reply reply = {};
+	std::vector<lkmdbg_event_record> records;
+	std::vector<char> frame;
+	uint32_t max_events;
+
+	if (payload_size < sizeof(request)) {
+		reply.status = LKMDBG_AGENT_STATUS_INVALID_PAYLOAD;
+		copy_cstr(reply.message, sizeof(reply.message), "payload too small");
+		return write_frame(LKMDBG_AGENT_CMD_POLL_EVENTS, &reply, sizeof(reply));
+	}
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(LKMDBG_AGENT_CMD_POLL_EVENTS, &reply, sizeof(reply));
+	}
+
+	memcpy(&request, payload, sizeof(request));
+	max_events = request.max_events ? request.max_events : 1u;
+	if (max_events > 64u)
+		max_events = 64u;
+
+	for (;;) {
+		pollfd pfd = {
+			.fd = state->session_fd,
+			.events = POLLIN,
+			.revents = 0,
+		};
+		int poll_timeout = records.empty() ? static_cast<int>(request.timeout_ms) : 0;
+		int poll_ret = poll(&pfd, 1, poll_timeout);
+		ssize_t nread;
+		size_t count;
+		size_t remaining;
+
+		if (poll_ret < 0) {
+			reply.status = -errno;
+			copy_cstr(reply.message, sizeof(reply.message), "poll failed");
+			return write_frame(LKMDBG_AGENT_CMD_POLL_EVENTS, &reply, sizeof(reply));
+		}
+		if (!(pfd.revents & POLLIN))
+			break;
+
+		remaining = static_cast<size_t>(max_events) - records.size();
+		std::vector<lkmdbg_event_record> batch(remaining);
+		nread = read(state->session_fd, batch.data(),
+			     batch.size() * sizeof(batch[0]));
+		if (nread < 0) {
+			reply.status = -errno;
+			copy_cstr(reply.message, sizeof(reply.message), "event read failed");
+			return write_frame(LKMDBG_AGENT_CMD_POLL_EVENTS, &reply, sizeof(reply));
+		}
+		if (nread == 0)
+			break;
+		if (nread % static_cast<ssize_t>(sizeof(batch[0])) != 0) {
+			reply.status = LKMDBG_AGENT_STATUS_INTERNAL;
+			copy_cstr(reply.message, sizeof(reply.message), "short event read");
+			return write_frame(LKMDBG_AGENT_CMD_POLL_EVENTS, &reply, sizeof(reply));
+		}
+
+		count = static_cast<size_t>(nread) / sizeof(batch[0]);
+		records.insert(records.end(), batch.begin(), batch.begin() + count);
+		if (records.size() >= max_events)
+			break;
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.count = static_cast<uint32_t>(records.size());
+	copy_cstr(reply.message, sizeof(reply.message),
+		  records.empty() ? "no pending events" : "events ready");
+	frame.resize(sizeof(reply) + records.size() * sizeof(records[0]));
+	memcpy(frame.data(), &reply, sizeof(reply));
+	if (!records.empty()) {
+		memcpy(frame.data() + sizeof(reply), records.data(),
+		       records.size() * sizeof(records[0]));
+	}
+	return write_frame(LKMDBG_AGENT_CMD_POLL_EVENTS, frame.data(),
+			   static_cast<uint32_t>(frame.size()));
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -397,6 +585,24 @@ int main(int argc, char **argv)
 			break;
 		case LKMDBG_AGENT_CMD_SET_TARGET:
 			if (!handle_set_target(&state, payload.data(), remaining)) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_QUERY_THREADS:
+			if (!handle_query_threads(&state)) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_GET_REGISTERS:
+			if (!handle_get_registers(&state, payload.data(), remaining)) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_POLL_EVENTS:
+			if (!handle_poll_events(&state, payload.data(), remaining)) {
 				close_session(&state);
 				return 1;
 			}

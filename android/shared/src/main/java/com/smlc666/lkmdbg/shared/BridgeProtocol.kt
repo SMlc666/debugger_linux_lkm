@@ -18,6 +18,13 @@ object BridgeProtocol {
     const val STATUS_SNAPSHOT_REPLY_SIZE: Int = 140
     const val QUERY_PROCESSES_REPLY_HEADER_SIZE: Int = 72
     const val QUERY_PROCESS_RECORD_SIZE: Int = 200
+    const val QUERY_THREADS_REPLY_HEADER_SIZE: Int = 80
+    const val QUERY_THREAD_RECORD_SIZE: Int = 48
+    const val GET_REGISTERS_REQUEST_SIZE: Int = 8
+    const val GET_REGISTERS_REPLY_SIZE: Int = 384
+    const val POLL_EVENTS_REQUEST_SIZE: Int = 8
+    const val POLL_EVENTS_REPLY_HEADER_SIZE: Int = 72
+    const val POLL_EVENT_RECORD_SIZE: Int = 64
 }
 
 enum class BridgeCommand(val wireId: UInt) {
@@ -105,18 +112,59 @@ data class BridgeProcessListReply(
     val processes: List<BridgeProcessRecord>,
 )
 
-data class DashboardThread(
+data class BridgeThreadRecord(
     val tid: Int,
-    val name: String,
-    val pc: String,
-    val state: String,
+    val tgid: Int,
+    val flags: UInt,
+    val userPc: ULong,
+    val userSp: ULong,
+    val comm: String,
 )
 
-data class DashboardEvent(
-    val title: String,
-    val detail: String,
-    val level: String,
-    val timestamp: String,
+data class BridgeThreadListReply(
+    val status: Int,
+    val count: UInt,
+    val done: Boolean,
+    val nextTid: Int,
+    val message: String,
+    val threads: List<BridgeThreadRecord>,
+)
+
+data class BridgeThreadRegistersReply(
+    val status: Int,
+    val tid: Int,
+    val flags: UInt,
+    val regs: ULongArray,
+    val sp: ULong,
+    val pc: ULong,
+    val pstate: ULong,
+    val features: UInt,
+    val fpsr: UInt,
+    val fpcr: UInt,
+    val v0Lo: ULong,
+    val v0Hi: ULong,
+    val message: String,
+)
+
+data class BridgeEventRecord(
+    val version: UInt,
+    val type: UInt,
+    val size: UInt,
+    val code: UInt,
+    val sessionId: ULong,
+    val seq: ULong,
+    val tgid: Int,
+    val tid: Int,
+    val flags: UInt,
+    val value0: ULong,
+    val value1: ULong,
+)
+
+data class BridgeEventBatchReply(
+    val status: Int,
+    val count: UInt,
+    val message: String,
+    val events: List<BridgeEventRecord>,
 )
 
 object BridgeWireCodec {
@@ -153,6 +201,20 @@ object BridgeWireCodec {
             .order(ByteOrder.LITTLE_ENDIAN)
             .putInt(request.targetPid)
             .putInt(request.targetTid)
+            .array()
+
+    fun encodeThreadRequest(tid: Int, flags: UInt = 0u): ByteArray =
+        ByteBuffer.allocate(BridgeProtocol.GET_REGISTERS_REQUEST_SIZE)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(tid)
+            .putInt(flags.toInt())
+            .array()
+
+    fun encodePollEventsRequest(timeoutMs: Int, maxEvents: Int): ByteArray =
+        ByteBuffer.allocate(BridgeProtocol.POLL_EVENTS_REQUEST_SIZE)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(timeoutMs)
+            .putInt(maxEvents)
             .array()
 
     fun decodeHelloReply(payload: ByteArray): BridgeHelloReply {
@@ -241,6 +303,116 @@ object BridgeWireCodec {
             count = count,
             message = message,
             processes = processes,
+        )
+    }
+
+    fun decodeQueryThreadsReply(payload: ByteArray): BridgeThreadListReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.QUERY_THREADS_REPLY_HEADER_SIZE)
+        val status = buffer.int
+        val count = buffer.int.toUInt()
+        val done = buffer.int != 0
+        val nextTid = buffer.int
+        val message = decodeCString(buffer, 64)
+        val remaining = payload.size - BridgeProtocol.QUERY_THREADS_REPLY_HEADER_SIZE
+        require(remaining >= count.toInt() * BridgeProtocol.QUERY_THREAD_RECORD_SIZE) {
+            "thread payload too small: got=${payload.size} count=$count"
+        }
+
+        val threads = ArrayList<BridgeThreadRecord>(count.toInt())
+        repeat(count.toInt()) {
+            val tid = buffer.int
+            val tgid = buffer.int
+            val flags = buffer.int.toUInt()
+            buffer.int
+            threads += BridgeThreadRecord(
+                tid = tid,
+                tgid = tgid,
+                flags = flags,
+                userPc = buffer.long.toULong(),
+                userSp = buffer.long.toULong(),
+                comm = decodeCString(buffer, 16),
+            )
+        }
+
+        return BridgeThreadListReply(
+            status = status,
+            count = count,
+            done = done,
+            nextTid = nextTid,
+            message = message,
+            threads = threads,
+        )
+    }
+
+    fun decodeGetRegistersReply(payload: ByteArray): BridgeThreadRegistersReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.GET_REGISTERS_REPLY_SIZE)
+        val status = buffer.int
+        val tid = buffer.int
+        val flags = buffer.int.toUInt()
+        buffer.int
+        val regs = ULongArray(31) { buffer.long.toULong() }
+        val sp = buffer.long.toULong()
+        val pc = buffer.long.toULong()
+        val pstate = buffer.long.toULong()
+        val features = buffer.int.toUInt()
+        val fpsr = buffer.int.toUInt()
+        val fpcr = buffer.int.toUInt()
+        buffer.int
+        val v0Lo = buffer.long.toULong()
+        val v0Hi = buffer.long.toULong()
+        val message = decodeCString(buffer, 64)
+        return BridgeThreadRegistersReply(
+            status = status,
+            tid = tid,
+            flags = flags,
+            regs = regs,
+            sp = sp,
+            pc = pc,
+            pstate = pstate,
+            features = features,
+            fpsr = fpsr,
+            fpcr = fpcr,
+            v0Lo = v0Lo,
+            v0Hi = v0Hi,
+            message = message,
+        )
+    }
+
+    fun decodePollEventsReply(payload: ByteArray): BridgeEventBatchReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.POLL_EVENTS_REPLY_HEADER_SIZE)
+        val status = buffer.int
+        val count = buffer.int.toUInt()
+        val message = decodeCString(buffer, 64)
+        val remaining = payload.size - BridgeProtocol.POLL_EVENTS_REPLY_HEADER_SIZE
+        require(remaining >= count.toInt() * BridgeProtocol.POLL_EVENT_RECORD_SIZE) {
+            "event payload too small: got=${payload.size} count=$count"
+        }
+
+        val events = ArrayList<BridgeEventRecord>(count.toInt())
+        repeat(count.toInt()) {
+            events += BridgeEventRecord(
+                version = buffer.int.toUInt(),
+                type = buffer.int.toUInt(),
+                size = buffer.int.toUInt(),
+                code = buffer.int.toUInt(),
+                sessionId = buffer.long.toULong(),
+                seq = buffer.long.toULong(),
+                tgid = buffer.int,
+                tid = buffer.int,
+                flags = buffer.int.toUInt(),
+                value0 = run {
+                    buffer.int
+                    buffer.long.toULong()
+                },
+                value1 = buffer.long.toULong(),
+            )
+        }
+
+        return BridgeEventBatchReply(
+            status = status,
+            count = count,
+            message = message,
+            events = events,
         )
     }
 

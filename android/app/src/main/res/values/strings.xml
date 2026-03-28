@@ -59,12 +59,34 @@
     <string name="memory_panel_subtitle">Fast status cards for the memory toolchain and no-fault workflow health.</string>
     <string name="memory_recent_scan">Recent scan: %1$s</string>
     <string name="thread_panel_title">Thread View</string>
-    <string name="thread_panel_subtitle">Live target thread samples and program counters exposed through the session workflow.</string>
+    <string name="thread_panel_subtitle">Live thread inventory and a register snapshot for the selected target thread.</string>
+    <string name="thread_action_refresh">Refresh threads</string>
+    <string name="thread_empty">No thread snapshot yet. Attach a target and refresh.</string>
+    <string name="thread_error_no_target">No active target. Attach a process first.</string>
+    <string name="thread_message_refreshed">%1$d threads refreshed</string>
+    <string name="thread_message_registers">register snapshot refreshed for tid=%1$d</string>
+    <string name="thread_regs_title">Registers for tid=%1$d</string>
+    <string name="thread_sp_value">sp %1$s</string>
     <string name="thread_pc_value">pc %1$s</string>
+    <string name="thread_pstate_value">pstate %1$s</string>
+    <string name="thread_group_value">tgid %1$d</string>
+    <string name="thread_flags_value">flags %1$s</string>
+    <string name="thread_reg_x0">x0 %1$s</string>
+    <string name="thread_reg_x1">x1 %1$s</string>
+    <string name="thread_reg_x29">x29/fp %1$s</string>
+    <string name="thread_reg_x30">x30/lr %1$s</string>
+    <string name="thread_fp_summary">fp feat=%1$s fpsr=%2$s fpcr=%3$s v0=(%4$s,%5$s)</string>
     <string name="event_panel_title">Event Stream</string>
-    <string name="event_panel_subtitle">Recent debugger-side event summaries for quick situational awareness.</string>
+    <string name="event_panel_subtitle">Recent session-fd events drained directly from the kernel queue.</string>
+    <string name="event_action_refresh">Poll events</string>
+    <string name="event_empty">No pending events in the session queue.</string>
+    <string name="event_error_no_session">No open session. Connect and open a session first.</string>
+    <string name="event_message_refreshed">%1$d events drained from queue</string>
+    <string name="event_detail_template">seq=%1$s tgid=%2$d tid=%3$d code=%4$s flags=%5$s value0=%6$s value1=%7$s</string>
+    <string name="event_received_template">received_at_ms=%1$s</string>
     <string name="process_panel_title">Process Lanes</string>
     <string name="process_panel_subtitle">Root-side process enumeration with local Android classification, filters, and APK icon rendering.</string>
+    <string name="process_action_attach">Attach</string>
     <string name="process_action_refresh">Refresh process list</string>
     <string name="process_filter_all">All</string>
     <string name="process_filter_android">Android apps</string>

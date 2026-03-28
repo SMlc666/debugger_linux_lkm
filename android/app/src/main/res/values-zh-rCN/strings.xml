@@ -59,12 +59,34 @@
     <string name="memory_panel_subtitle">展示内存工具链与 no-fault 工作流健康度的快速状态卡片。</string>
     <string name="memory_recent_scan">最近扫描：%1$s</string>
     <string name="thread_panel_title">线程视图</string>
-    <string name="thread_panel_subtitle">通过 session 工作流呈现的目标线程样本与程序计数器。</string>
+    <string name="thread_panel_subtitle">展示真实线程清单，以及当前选中线程的寄存器快照。</string>
+    <string name="thread_action_refresh">刷新线程</string>
+    <string name="thread_empty">还没有线程快照。请先附加目标并刷新。</string>
+    <string name="thread_error_no_target">当前没有活动目标，请先附加进程。</string>
+    <string name="thread_message_refreshed">已刷新 %1$d 个线程</string>
+    <string name="thread_message_registers">已刷新 tid=%1$d 的寄存器快照</string>
+    <string name="thread_regs_title">tid=%1$d 的寄存器</string>
+    <string name="thread_sp_value">sp %1$s</string>
     <string name="thread_pc_value">pc %1$s</string>
+    <string name="thread_pstate_value">pstate %1$s</string>
+    <string name="thread_group_value">tgid %1$d</string>
+    <string name="thread_flags_value">标志 %1$s</string>
+    <string name="thread_reg_x0">x0 %1$s</string>
+    <string name="thread_reg_x1">x1 %1$s</string>
+    <string name="thread_reg_x29">x29/fp %1$s</string>
+    <string name="thread_reg_x30">x30/lr %1$s</string>
+    <string name="thread_fp_summary">fp feat=%1$s fpsr=%2$s fpcr=%3$s v0=(%4$s,%5$s)</string>
     <string name="event_panel_title">事件流</string>
-    <string name="event_panel_subtitle">近期调试事件摘要，用于快速感知当前状态。</string>
+    <string name="event_panel_subtitle">直接从内核 session 队列排出的近期事件。</string>
+    <string name="event_action_refresh">轮询事件</string>
+    <string name="event_empty">当前 session 队列里没有待处理事件。</string>
+    <string name="event_error_no_session">还没有打开 session，请先连接并打开会话。</string>
+    <string name="event_message_refreshed">已从队列取出 %1$d 个事件</string>
+    <string name="event_detail_template">seq=%1$s tgid=%2$d tid=%3$d code=%4$s flags=%5$s value0=%6$s value1=%7$s</string>
+    <string name="event_received_template">received_at_ms=%1$s</string>
     <string name="process_panel_title">进程泳道</string>
     <string name="process_panel_subtitle">由 root agent 枚举真实进程，并在本地完成 Android 分类、过滤和 APK 图标渲染。</string>
+    <string name="process_action_attach">附加</string>
     <string name="process_action_refresh">刷新进程列表</string>
     <string name="process_filter_all">全部</string>
     <string name="process_filter_android">安卓应用</string>

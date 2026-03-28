@@ -2,6 +2,7 @@ package com.smlc666.lkmdbg.data
 
 import android.content.Context
 import com.smlc666.lkmdbg.shared.BridgeCommand
+import com.smlc666.lkmdbg.shared.BridgeEventBatchReply
 import com.smlc666.lkmdbg.shared.BridgeHelloReply
 import com.smlc666.lkmdbg.shared.BridgeOpenSessionReply
 import com.smlc666.lkmdbg.shared.BridgeProcessListReply
@@ -9,6 +10,8 @@ import com.smlc666.lkmdbg.shared.BridgeSetTargetReply
 import com.smlc666.lkmdbg.shared.BridgeSetTargetRequest
 import com.smlc666.lkmdbg.shared.BridgeStatusCode
 import com.smlc666.lkmdbg.shared.BridgeStatusSnapshot
+import com.smlc666.lkmdbg.shared.BridgeThreadListReply
+import com.smlc666.lkmdbg.shared.BridgeThreadRegistersReply
 import com.smlc666.lkmdbg.shared.BridgeWireCodec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -128,6 +131,77 @@ class PipeAgentClient(
             BridgeWireCodec.decodeQueryProcessesReply(payload)
         }
     }
+
+    suspend fun queryThreads(): BridgeThreadListReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(requireOutputLocked(), BridgeCommand.QueryThreads)
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.QueryThreads.wireId) {
+                return@synchronized BridgeThreadListReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    count = 0u,
+                    done = true,
+                    nextTid = 0,
+                    message = "unexpected query-threads reply command=${header.command}",
+                    threads = emptyList(),
+                )
+            }
+            BridgeWireCodec.decodeQueryThreadsReply(payload)
+        }
+    }
+
+    suspend fun getRegisters(tid: Int): BridgeThreadRegistersReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(
+                requireOutputLocked(),
+                BridgeCommand.GetRegisters,
+                BridgeWireCodec.encodeThreadRequest(tid),
+            )
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.GetRegisters.wireId) {
+                return@synchronized BridgeThreadRegistersReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    tid = tid,
+                    flags = 0u,
+                    regs = ULongArray(31),
+                    sp = 0u,
+                    pc = 0u,
+                    pstate = 0u,
+                    features = 0u,
+                    fpsr = 0u,
+                    fpcr = 0u,
+                    v0Lo = 0u,
+                    v0Hi = 0u,
+                    message = "unexpected get-registers reply command=${header.command}",
+                )
+            }
+            BridgeWireCodec.decodeGetRegistersReply(payload)
+        }
+    }
+
+    suspend fun pollEvents(timeoutMs: Int, maxEvents: Int): BridgeEventBatchReply =
+        withContext(Dispatchers.IO) {
+            synchronized(lock) {
+                ensureProcessLocked()
+                BridgeWireCodec.writeFrame(
+                    requireOutputLocked(),
+                    BridgeCommand.PollEvent,
+                    BridgeWireCodec.encodePollEventsRequest(timeoutMs, maxEvents),
+                )
+                val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+                if (header.command != BridgeCommand.PollEvent.wireId) {
+                    return@synchronized BridgeEventBatchReply(
+                        status = BridgeStatusCode.InvalidHeader.wireValue,
+                        count = 0u,
+                        message = "unexpected poll-events reply command=${header.command}",
+                        events = emptyList(),
+                    )
+                }
+                BridgeWireCodec.decodePollEventsReply(payload)
+            }
+        }
 
     suspend fun close() = withContext(Dispatchers.IO) {
         synchronized(lock) {

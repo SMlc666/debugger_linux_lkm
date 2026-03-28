@@ -2,15 +2,25 @@ package com.smlc666.lkmdbg.data
 
 import android.content.Context
 import com.smlc666.lkmdbg.R
+import com.smlc666.lkmdbg.shared.BridgeEventBatchReply
+import com.smlc666.lkmdbg.shared.BridgeEventRecord
 import com.smlc666.lkmdbg.shared.BridgeHelloReply
 import com.smlc666.lkmdbg.shared.BridgeOpenSessionReply
 import com.smlc666.lkmdbg.shared.BridgeProcessListReply
 import com.smlc666.lkmdbg.shared.BridgeStatusSnapshot
+import com.smlc666.lkmdbg.shared.BridgeThreadListReply
+import com.smlc666.lkmdbg.shared.BridgeThreadRecord
+import com.smlc666.lkmdbg.shared.BridgeThreadRegistersReply
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.io.IOException
+
+data class SessionEventEntry(
+    val record: BridgeEventRecord,
+    val receivedAtMs: Long,
+)
 
 data class SessionBridgeState(
     val busy: Boolean = false,
@@ -34,6 +44,10 @@ data class SessionBridgeState(
     val lastMessage: String,
     val processFilter: ProcessFilter = ProcessFilter.All,
     val processes: List<ResolvedProcessRecord> = emptyList(),
+    val threads: List<BridgeThreadRecord> = emptyList(),
+    val selectedThreadTid: Int? = null,
+    val selectedThreadRegisters: BridgeThreadRegistersReply? = null,
+    val recentEvents: List<SessionEventEntry> = emptyList(),
 )
 
 class SessionBridgeRepository(
@@ -62,50 +76,18 @@ class SessionBridgeRepository(
     }
 
     suspend fun connect() {
-        runOperation(
-            success = { reply: BridgeHelloReply ->
-                _state.update { current ->
-                    current.copy(
-                        hello = reply,
-                        lastMessage = reply.message.ifBlank {
-                            appContext.getString(R.string.session_message_connected)
-                        },
-                    )
-                }
-            },
-            block = client::connect,
-        )
+        runOperation { connectUnsafe() }
     }
 
     suspend fun openSession() {
-        runOperation(
-            success = { reply: BridgeOpenSessionReply ->
-                _state.update { current ->
-                    current.copy(
-                        lastMessage = reply.message.ifBlank {
-                            appContext.getString(R.string.session_message_opened)
-                        },
-                    )
-                }
-            },
-            block = client::openSession,
-        )
+        runOperation {
+            openSessionUnsafe()
+            refreshStatusUnsafe()
+        }
     }
 
     suspend fun refreshStatus() {
-        runOperation(
-            success = { snapshot: BridgeStatusSnapshot ->
-                _state.update { current ->
-                    current.copy(
-                        snapshot = snapshot,
-                        lastMessage = snapshot.message.ifBlank {
-                            appContext.getString(R.string.session_message_refreshed)
-                        },
-                    )
-                }
-            },
-            block = client::statusSnapshot,
-        )
+        runOperation { refreshStatusUnsafe() }
     }
 
     suspend fun attachTarget() {
@@ -117,46 +99,205 @@ class SessionBridgeRepository(
             return
         }
 
-        runOperation(
-            success = { reply ->
-                _state.update { current ->
-                    current.copy(
-                        lastMessage = reply.message.ifBlank {
-                            appContext.getString(R.string.session_message_target_attached, targetPid)
-                        },
-                    )
-                }
-            },
-        ) {
-            client.setTarget(targetPid)
+        runOperation {
+            ensureSessionReadyUnsafe()
+            attachTargetUnsafe(targetPid)
+            refreshThreadsUnsafe()
+            refreshEventsUnsafe(timeoutMs = 0, maxEvents = 16)
         }
-        refreshStatus()
     }
 
     suspend fun refreshProcesses() {
-        runOperation(
-            success = { reply: BridgeProcessListReply ->
-                val resolved = processResolver.resolve(reply.processes)
-                _state.update { current ->
-                    current.copy(
-                        processes = resolved,
-                        lastMessage = reply.message.ifBlank {
-                            appContext.getString(R.string.process_message_refreshed, resolved.size)
-                        },
-                    )
-                }
-            },
-            block = client::queryProcesses,
-        )
+        runOperation {
+            val reply = client.queryProcesses()
+            val resolved = processResolver.resolve(reply.processes)
+            _state.update { current ->
+                current.copy(
+                    processes = resolved,
+                    lastMessage = reply.message.ifBlank {
+                        appContext.getString(R.string.process_message_refreshed, resolved.size)
+                    },
+                )
+            }
+        }
     }
 
-    private suspend fun <T> runOperation(
-        success: (T) -> Unit,
-        block: suspend () -> T,
-    ) {
+    suspend fun refreshThreads() {
+        runOperation {
+            if (!hasActiveTarget()) {
+                clearThreadState()
+                updateMessage(appContext.getString(R.string.thread_error_no_target))
+                return@runOperation
+            }
+            refreshThreadsUnsafe()
+        }
+    }
+
+    suspend fun refreshThreadRegisters(tid: Int) {
+        runOperation {
+            val reply = client.getRegisters(tid)
+            _state.update { current ->
+                current.copy(
+                    selectedThreadTid = tid,
+                    selectedThreadRegisters = reply,
+                    lastMessage = reply.message.ifBlank {
+                        appContext.getString(R.string.thread_message_registers, tid)
+                    },
+                )
+            }
+        }
+    }
+
+    suspend fun refreshEvents(timeoutMs: Int = 0, maxEvents: Int = 16) {
+        runOperation {
+            if (!state.value.snapshot.sessionOpen) {
+                updateMessage(appContext.getString(R.string.event_error_no_session))
+                return@runOperation
+            }
+            refreshEventsUnsafe(timeoutMs, maxEvents)
+        }
+    }
+
+    suspend fun attachProcess(targetPid: Int): Boolean =
+        runOperation {
+            _state.update { current -> current.copy(targetPidInput = targetPid.toString()) }
+            ensureSessionReadyUnsafe()
+            attachTargetUnsafe(targetPid)
+            refreshThreadsUnsafe()
+            refreshEventsUnsafe(timeoutMs = 0, maxEvents = 16)
+            true
+        } ?: false
+
+    private fun hasActiveTarget(): Boolean = state.value.snapshot.targetPid > 0
+
+    private suspend fun ensureSessionReadyUnsafe() {
+        if (state.value.hello == null)
+            connectUnsafe()
+        if (!state.value.snapshot.sessionOpen)
+            openSessionUnsafe()
+        refreshStatusUnsafe()
+    }
+
+    private suspend fun connectUnsafe(): BridgeHelloReply {
+        val reply = client.connect()
+        _state.update { current ->
+            current.copy(
+                hello = reply,
+                lastMessage = reply.message.ifBlank {
+                    appContext.getString(R.string.session_message_connected)
+                },
+            )
+        }
+        return reply
+    }
+
+    private suspend fun openSessionUnsafe(): BridgeOpenSessionReply {
+        val reply = client.openSession()
+        _state.update { current ->
+            current.copy(
+                lastMessage = reply.message.ifBlank {
+                    appContext.getString(R.string.session_message_opened)
+                },
+            )
+        }
+        return reply
+    }
+
+    private suspend fun refreshStatusUnsafe(): BridgeStatusSnapshot {
+        val snapshot = client.statusSnapshot()
+        _state.update { current ->
+            current.copy(
+                snapshot = snapshot,
+                lastMessage = snapshot.message.ifBlank {
+                    appContext.getString(R.string.session_message_refreshed)
+                },
+            )
+        }
+        return snapshot
+    }
+
+    private suspend fun attachTargetUnsafe(targetPid: Int) {
+        val reply = client.setTarget(targetPid)
+        _state.update { current ->
+            current.copy(
+                lastMessage = reply.message.ifBlank {
+                    appContext.getString(R.string.session_message_target_attached, targetPid)
+                },
+            )
+        }
+        refreshStatusUnsafe()
+    }
+
+    private suspend fun refreshThreadsUnsafe(preferredTid: Int? = null) {
+        val reply: BridgeThreadListReply = client.queryThreads()
+        val selectedTid = selectThreadId(reply.threads, preferredTid)
+        val registers = selectedTid?.let {
+            runCatching { client.getRegisters(it) }.getOrNull()
+        }
+        _state.update { current ->
+            current.copy(
+                threads = reply.threads,
+                selectedThreadTid = selectedTid,
+                selectedThreadRegisters = registers,
+                lastMessage = reply.message.ifBlank {
+                    appContext.getString(R.string.thread_message_refreshed, reply.threads.size)
+                },
+            )
+        }
+    }
+
+    private suspend fun refreshEventsUnsafe(timeoutMs: Int, maxEvents: Int) {
+        val reply: BridgeEventBatchReply = client.pollEvents(timeoutMs, maxEvents)
+        val now = System.currentTimeMillis()
+        _state.update { current ->
+            val merged = buildList {
+                reply.events.forEach { add(SessionEventEntry(it, now)) }
+                current.recentEvents.forEach { existing ->
+                    if (none { it.record.seq == existing.record.seq })
+                        add(existing)
+                }
+            }.take(64)
+            current.copy(
+                recentEvents = merged,
+                lastMessage = reply.message.ifBlank {
+                    appContext.getString(R.string.event_message_refreshed, reply.events.size)
+                },
+            )
+        }
+    }
+
+    private fun selectThreadId(
+        threads: List<BridgeThreadRecord>,
+        preferredTid: Int?,
+    ): Int? {
+        if (threads.isEmpty())
+            return null
+        val current = preferredTid
+            ?: state.value.selectedThreadTid
+            ?: state.value.snapshot.targetTid.takeIf { it > 0 }
+        if (current != null && threads.any { it.tid == current })
+            return current
+        return threads.firstOrNull()?.tid
+    }
+
+    private fun clearThreadState() {
+        _state.update { current ->
+            current.copy(
+                threads = emptyList(),
+                selectedThreadTid = null,
+                selectedThreadRegisters = null,
+            )
+        }
+    }
+
+    private fun updateMessage(message: String) {
+        _state.update { current -> current.copy(lastMessage = message) }
+    }
+
+    private suspend fun <T> runOperation(block: suspend () -> T): T? {
         _state.update { current -> current.copy(busy = true) }
         try {
-            success(block())
+            return block()
         } catch (e: IOException) {
             _state.update { current ->
                 current.copy(
@@ -166,6 +307,7 @@ class SessionBridgeRepository(
                     ),
                 )
             }
+            return null
         } catch (e: IllegalStateException) {
             _state.update { current ->
                 current.copy(
@@ -175,6 +317,17 @@ class SessionBridgeRepository(
                     ),
                 )
             }
+            return null
+        } catch (e: RuntimeException) {
+            _state.update { current ->
+                current.copy(
+                    lastMessage = appContext.getString(
+                        R.string.session_error_bridge,
+                        e.message ?: appContext.getString(R.string.session_error_unknown),
+                    ),
+                )
+            }
+            return null
         } finally {
             _state.update { current -> current.copy(busy = false) }
         }

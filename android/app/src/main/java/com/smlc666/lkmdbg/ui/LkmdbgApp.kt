@@ -74,6 +74,17 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onRefreshStatus = { coroutineScope.launch { repository.refreshStatus() } },
                     onAttachTarget = { coroutineScope.launch { repository.attachTarget() } },
                     onRefreshProcesses = { coroutineScope.launch { repository.refreshProcesses() } },
+                    onRefreshThreads = { coroutineScope.launch { repository.refreshThreads() } },
+                    onRefreshEvents = { coroutineScope.launch { repository.refreshEvents() } },
+                    onAttachProcess = { processPid ->
+                        coroutineScope.launch {
+                            if (repository.attachProcess(processPid))
+                                selectedTab = WorkspaceTab.Threads
+                        }
+                    },
+                    onSelectThread = { tid ->
+                        coroutineScope.launch { repository.refreshThreadRegisters(tid) }
+                    },
                     onTargetPidChanged = repository::updateTargetPidInput,
                     onProcessFilterChanged = repository::updateProcessFilter,
                 )
@@ -91,6 +102,17 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onRefreshStatus = { coroutineScope.launch { repository.refreshStatus() } },
                     onAttachTarget = { coroutineScope.launch { repository.attachTarget() } },
                     onRefreshProcesses = { coroutineScope.launch { repository.refreshProcesses() } },
+                    onRefreshThreads = { coroutineScope.launch { repository.refreshThreads() } },
+                    onRefreshEvents = { coroutineScope.launch { repository.refreshEvents() } },
+                    onAttachProcess = { processPid ->
+                        coroutineScope.launch {
+                            if (repository.attachProcess(processPid))
+                                selectedTab = WorkspaceTab.Threads
+                        }
+                    },
+                    onSelectThread = { tid ->
+                        coroutineScope.launch { repository.refreshThreadRegisters(tid) }
+                    },
                     onTargetPidChanged = repository::updateTargetPidInput,
                     onProcessFilterChanged = repository::updateProcessFilter,
                 )
@@ -115,6 +137,10 @@ private fun DashboardContent(
     onRefreshStatus: () -> Unit,
     onAttachTarget: () -> Unit,
     onRefreshProcesses: () -> Unit,
+    onRefreshThreads: () -> Unit,
+    onRefreshEvents: () -> Unit,
+    onAttachProcess: (Int) -> Unit,
+    onSelectThread: (Int) -> Unit,
     onTargetPidChanged: (String) -> Unit,
     onProcessFilterChanged: (ProcessFilter) -> Unit,
     modifier: Modifier = Modifier,
@@ -148,13 +174,20 @@ private fun DashboardContent(
                     )
                 }
                 WorkspaceTab.Memory -> MemoryScreen(dashboardState)
-                WorkspaceTab.Threads -> ThreadScreen(dashboardState)
-                WorkspaceTab.Events -> EventScreen(dashboardState)
+                WorkspaceTab.Threads -> ThreadScreen(
+                    state = sessionState,
+                    onRefreshThreads = onRefreshThreads,
+                    onSelectThread = onSelectThread,
+                )
+                WorkspaceTab.Events -> EventScreen(
+                    state = sessionState,
+                    onRefreshEvents = onRefreshEvents,
+                )
             }
         }
         if (selectedTab == WorkspaceTab.Processes) {
             items(filteredProcesses, key = { "${it.pid}:${it.processName}" }) { process ->
-                ProcessRowCard(process = process)
+                ProcessRowCard(process = process, onAttach = { onAttachProcess(process.pid) })
             }
         }
     }

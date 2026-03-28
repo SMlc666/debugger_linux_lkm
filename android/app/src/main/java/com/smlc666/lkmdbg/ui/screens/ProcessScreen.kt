@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
@@ -81,7 +82,7 @@ internal fun ProcessControlPanel(
 }
 
 @Composable
-internal fun ProcessRowCard(process: ResolvedProcessRecord) {
+internal fun ProcessRowCard(process: ResolvedProcessRecord, onAttach: () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
@@ -126,6 +127,9 @@ internal fun ProcessRowCard(process: ResolvedProcessRecord) {
                         text = stringResource(R.string.process_package_name, packageName),
                         style = MaterialTheme.typography.labelMedium,
                     )
+                }
+                Button(onClick = onAttach) {
+                    Text(stringResource(R.string.process_action_attach))
                 }
             }
         }
