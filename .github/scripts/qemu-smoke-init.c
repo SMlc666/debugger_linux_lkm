@@ -999,6 +999,7 @@ int main(void)
 	char *const ex_perf_baseline_argv[] = { EXAMPLE_PERF_BASELINE_TOOL, NULL };
 	int watchpoint_ctrl_status;
 	int mem_test_status;
+	int perf_baseline_status;
 	bool hook_soak_only;
 	unsigned int selftest_stress_repeats;
 	unsigned int proc_version_repeats;
@@ -1137,7 +1138,14 @@ int main(void)
 				qemu_run_tool(ex_vma_page_query_argv);
 				qemu_run_tool(ex_remote_alloc_rw_argv);
 				qemu_run_tool(ex_phys_translate_read_argv);
-				qemu_run_tool(ex_perf_baseline_argv);
+				perf_baseline_status =
+					qemu_run_tool_status(ex_perf_baseline_argv);
+				if (perf_baseline_status == 0) {
+					printf("LKMDBG_QEMU_PERF_BASELINE_OK\n");
+				} else {
+					printf("LKMDBG_QEMU_PERF_BASELINE_SKIP status=%d\n",
+					       perf_baseline_status);
+				}
 			printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
 			       qemu_read_status_u64("hwpoint_callback_total="),
 			       qemu_read_status_u64("breakpoint_callback_total="),
