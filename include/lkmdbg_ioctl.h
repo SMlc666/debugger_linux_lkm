@@ -24,6 +24,7 @@
 #define LKMDBG_EVENT_TARGET_MMAP 38
 #define LKMDBG_EVENT_TARGET_MUNMAP 39
 #define LKMDBG_EVENT_TARGET_MPROTECT 40
+#define LKMDBG_EVENT_TARGET_SYSCALL_RULE 41
 
 #define LKMDBG_THREAD_COMM_MAX 16
 
@@ -51,6 +52,19 @@
 #define LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_TRACEPOINT 0x00000001U
 #define LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_ENTRY_HOOK 0x00000002U
 #define LKMDBG_SYSCALL_TRACE_FLAG_BACKEND_CONTROL 0x00000004U
+
+#define LKMDBG_SYSCALL_RULE_MODE_OBSERVE 0U
+#define LKMDBG_SYSCALL_RULE_MODE_ENFORCE 1U
+
+#define LKMDBG_SYSCALL_RULE_EVENT_RAW_ONLY 0U
+#define LKMDBG_SYSCALL_RULE_EVENT_RAW_AND_RULE 1U
+#define LKMDBG_SYSCALL_RULE_EVENT_RULE_ONLY 2U
+
+#define LKMDBG_SYSCALL_RULE_ACTION_SET_RETURN 0x00000001U
+#define LKMDBG_SYSCALL_RULE_ACTION_STOP 0x00000002U
+
+#define LKMDBG_SYSCALL_RULE_FLAG_ENABLED 0x00000001U
+#define LKMDBG_SYSCALL_RULE_FLAG_ONESHOT 0x00000002U
 
 #define LKMDBG_STEALTH_FLAG_DEBUGFS_VISIBLE 0x00000001U
 #define LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN 0x00000002U
@@ -794,6 +808,55 @@ struct lkmdbg_syscall_trace_request {
 	__u32 supported_phases;
 };
 
+struct lkmdbg_syscall_rule_entry {
+	__u64 rule_id;
+	__s32 tid;
+	__s32 syscall_nr;
+	__u32 phases;
+	__u32 actions;
+	__u32 flags;
+	__u32 priority;
+	__s64 retval;
+	__u64 hits;
+};
+
+struct lkmdbg_syscall_rule_request {
+	__u32 version;
+	__u32 size;
+	struct lkmdbg_syscall_rule_entry rule;
+};
+
+struct lkmdbg_syscall_rule_handle_request {
+	__u32 version;
+	__u32 size;
+	__u64 rule_id;
+	__u32 flags;
+	__u32 reserved0;
+};
+
+struct lkmdbg_syscall_rule_query_request {
+	__u32 version;
+	__u32 size;
+	__u64 entries_addr;
+	__u32 max_entries;
+	__u32 flags;
+	__u64 start_id;
+	__u32 entries_filled;
+	__u32 done;
+	__u64 next_id;
+};
+
+struct lkmdbg_syscall_rule_config_request {
+	__u32 version;
+	__u32 size;
+	__u32 mode;
+	__u32 event_policy;
+	__u32 flags;
+	__u32 reserved0;
+	__u32 supported_mode_mask;
+	__u32 supported_event_policy_mask;
+};
+
 struct lkmdbg_stealth_request {
 	__u32 version;
 	__u32 size;
@@ -963,5 +1026,15 @@ struct lkmdbg_input_event {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x39, struct lkmdbg_event_config_request)
 #define LKMDBG_IOC_GET_EVENT_CONFIG \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x3A, struct lkmdbg_event_config_request)
+#define LKMDBG_IOC_SET_SYSCALL_RULE_CONFIG \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x3B, struct lkmdbg_syscall_rule_config_request)
+#define LKMDBG_IOC_GET_SYSCALL_RULE_CONFIG \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x3C, struct lkmdbg_syscall_rule_config_request)
+#define LKMDBG_IOC_UPSERT_SYSCALL_RULE \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x3D, struct lkmdbg_syscall_rule_request)
+#define LKMDBG_IOC_REMOVE_SYSCALL_RULE \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x3E, struct lkmdbg_syscall_rule_handle_request)
+#define LKMDBG_IOC_QUERY_SYSCALL_RULES \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x3F, struct lkmdbg_syscall_rule_query_request)
 
 #endif

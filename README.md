@@ -55,6 +55,7 @@ Build the user-space bootstrap test tool:
 cc -O2 -Wall -Wextra -o tools/lkmdbg_open_session tools/lkmdbg_open_session.c tools/driver/bridge_c.c
 cc -O2 -Wall -Wextra -o tools/lkmdbg_stealth_ctl tools/lkmdbg_stealth_ctl.c
 cc -O2 -Wall -Wextra -pthread -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c tools/driver/bridge_c.c tools/driver/bridge_events.c tools/driver/bridge_memory.c tools/driver/bridge_control.c
+cc -O2 -Wall -Wextra -o tools/lkmdbg_sysrule_ctl tools/lkmdbg_sysrule_ctl.c tools/driver/bridge_c.c tools/driver/bridge_control.c
 cc -O2 -Wall -Wextra -o tools/examples/example_session_status tools/examples/example_session_status.c tools/driver/bridge_c.c
 cc -O2 -Wall -Wextra -o tools/examples/example_mem_rw tools/examples/example_mem_rw.c tools/driver/bridge_c.c tools/driver/bridge_memory.c
 cc -O2 -Wall -Wextra -o tools/examples/example_threads_query tools/examples/example_threads_query.c tools/driver/bridge_c.c tools/driver/bridge_control.c
@@ -63,6 +64,15 @@ cc -O2 -Wall -Wextra -o tools/examples/example_stealth_roundtrip tools/examples/
 ```
 
 `tools/examples/` now provides one-file runnable examples for core session-fd flows and is executed in QEMU smoke CI.
+
+`tools/lkmdbg_sysrule_ctl` provides fast syscall rule config and CRUD helpers:
+
+```bash
+sudo ./tools/lkmdbg_mem_test sysset <pid> event+control enter
+sudo ./tools/lkmdbg_sysrule_ctl cfg <pid> enforce raw+rule
+sudo ./tools/lkmdbg_sysrule_ctl add <pid> -1 setret -1
+sudo ./tools/lkmdbg_sysrule_ctl list <pid>
+```
 
 User-space driver code is split under `tools/driver/`:
 

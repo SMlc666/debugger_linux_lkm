@@ -243,6 +243,11 @@ struct lkmdbg_session {
 	u32 syscall_trace_mode;
 	u32 syscall_trace_phases;
 	bool syscall_trace_hook_fallback;
+	struct list_head syscall_rules;
+	u64 next_syscall_rule_id;
+	u32 syscall_rule_mode;
+	u32 syscall_rule_event_policy;
+	u32 syscall_rule_count;
 	pid_t step_tgid;
 	pid_t step_tid;
 	bool step_armed;
@@ -439,6 +444,16 @@ long lkmdbg_set_signal_config(struct lkmdbg_session *session, void __user *argp)
 long lkmdbg_get_signal_config(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_get_syscall_trace(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_set_syscall_rule_config(struct lkmdbg_session *session,
+				    void __user *argp);
+long lkmdbg_get_syscall_rule_config(struct lkmdbg_session *session,
+				    void __user *argp);
+long lkmdbg_upsert_syscall_rule(struct lkmdbg_session *session,
+				void __user *argp);
+long lkmdbg_remove_syscall_rule(struct lkmdbg_session *session,
+				void __user *argp);
+long lkmdbg_query_syscall_rules(struct lkmdbg_session *session,
+				void __user *argp);
 long lkmdbg_resolve_syscall(struct lkmdbg_session *session, void __user *argp);
 int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
 				 bool nr_rewrite_supported, bool *skip_out,

@@ -19,7 +19,13 @@
 static LIST_HEAD(lkmdbg_session_list);
 static DEFINE_SPINLOCK(lkmdbg_session_list_lock);
 #define LKMDBG_SESSION_READ_BATCH 16U
+#define LKMDBG_SYSCALL_RULE_MAX_ENTRIES 128U
 static void lkmdbg_session_stop_workfn(struct work_struct *work);
+
+struct lkmdbg_syscall_rule {
+	struct list_head node;
+	struct lkmdbg_syscall_rule_entry entry;
+};
 
 static bool lkmdbg_session_owner_active(pid_t owner_tgid)
 {
@@ -101,6 +107,7 @@ static void lkmdbg_session_supported_event_mask(u64 *mask_words)
 	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_MMAP);
 	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_MUNMAP);
 	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_MPROTECT);
+	lkmdbg_event_mask_set(mask_words, LKMDBG_EVENT_TARGET_SYSCALL_RULE);
 }
 
 static bool lkmdbg_session_event_type_enabled(const struct lkmdbg_session *session,
@@ -673,6 +680,111 @@ static bool lkmdbg_session_syscall_trace_matches(
 	return true;
 }
 
+static bool lkmdbg_syscall_rule_mode_valid(u32 mode)
+{
+	return mode == LKMDBG_SYSCALL_RULE_MODE_OBSERVE ||
+	       mode == LKMDBG_SYSCALL_RULE_MODE_ENFORCE;
+}
+
+static bool lkmdbg_syscall_rule_event_policy_valid(u32 event_policy)
+{
+	return event_policy == LKMDBG_SYSCALL_RULE_EVENT_RAW_ONLY ||
+	       event_policy == LKMDBG_SYSCALL_RULE_EVENT_RAW_AND_RULE ||
+	       event_policy == LKMDBG_SYSCALL_RULE_EVENT_RULE_ONLY;
+}
+
+static u32 lkmdbg_syscall_rule_supported_mode_mask(void)
+{
+	return (1U << LKMDBG_SYSCALL_RULE_MODE_OBSERVE) |
+	       (1U << LKMDBG_SYSCALL_RULE_MODE_ENFORCE);
+}
+
+static u32 lkmdbg_syscall_rule_supported_event_policy_mask(void)
+{
+	return (1U << LKMDBG_SYSCALL_RULE_EVENT_RAW_ONLY) |
+	       (1U << LKMDBG_SYSCALL_RULE_EVENT_RAW_AND_RULE) |
+	       (1U << LKMDBG_SYSCALL_RULE_EVENT_RULE_ONLY);
+}
+
+static bool lkmdbg_session_syscall_rule_emit_raw(const struct lkmdbg_session *session)
+{
+	return READ_ONCE(session->syscall_rule_event_policy) !=
+	       LKMDBG_SYSCALL_RULE_EVENT_RULE_ONLY;
+}
+
+static bool lkmdbg_session_syscall_rule_emit_result(
+	const struct lkmdbg_session *session)
+{
+	return READ_ONCE(session->syscall_rule_event_policy) !=
+	       LKMDBG_SYSCALL_RULE_EVENT_RAW_ONLY;
+}
+
+static struct lkmdbg_syscall_rule *
+lkmdbg_find_syscall_rule_locked(struct lkmdbg_session *session, u64 rule_id)
+{
+	struct lkmdbg_syscall_rule *rule;
+
+	list_for_each_entry(rule, &session->syscall_rules, node) {
+		if (rule->entry.rule_id == rule_id)
+			return rule;
+	}
+
+	return NULL;
+}
+
+static void lkmdbg_release_syscall_rules_locked(struct lkmdbg_session *session)
+{
+	struct lkmdbg_syscall_rule *rule;
+	struct lkmdbg_syscall_rule *tmp;
+
+	list_for_each_entry_safe(rule, tmp, &session->syscall_rules, node) {
+		list_del_init(&rule->node);
+		kfree(rule);
+	}
+	session->syscall_rule_count = 0;
+	session->next_syscall_rule_id = 0;
+}
+
+static bool lkmdbg_session_syscall_rule_entry_matches(
+	const struct lkmdbg_syscall_rule_entry *entry, pid_t tid, s32 syscall_nr,
+	u32 phase)
+{
+	if (!(entry->flags & LKMDBG_SYSCALL_RULE_FLAG_ENABLED))
+		return false;
+	if (!(entry->phases & phase))
+		return false;
+	if (entry->tid > 0 && entry->tid != tid)
+		return false;
+	if (entry->syscall_nr >= 0 && entry->syscall_nr != syscall_nr)
+		return false;
+	return true;
+}
+
+static bool lkmdbg_session_pick_syscall_rule_locked(
+	struct lkmdbg_session *session, pid_t tid, s32 syscall_nr, u32 phase,
+	struct lkmdbg_syscall_rule **rule_out)
+{
+	struct lkmdbg_syscall_rule *rule;
+	struct lkmdbg_syscall_rule *best = NULL;
+
+	list_for_each_entry(rule, &session->syscall_rules, node) {
+		if (!lkmdbg_session_syscall_rule_entry_matches(&rule->entry, tid,
+							      syscall_nr, phase))
+			continue;
+		if (!best || rule->entry.priority > best->entry.priority ||
+		    (rule->entry.priority == best->entry.priority &&
+		     rule->entry.rule_id < best->entry.rule_id))
+			best = rule;
+	}
+
+	if (!best)
+		return false;
+
+	if (rule_out)
+		*rule_out = best;
+	return true;
+}
+
 void lkmdbg_session_broadcast_signal_event(pid_t target_tgid, u32 sig,
 					   pid_t tid, u32 flags,
 					   u64 siginfo_code, int result)
@@ -749,7 +861,8 @@ void lkmdbg_session_broadcast_syscall_event(
 							  syscall_nr, &mode))
 			continue;
 
-		if (mode & LKMDBG_SYSCALL_TRACE_MODE_EVENT) {
+		if ((mode & LKMDBG_SYSCALL_TRACE_MODE_EVENT) &&
+		    lkmdbg_session_syscall_rule_emit_raw(session)) {
 			spin_lock_irqsave(&session->event_lock, session_irqflags);
 			lkmdbg_session_queue_event_locked(
 				session, LKMDBG_EVENT_TARGET_SYSCALL, 0,
@@ -795,9 +908,18 @@ int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
 	struct lkmdbg_session *candidate;
 	struct lkmdbg_session *session = NULL;
 	struct lkmdbg_syscall_control_state snapshot;
+	struct lkmdbg_syscall_rule *rule = NULL;
 	struct lkmdbg_regs_arm64 stop_regs;
 	unsigned long irqflags;
 	s32 syscall_nr;
+	u32 requested_actions = 0;
+	u32 applied_actions = 0;
+	u64 rule_id = 0;
+	bool matched_rule = false;
+	bool emit_rule_event = false;
+	bool request_rule_stop = false;
+	bool control_match = false;
+	bool rule_candidate = false;
 	bool skip = false;
 	s64 retval = 0;
 	int ret;
@@ -812,8 +934,15 @@ int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
 	list_for_each_entry(candidate, &lkmdbg_session_list, node) {
 		if (READ_ONCE(candidate->target_tgid) != current->tgid)
 			continue;
-		if (!lkmdbg_session_syscall_control_matches(candidate, current->pid,
-							    syscall_nr))
+		control_match = lkmdbg_session_syscall_control_matches(
+			candidate, current->pid, syscall_nr);
+		rule_candidate =
+			READ_ONCE(candidate->syscall_rule_count) > 0 &&
+			(READ_ONCE(candidate->syscall_trace_mode) &
+			 LKMDBG_SYSCALL_TRACE_MODE_CONTROL) &&
+			(READ_ONCE(candidate->syscall_trace_phases) &
+			 LKMDBG_SYSCALL_TRACE_PHASE_ENTER);
+		if (!control_match && !rule_candidate)
 			continue;
 		atomic_inc(&candidate->async_refs);
 		session = candidate;
@@ -828,9 +957,68 @@ int lkmdbg_control_syscall_entry(struct pt_regs *regs, s32 *syscall_nr_io,
 
 	mutex_lock(&session->lock);
 	if (session->closing || session->target_tgid != current->tgid ||
-	    (session->stop_state.flags & LKMDBG_STOP_FLAG_ACTIVE) ||
-	    session->stop_work_pending || session->freezer ||
-	    session->syscall_control.active) {
+	    session->freezer) {
+		mutex_unlock(&session->lock);
+		lkmdbg_session_async_put(session);
+		return 0;
+	}
+
+	if (session->syscall_rule_count > 0) {
+		matched_rule = lkmdbg_session_pick_syscall_rule_locked(
+			session, current->pid, syscall_nr,
+			LKMDBG_SYSCALL_TRACE_PHASE_ENTER, &rule);
+		if (matched_rule) {
+			requested_actions = rule->entry.actions;
+			rule_id = rule->entry.rule_id;
+			rule->entry.hits++;
+
+			if (session->syscall_rule_mode ==
+			    LKMDBG_SYSCALL_RULE_MODE_ENFORCE) {
+				applied_actions = requested_actions;
+				if (requested_actions &
+				    LKMDBG_SYSCALL_RULE_ACTION_SET_RETURN) {
+					skip = true;
+					retval = rule->entry.retval;
+					regs->regs[0] = (u64)retval;
+				}
+				if (requested_actions &
+				    LKMDBG_SYSCALL_RULE_ACTION_STOP)
+					request_rule_stop = true;
+			}
+
+			if (rule->entry.flags & LKMDBG_SYSCALL_RULE_FLAG_ONESHOT)
+				rule->entry.flags &=
+					~LKMDBG_SYSCALL_RULE_FLAG_ENABLED;
+		}
+
+		emit_rule_event =
+			matched_rule && lkmdbg_session_syscall_rule_emit_result(session);
+		mutex_unlock(&session->lock);
+
+		if (emit_rule_event)
+			lkmdbg_session_queue_event_ex(
+				session, LKMDBG_EVENT_TARGET_SYSCALL_RULE,
+				applied_actions, current->tgid, current->pid,
+				LKMDBG_SYSCALL_TRACE_PHASE_ENTER,
+				(u64)(u32)syscall_nr, rule_id);
+
+		if (request_rule_stop) {
+			(void)lkmdbg_session_request_async_stop(
+				session, LKMDBG_STOP_REASON_SYSCALL, current->tgid,
+				current->pid, LKMDBG_SYSCALL_TRACE_PHASE_ENTER, 0,
+				(u64)(u32)syscall_nr, rule_id, &stop_regs);
+		}
+
+		lkmdbg_session_async_put(session);
+		if (skip_out)
+			*skip_out = skip;
+		if (retval_out)
+			*retval_out = retval;
+		return 0;
+	}
+
+	if ((session->stop_state.flags & LKMDBG_STOP_FLAG_ACTIVE) ||
+	    session->stop_work_pending || session->syscall_control.active) {
 		mutex_unlock(&session->lock);
 		lkmdbg_session_async_put(session);
 		return 0;
@@ -1016,6 +1204,270 @@ static int lkmdbg_validate_syscall_resolve_request(
 	if (req->action == LKMDBG_SYSCALL_RESOLVE_ACTION_ALLOW &&
 	    (req->syscall_nr != -1 || req->retval))
 		return -EINVAL;
+	return 0;
+}
+
+static int lkmdbg_validate_syscall_rule_config_request(
+	struct lkmdbg_syscall_rule_config_request *req)
+{
+	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
+		return -EINVAL;
+	if (!lkmdbg_syscall_rule_mode_valid(req->mode))
+		return -EINVAL;
+	if (!lkmdbg_syscall_rule_event_policy_valid(req->event_policy))
+		return -EINVAL;
+	if (req->flags)
+		return -EINVAL;
+	return 0;
+}
+
+long lkmdbg_set_syscall_rule_config(struct lkmdbg_session *session,
+				    void __user *argp)
+{
+	struct lkmdbg_syscall_rule_config_request req;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	if (lkmdbg_validate_syscall_rule_config_request(&req))
+		return -EINVAL;
+
+	mutex_lock(&session->lock);
+	session->syscall_rule_mode = req.mode;
+	session->syscall_rule_event_policy = req.event_policy;
+	mutex_unlock(&session->lock);
+
+	req.supported_mode_mask = lkmdbg_syscall_rule_supported_mode_mask();
+	req.supported_event_policy_mask =
+		lkmdbg_syscall_rule_supported_event_policy_mask();
+
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
+}
+
+long lkmdbg_get_syscall_rule_config(struct lkmdbg_session *session,
+				    void __user *argp)
+{
+	struct lkmdbg_syscall_rule_config_request req;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	if (req.version != LKMDBG_PROTO_VERSION || req.size != sizeof(req) ||
+	    req.flags)
+		return -EINVAL;
+
+	mutex_lock(&session->lock);
+	req.mode = session->syscall_rule_mode;
+	req.event_policy = session->syscall_rule_event_policy;
+	mutex_unlock(&session->lock);
+
+	req.supported_mode_mask = lkmdbg_syscall_rule_supported_mode_mask();
+	req.supported_event_policy_mask =
+		lkmdbg_syscall_rule_supported_event_policy_mask();
+
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
+}
+
+static int lkmdbg_validate_syscall_rule_request(
+	struct lkmdbg_syscall_rule_request *req)
+{
+	u32 valid_actions = LKMDBG_SYSCALL_RULE_ACTION_SET_RETURN |
+			    LKMDBG_SYSCALL_RULE_ACTION_STOP;
+	u32 valid_flags = LKMDBG_SYSCALL_RULE_FLAG_ENABLED |
+			  LKMDBG_SYSCALL_RULE_FLAG_ONESHOT;
+
+	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
+		return -EINVAL;
+	if (req->rule.tid < 0 || req->rule.syscall_nr < -1)
+		return -EINVAL;
+	if (!req->rule.phases ||
+	    (req->rule.phases & ~LKMDBG_SYSCALL_TRACE_PHASE_ENTER))
+		return -EINVAL;
+	if (req->rule.actions & ~valid_actions)
+		return -EINVAL;
+	if (req->rule.flags & ~valid_flags)
+		return -EINVAL;
+	return 0;
+}
+
+long lkmdbg_upsert_syscall_rule(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_syscall_rule_request req;
+	struct lkmdbg_syscall_rule *rule = NULL;
+	struct lkmdbg_syscall_rule *new_rule = NULL;
+	struct lkmdbg_syscall_rule_entry old_entry;
+	long ret = 0;
+	bool is_new = false;
+
+	memset(&old_entry, 0, sizeof(old_entry));
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	ret = lkmdbg_validate_syscall_rule_request(&req);
+	if (ret)
+		return ret;
+
+	if (!req.rule.rule_id) {
+		new_rule = kzalloc(sizeof(*new_rule), GFP_KERNEL);
+		if (!new_rule)
+			return -ENOMEM;
+	}
+
+	mutex_lock(&session->lock);
+	if (!(session->syscall_trace_mode & LKMDBG_SYSCALL_TRACE_MODE_CONTROL) ||
+	    !(session->syscall_trace_phases & LKMDBG_SYSCALL_TRACE_PHASE_ENTER)) {
+		ret = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+
+	if (req.rule.rule_id) {
+		rule = lkmdbg_find_syscall_rule_locked(session, req.rule.rule_id);
+		if (!rule) {
+			ret = -ENOENT;
+			goto out_unlock;
+		}
+		old_entry = rule->entry;
+	} else {
+		if (session->syscall_rule_count >= LKMDBG_SYSCALL_RULE_MAX_ENTRIES) {
+			ret = -E2BIG;
+			goto out_unlock;
+		}
+		rule = new_rule;
+		new_rule = NULL;
+		session->next_syscall_rule_id++;
+		if (!session->next_syscall_rule_id)
+			session->next_syscall_rule_id++;
+		rule->entry.rule_id = session->next_syscall_rule_id;
+		list_add_tail(&rule->node, &session->syscall_rules);
+		session->syscall_rule_count++;
+		is_new = true;
+	}
+
+	req.rule.rule_id = rule->entry.rule_id;
+	req.rule.phases = LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
+	if (!req.rule.flags && is_new)
+		req.rule.flags = LKMDBG_SYSCALL_RULE_FLAG_ENABLED;
+	req.rule.hits = is_new ? 0 : old_entry.hits;
+	rule->entry = req.rule;
+	mutex_unlock(&session->lock);
+
+	kfree(new_rule);
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
+
+out_unlock:
+	mutex_unlock(&session->lock);
+	kfree(new_rule);
+	return ret;
+}
+
+static int lkmdbg_validate_syscall_rule_handle_request(
+	struct lkmdbg_syscall_rule_handle_request *req)
+{
+	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
+		return -EINVAL;
+	if (!req->rule_id || req->flags)
+		return -EINVAL;
+	return 0;
+}
+
+long lkmdbg_remove_syscall_rule(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_syscall_rule_handle_request req;
+	struct lkmdbg_syscall_rule *rule;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	if (lkmdbg_validate_syscall_rule_handle_request(&req))
+		return -EINVAL;
+
+	mutex_lock(&session->lock);
+	rule = lkmdbg_find_syscall_rule_locked(session, req.rule_id);
+	if (!rule) {
+		mutex_unlock(&session->lock);
+		return -ENOENT;
+	}
+	list_del_init(&rule->node);
+	if (session->syscall_rule_count > 0)
+		session->syscall_rule_count--;
+	mutex_unlock(&session->lock);
+
+	kfree(rule);
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
+	return 0;
+}
+
+static int lkmdbg_validate_syscall_rule_query_request(
+	struct lkmdbg_syscall_rule_query_request *req)
+{
+	if (req->version != LKMDBG_PROTO_VERSION || req->size != sizeof(*req))
+		return -EINVAL;
+	if (!req->entries_addr || !req->max_entries ||
+	    req->max_entries > LKMDBG_SYSCALL_RULE_MAX_ENTRIES)
+		return -EINVAL;
+	if (req->flags)
+		return -EINVAL;
+	return 0;
+}
+
+long lkmdbg_query_syscall_rules(struct lkmdbg_session *session, void __user *argp)
+{
+	struct lkmdbg_syscall_rule_query_request req;
+	struct lkmdbg_syscall_rule_entry *entries;
+	struct lkmdbg_syscall_rule *rule;
+	u32 filled = 0;
+	bool done = true;
+	u64 next_id = 0;
+
+	if (copy_from_user(&req, argp, sizeof(req)))
+		return -EFAULT;
+
+	if (lkmdbg_validate_syscall_rule_query_request(&req))
+		return -EINVAL;
+
+	entries = kcalloc(req.max_entries, sizeof(*entries), GFP_KERNEL);
+	if (!entries)
+		return -ENOMEM;
+
+	mutex_lock(&session->lock);
+	list_for_each_entry(rule, &session->syscall_rules, node) {
+		if (rule->entry.rule_id < req.start_id)
+			continue;
+		if (filled >= req.max_entries) {
+			done = false;
+			next_id = rule->entry.rule_id;
+			break;
+		}
+		entries[filled++] = rule->entry;
+	}
+	mutex_unlock(&session->lock);
+
+	req.entries_filled = filled;
+	req.done = done ? 1U : 0U;
+	req.next_id = done ? 0 : next_id;
+
+	if (copy_to_user(u64_to_user_ptr(req.entries_addr), entries,
+			 sizeof(*entries) * filled)) {
+		kfree(entries);
+		return -EFAULT;
+	}
+
+	kfree(entries);
+	if (copy_to_user(argp, &req, sizeof(req)))
+		return -EFAULT;
+
 	return 0;
 }
 
@@ -1228,6 +1680,9 @@ static int lkmdbg_session_release(struct inode *inode, struct file *file)
 	lkmdbg_remote_call_release(session);
 	lkmdbg_thread_ctrl_release(session);
 	lkmdbg_session_freeze_release(session);
+	mutex_lock(&session->lock);
+	lkmdbg_release_syscall_rules_locked(session);
+	mutex_unlock(&session->lock);
 	wait_event(session->async_waitq, atomic_read(&session->async_refs) == 0);
 	owner_tgid = session->owner_tgid;
 	if (!lkmdbg_session_owner_active(owner_tgid))
@@ -1409,6 +1864,16 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_set_syscall_trace(session, argp);
 	case LKMDBG_IOC_GET_SYSCALL_TRACE:
 		return lkmdbg_get_syscall_trace(session, argp);
+	case LKMDBG_IOC_SET_SYSCALL_RULE_CONFIG:
+		return lkmdbg_set_syscall_rule_config(session, argp);
+	case LKMDBG_IOC_GET_SYSCALL_RULE_CONFIG:
+		return lkmdbg_get_syscall_rule_config(session, argp);
+	case LKMDBG_IOC_UPSERT_SYSCALL_RULE:
+		return lkmdbg_upsert_syscall_rule(session, argp);
+	case LKMDBG_IOC_REMOVE_SYSCALL_RULE:
+		return lkmdbg_remove_syscall_rule(session, argp);
+	case LKMDBG_IOC_QUERY_SYSCALL_RULES:
+		return lkmdbg_query_syscall_rules(session, argp);
 	case LKMDBG_IOC_RESOLVE_SYSCALL:
 		return lkmdbg_resolve_syscall(session, argp);
 	case LKMDBG_IOC_SET_STEALTH:
@@ -1503,10 +1968,13 @@ int lkmdbg_open_session(void __user *argp)
 	INIT_LIST_HEAD(&session->remote_maps);
 	INIT_LIST_HEAD(&session->remote_allocs);
 	INIT_LIST_HEAD(&session->input_channels);
+	INIT_LIST_HEAD(&session->syscall_rules);
 	INIT_WORK(&session->stop_work, lkmdbg_session_stop_workfn);
 	atomic_set(&session->async_refs, 0);
 	session->owner_tgid = current->tgid;
 	session->syscall_trace_nr = -1;
+	session->syscall_rule_mode = LKMDBG_SYSCALL_RULE_MODE_ENFORCE;
+	session->syscall_rule_event_policy = LKMDBG_SYSCALL_RULE_EVENT_RAW_AND_RULE;
 	session->remote_call.session = session;
 	lkmdbg_session_supported_event_mask(session->event_mask_words);
 	lkmdbg_session_reset_syscall_control_locked(session);

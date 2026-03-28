@@ -77,6 +77,18 @@ int set_syscall_trace(int session_fd, pid_t tid, int syscall_nr, uint32_t mode,
 		      struct lkmdbg_syscall_trace_request *reply_out);
 int get_syscall_trace(int session_fd,
 		      struct lkmdbg_syscall_trace_request *reply_out);
+int set_syscall_rule_config(int session_fd, uint32_t mode, uint32_t event_policy,
+			    struct lkmdbg_syscall_rule_config_request *reply_out);
+int get_syscall_rule_config(int session_fd,
+			    struct lkmdbg_syscall_rule_config_request *reply_out);
+int upsert_syscall_rule(int session_fd,
+			const struct lkmdbg_syscall_rule_entry *entry_in,
+			struct lkmdbg_syscall_rule_request *reply_out);
+int remove_syscall_rule(int session_fd, uint64_t rule_id);
+int query_syscall_rules(int session_fd, uint64_t start_id,
+			struct lkmdbg_syscall_rule_entry *entries,
+			uint32_t max_entries,
+			struct lkmdbg_syscall_rule_query_request *reply_out);
 int resolve_syscall(int session_fd, uint64_t stop_cookie, uint32_t action,
 		    int syscall_nr, const uint64_t *args, int64_t retval,
 		    struct lkmdbg_syscall_resolve_request *reply_out);

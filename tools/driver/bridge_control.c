@@ -486,6 +486,114 @@ int get_syscall_trace(int session_fd,
 	return 0;
 }
 
+int set_syscall_rule_config(int session_fd, uint32_t mode, uint32_t event_policy,
+			    struct lkmdbg_syscall_rule_config_request *reply_out)
+{
+	struct lkmdbg_syscall_rule_config_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.mode = mode,
+		.event_policy = event_policy,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_SET_SYSCALL_RULE_CONFIG, &req) < 0) {
+		lkmdbg_log_errorf("SET_SYSCALL_RULE_CONFIG failed: %s",
+				  strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+
+	return 0;
+}
+
+int get_syscall_rule_config(int session_fd,
+			    struct lkmdbg_syscall_rule_config_request *reply_out)
+{
+	struct lkmdbg_syscall_rule_config_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_GET_SYSCALL_RULE_CONFIG, &req) < 0) {
+		lkmdbg_log_errorf("GET_SYSCALL_RULE_CONFIG failed: %s",
+				  strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+
+	return 0;
+}
+
+int upsert_syscall_rule(int session_fd,
+			const struct lkmdbg_syscall_rule_entry *entry_in,
+			struct lkmdbg_syscall_rule_request *reply_out)
+{
+	struct lkmdbg_syscall_rule_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+	};
+
+	if (entry_in)
+		req.rule = *entry_in;
+
+	if (ioctl(session_fd, LKMDBG_IOC_UPSERT_SYSCALL_RULE, &req) < 0) {
+		lkmdbg_log_errorf("UPSERT_SYSCALL_RULE failed: %s",
+				  strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+
+	return 0;
+}
+
+int remove_syscall_rule(int session_fd, uint64_t rule_id)
+{
+	struct lkmdbg_syscall_rule_handle_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.rule_id = rule_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_SYSCALL_RULE, &req) < 0) {
+		lkmdbg_log_errorf("REMOVE_SYSCALL_RULE failed: %s",
+				  strerror(errno));
+		return -1;
+	}
+
+	return 0;
+}
+
+int query_syscall_rules(int session_fd, uint64_t start_id,
+			struct lkmdbg_syscall_rule_entry *entries,
+			uint32_t max_entries,
+			struct lkmdbg_syscall_rule_query_request *reply_out)
+{
+	struct lkmdbg_syscall_rule_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = max_entries,
+		.start_id = start_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_SYSCALL_RULES, &req) < 0) {
+		lkmdbg_log_errorf("QUERY_SYSCALL_RULES failed: %s",
+				  strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+
+	return 0;
+}
+
 int resolve_syscall(int session_fd, uint64_t stop_cookie, uint32_t action,
 		    int syscall_nr, const uint64_t *args, int64_t retval,
 		    struct lkmdbg_syscall_resolve_request *reply_out)

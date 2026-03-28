@@ -3000,6 +3000,12 @@ long lkmdbg_set_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 
 #ifdef CONFIG_ARM64
 	mutex_lock(&session->lock);
+	if (session->syscall_rule_count > 0 &&
+	    (!(req.mode & LKMDBG_SYSCALL_TRACE_MODE_CONTROL) ||
+	     !(req.phases & LKMDBG_SYSCALL_TRACE_PHASE_ENTER))) {
+		mutex_unlock(&session->lock);
+		return -EBUSY;
+	}
 	old_need = session->syscall_trace_hook_fallback;
 	mutex_unlock(&session->lock);
 
