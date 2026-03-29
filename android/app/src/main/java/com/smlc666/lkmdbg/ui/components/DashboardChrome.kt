@@ -191,10 +191,12 @@ internal fun MetricCard(title: String, value: String, modifier: Modifier = Modif
 internal fun PanelCard(
     title: String,
     subtitle: String,
+    modifier: Modifier = Modifier,
     titleIconRes: Int? = null,
     content: @Composable () -> Unit,
 ) {
     Card(
+        modifier = modifier,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
         ),

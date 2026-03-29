@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -82,8 +83,14 @@ internal fun OverlayWorkspace(
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val landscape = maxWidth > maxHeight
-            val surfaceModifier = if (landscape) {
+            val wideLayout = maxWidth >= 840.dp || maxWidth > maxHeight
+            val tabletLayout = maxWidth >= 1100.dp
+            val surfaceModifier = if (tabletLayout) {
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 56.dp, vertical = 18.dp)
+                    .widthIn(max = 1280.dp)
+            } else if (wideLayout) {
                 Modifier
                     .fillMaxSize()
                     .padding(horizontal = 20.dp, vertical = 10.dp)
@@ -91,33 +98,50 @@ internal fun OverlayWorkspace(
                 Modifier.fillMaxSize()
             }
 
-            Surface(
-                modifier = surfaceModifier,
-                shape = RoundedCornerShape(if (landscape) 30.dp else 24.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-                tonalElevation = 18.dp,
-                shadowElevation = 18.dp,
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)),
+                Surface(
+                    modifier = surfaceModifier,
+                    shape = RoundedCornerShape(if (wideLayout) 30.dp else 24.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                    tonalElevation = 18.dp,
+                    shadowElevation = 18.dp,
                 ) {
-                    ExpandedOverlayHeader(
-                        transport = sessionState.snapshot.transport,
-                        targetPid = sessionState.snapshot.targetPid,
-                        targetTid = sessionState.snapshot.targetTid,
-                        sessionId = sessionState.snapshot.sessionId,
-                        landscape = landscape,
-                        onCollapse = onCollapse,
-                        onClose = onClose,
-                    )
-                    if (landscape) {
-                        Row(modifier = Modifier.fillMaxSize()) {
-                            WorkspaceRail(
-                                selectedTab = selectedTab,
-                                onSelect = { selectedTab = it },
-                            )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)),
+                    ) {
+                        ExpandedOverlayHeader(
+                            transport = sessionState.snapshot.transport,
+                            targetPid = sessionState.snapshot.targetPid,
+                            targetTid = sessionState.snapshot.targetTid,
+                            sessionId = sessionState.snapshot.sessionId,
+                            landscape = wideLayout,
+                            onCollapse = onCollapse,
+                            onClose = onClose,
+                        )
+                        if (wideLayout) {
+                            Row(modifier = Modifier.fillMaxSize()) {
+                                WorkspaceRail(
+                                    selectedTab = selectedTab,
+                                    onSelect = { selectedTab = it },
+                                )
+                                WorkspaceContent(
+                                    dashboardState = dashboardState,
+                                    sessionState = sessionState,
+                                    selectedTab = selectedTab,
+                                    onSelectTab = { selectedTab = it },
+                                    actions = actions,
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+                                    showStatusStrip = false,
+                                    showWorkspaceBar = false,
+                                )
+                            }
+                        } else {
                             WorkspaceContent(
                                 dashboardState = dashboardState,
                                 sessionState = sessionState,
@@ -125,22 +149,10 @@ internal fun OverlayWorkspace(
                                 onSelectTab = { selectedTab = it },
                                 actions = actions,
                                 modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                                 showStatusStrip = false,
-                                showWorkspaceBar = false,
                             )
                         }
-                    } else {
-                        WorkspaceContent(
-                            dashboardState = dashboardState,
-                            sessionState = sessionState,
-                            selectedTab = selectedTab,
-                            onSelectTab = { selectedTab = it },
-                            actions = actions,
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
-                            showStatusStrip = false,
-                        )
                     }
                 }
             }

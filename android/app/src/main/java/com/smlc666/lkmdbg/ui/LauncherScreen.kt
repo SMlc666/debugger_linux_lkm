@@ -2,11 +2,14 @@ package com.smlc666.lkmdbg.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,7 +31,7 @@ internal fun LauncherScreen(
 ) {
     val context = LocalContext.current
 
-    Column(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(
@@ -40,25 +43,56 @@ internal fun LauncherScreen(
                     ),
                 ),
             )
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+            .padding(if (maxWidth >= 840.dp) 28.dp else 20.dp),
     ) {
-        PanelCard(
-            title = context.getString(R.string.launcher_panel_title),
-            subtitle = context.getString(R.string.launcher_panel_subtitle),
-            titleIconRes = R.drawable.ic_lkmdbg_terminal,
-        ) {
-            Text(
-                text = context.getString(R.string.launcher_panel_body),
-                style = MaterialTheme.typography.bodyLarge,
-            )
+        val wideLayout = maxWidth >= 840.dp
+
+        if (wideLayout) {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                ) {
+                    LauncherIntroCard()
+                    OverlayControlCard()
+                }
+                LauncherStatusCard(
+                    dashboardState = dashboardState,
+                    sessionState = sessionState,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                LauncherIntroCard()
+                OverlayControlCard()
+                LauncherStatusCard(
+                    dashboardState = dashboardState,
+                    sessionState = sessionState,
+                )
+            }
         }
+    }
+}
 
-        OverlayControlCard()
+@Composable
+private fun LauncherIntroCard() {
+    val context = LocalContext.current
 
-        LauncherStatusCard(
-            dashboardState = dashboardState,
-            sessionState = sessionState,
+    PanelCard(
+        title = context.getString(R.string.launcher_panel_title),
+        subtitle = context.getString(R.string.launcher_panel_subtitle),
+        titleIconRes = R.drawable.ic_lkmdbg_terminal,
+    ) {
+        Text(
+            text = context.getString(R.string.launcher_panel_body),
+            style = MaterialTheme.typography.bodyLarge,
         )
     }
 }
@@ -67,6 +101,7 @@ internal fun LauncherScreen(
 private fun LauncherStatusCard(
     dashboardState: DashboardState,
     sessionState: SessionBridgeState,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
 
@@ -74,6 +109,7 @@ private fun LauncherStatusCard(
         title = context.getString(R.string.launcher_status_title),
         subtitle = context.getString(R.string.launcher_status_subtitle),
         titleIconRes = R.drawable.ic_lkmdbg_cpu,
+        modifier = modifier,
     ) {
         Text(
             text = context.getString(R.string.session_last_message, sessionState.lastMessage),
