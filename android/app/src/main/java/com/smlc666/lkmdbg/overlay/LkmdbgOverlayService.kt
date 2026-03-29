@@ -82,8 +82,8 @@ class LkmdbgOverlayService : LifecycleService() {
                     OverlayWorkspace(
                         repository = repository,
                         expanded = expanded,
-                        onExpand = { setExpanded(true) },
-                        onCollapse = { setExpanded(false) },
+                        onExpand = { updateExpandedState(true) },
+                        onCollapse = { updateExpandedState(false) },
                         onMoveBallBy = { dx, dy -> moveCollapsedBall(dx, dy) },
                         onClose = { stopSelf() },
                     )
@@ -108,7 +108,7 @@ class LkmdbgOverlayService : LifecycleService() {
         windowManager.updateViewLayout(view, params)
     }
 
-    private fun setExpanded(nextExpanded: Boolean) {
+    private fun updateExpandedState(nextExpanded: Boolean) {
         if (expanded == nextExpanded)
             return
         expanded = nextExpanded
