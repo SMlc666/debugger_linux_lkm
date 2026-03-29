@@ -19,7 +19,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import java.io.BufferedOutputStream
+import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
+import java.io.RandomAccessFile
 
 data class SessionEventEntry(
     val record: BridgeEventRecord,
@@ -33,8 +37,25 @@ data class MemorySearchUiState(
     val valueType: MemorySearchValueType = MemorySearchValueType.Int32,
     val refineMode: MemorySearchRefineMode = MemorySearchRefineMode.Exact,
     val regionPreset: MemoryRegionPreset = MemoryRegionPreset.All,
+    val snapshotReady: Boolean = false,
     val summary: String = "",
     val results: List<MemorySearchResult> = emptyList(),
+)
+
+private data class MemorySearchSnapshotSegment(
+    val startAddr: ULong,
+    val endAddr: ULong,
+    val fileOffset: Long,
+    val length: Int,
+)
+
+private data class MemorySearchSnapshot(
+    val targetPid: Int,
+    val regionPreset: MemoryRegionPreset,
+    val file: File,
+    val rangeCount: Int,
+    val totalBytes: ULong,
+    val segments: List<MemorySearchSnapshotSegment>,
 )
 
 data class SessionBridgeState(
@@ -81,6 +102,7 @@ class SessionBridgeRepository(
     companion object {
         private const val MEMORY_BROWSER_PAGE_SIZE: UInt = 256u
         private const val MEMORY_ROW_BYTES = 16
+        private const val MEMORY_SEARCH_SNAPSHOT_CHUNK_SIZE: UInt = 256u * 1024u
     }
 
     private val appContext = context.applicationContext
@@ -100,6 +122,7 @@ class SessionBridgeRepository(
             lastMessage = appContext.getString(R.string.session_message_idle),
         ),
     )
+    private var memorySearchSnapshot: MemorySearchSnapshot? = null
 
     val state: StateFlow<SessionBridgeState> = _state.asStateFlow()
 
@@ -148,7 +171,11 @@ class SessionBridgeRepository(
     fun updateMemorySearchValueType(valueType: MemorySearchValueType) {
         _state.update { current ->
             current.copy(
-                memorySearch = current.memorySearch.copy(valueType = valueType),
+                memorySearch = current.memorySearch.copy(
+                    valueType = valueType,
+                    summary = "",
+                    results = emptyList(),
+                ),
             )
         }
     }
@@ -156,15 +183,24 @@ class SessionBridgeRepository(
     fun updateMemorySearchRefineMode(refineMode: MemorySearchRefineMode) {
         _state.update { current ->
             current.copy(
-                memorySearch = current.memorySearch.copy(refineMode = refineMode),
+                memorySearch = current.memorySearch.copy(
+                    refineMode = refineMode,
+                    summary = "",
+                    results = emptyList(),
+                ),
             )
         }
     }
 
     fun updateMemoryRegionPreset(regionPreset: MemoryRegionPreset) {
+        discardMemorySearchSnapshot()
         _state.update { current ->
             current.copy(
-                memorySearch = current.memorySearch.copy(regionPreset = regionPreset),
+                memorySearch = current.memorySearch.copy(
+                    regionPreset = regionPreset,
+                    summary = "",
+                    results = emptyList(),
+                ),
             )
         }
     }
@@ -286,6 +322,12 @@ class SessionBridgeRepository(
                 refreshVmasUnsafe()
 
             val search = state.value.memorySearch
+            if (search.refineMode != MemorySearchRefineMode.Exact) {
+                captureMemorySearchSnapshotUnsafe(search.regionPreset, search.valueType)
+                return@runOperation
+            }
+
+            discardMemorySearchSnapshot()
             val outcome = searchEngine.search(
                 vmas = state.value.vmas,
                 preset = search.regionPreset,
@@ -301,6 +343,7 @@ class SessionBridgeRepository(
             _state.update { current ->
                 current.copy(
                     memorySearch = current.memorySearch.copy(
+                        snapshotReady = false,
                         summary = summary,
                         results = outcome.results,
                     ),
@@ -317,14 +360,40 @@ class SessionBridgeRepository(
                 return@runOperation
             }
             val currentResults = state.value.memorySearch.results
-            if (currentResults.isEmpty()) {
-                updateMessage(appContext.getString(R.string.memory_search_refine_empty))
-                return@runOperation
-            }
             if (state.value.vmas.isEmpty())
                 refreshVmasUnsafe()
 
             val search = state.value.memorySearch
+            if (currentResults.isEmpty()) {
+                if (search.refineMode != MemorySearchRefineMode.Exact &&
+                    search.snapshotReady
+                ) {
+                    val outcome = refineMemorySearchSnapshotUnsafe(
+                        search.regionPreset,
+                        search.valueType,
+                        search.refineMode,
+                    )
+                    val summary = appContext.getString(
+                        R.string.memory_search_fuzzy_summary,
+                        outcome.results.size,
+                        outcome.searchedVmaCount,
+                        outcome.scannedBytes.toString(),
+                    )
+                    _state.update { current ->
+                        current.copy(
+                            memorySearch = current.memorySearch.copy(
+                                summary = summary,
+                                results = outcome.results,
+                            ),
+                            lastMessage = summary,
+                        )
+                    }
+                    return@runOperation
+                }
+                updateMessage(appContext.getString(R.string.memory_search_refine_empty))
+                return@runOperation
+            }
+
             val outcome = searchEngine.refine(
                 vmas = state.value.vmas,
                 sourceResults = currentResults,
@@ -670,9 +739,15 @@ class SessionBridgeRepository(
     }
 
     private suspend fun attachTargetUnsafe(targetPid: Int) {
+        discardMemorySearchSnapshot()
         val reply = client.setTarget(targetPid)
         _state.update { current ->
             current.copy(
+                memorySearch = current.memorySearch.copy(
+                    snapshotReady = false,
+                    summary = "",
+                    results = emptyList(),
+                ),
                 lastMessage = reply.message.ifBlank {
                     appContext.getString(R.string.session_message_target_attached, targetPid)
                 },
@@ -841,6 +916,282 @@ class SessionBridgeRepository(
             add(MemoryScalarValue("i64", scalarInt64(scalarBytes, remaining) ?: "n/a"))
             add(MemoryScalarValue("f32", scalarFloat32(scalarBytes, remaining) ?: "n/a"))
             add(MemoryScalarValue("f64", scalarFloat64(scalarBytes, remaining) ?: "n/a"))
+        }
+    }
+
+    private suspend fun captureMemorySearchSnapshotUnsafe(
+        regionPreset: MemoryRegionPreset,
+        valueType: MemorySearchValueType,
+    ) {
+        if (!supportsUnknownInitial(valueType)) {
+            updateMessage(appContext.getString(R.string.memory_search_fuzzy_requires_numeric))
+            return
+        }
+
+        val matchingVmas = state.value.vmas.filter(regionPreset::matches)
+        if (matchingVmas.isEmpty()) {
+            updateMessage(appContext.getString(R.string.memory_ranges_empty))
+            return
+        }
+
+        discardMemorySearchSnapshot()
+
+        val snapshotFile = File.createTempFile("lkmdbg-search-", ".bin", appContext.cacheDir)
+        val segments = ArrayList<MemorySearchSnapshotSegment>()
+        var totalBytes = 0uL
+        var fileOffset = 0L
+
+        try {
+            BufferedOutputStream(FileOutputStream(snapshotFile)).use { output ->
+                matchingVmas.forEach { vma ->
+                    var cursor = vma.startAddr
+                    while (cursor < vma.endAddr) {
+                        val remaining = vma.endAddr - cursor
+                        val requestSize = minOf(
+                            remaining,
+                            MEMORY_SEARCH_SNAPSHOT_CHUNK_SIZE.toULong(),
+                        ).toUInt()
+                        val reply = client.readMemory(cursor, requestSize)
+                        if (reply.status != 0) {
+                            throw IllegalStateException(
+                                reply.message.ifBlank { "snapshot read failed status=${reply.status}" },
+                            )
+                        }
+                        val bytesDone = reply.bytesDone.toInt()
+                        if (bytesDone <= 0)
+                            break
+                        val chunk = reply.data.copyOf(bytesDone)
+                        output.write(chunk)
+                        segments += MemorySearchSnapshotSegment(
+                            startAddr = cursor,
+                            endAddr = cursor + bytesDone.toUInt().toULong(),
+                            fileOffset = fileOffset,
+                            length = bytesDone,
+                        )
+                        fileOffset += bytesDone.toLong()
+                        totalBytes += bytesDone.toULong()
+                        cursor += bytesDone.toUInt().toULong()
+                    }
+                }
+            }
+
+            memorySearchSnapshot = MemorySearchSnapshot(
+                targetPid = state.value.snapshot.targetPid,
+                regionPreset = regionPreset,
+                file = snapshotFile,
+                rangeCount = matchingVmas.size,
+                totalBytes = totalBytes,
+                segments = segments,
+            )
+            val summary = appContext.getString(
+                R.string.memory_search_snapshot_captured,
+                matchingVmas.size,
+                totalBytes.toString(),
+            )
+            _state.update { current ->
+                current.copy(
+                    memorySearch = current.memorySearch.copy(
+                        snapshotReady = true,
+                        summary = summary,
+                        results = emptyList(),
+                    ),
+                    lastMessage = summary,
+                )
+            }
+        } catch (t: Throwable) {
+            snapshotFile.delete()
+            memorySearchSnapshot = null
+            throw t
+        }
+    }
+
+    private suspend fun refineMemorySearchSnapshotUnsafe(
+        regionPreset: MemoryRegionPreset,
+        valueType: MemorySearchValueType,
+        refineMode: MemorySearchRefineMode,
+    ): MemorySearchOutcome {
+        val snapshot = memorySearchSnapshot
+            ?: throw IllegalStateException(appContext.getString(R.string.memory_search_snapshot_missing))
+        if (snapshot.targetPid != state.value.snapshot.targetPid ||
+            snapshot.regionPreset != regionPreset
+        ) {
+            discardMemorySearchSnapshot()
+            throw IllegalStateException(appContext.getString(R.string.memory_search_snapshot_missing))
+        }
+        if (!supportsUnknownInitial(valueType)) {
+            throw IllegalStateException(appContext.getString(R.string.memory_search_fuzzy_requires_numeric))
+        }
+
+        val width = unknownInitialWidth(valueType)
+        val results = ArrayList<MemorySearchResult>(128)
+        var scannedBytes = 0uL
+
+        RandomAccessFile(snapshot.file, "r").use { input ->
+            snapshot.segments.forEach { segment ->
+                val reply = client.readMemory(segment.startAddr, segment.length.toUInt())
+                if (reply.status != 0) {
+                    throw IllegalStateException(
+                        reply.message.ifBlank { "snapshot refine read failed status=${reply.status}" },
+                    )
+                }
+                val bytesDone = minOf(reply.bytesDone.toInt(), segment.length)
+                if (bytesDone < width)
+                    return@forEach
+
+                val previous = ByteArray(bytesDone)
+                input.seek(segment.fileOffset)
+                input.readFully(previous)
+                val current = reply.data.copyOf(bytesDone)
+                scannedBytes += bytesDone.toULong()
+
+                var offset = 0
+                while (offset + width <= bytesDone && results.size < 512) {
+                    val previousValue = previous.copyOfRange(offset, offset + width)
+                    val currentValue = current.copyOfRange(offset, offset + width)
+                    if (matchesUnknownInitialRefine(
+                            valueType,
+                            refineMode,
+                            previousValue,
+                            currentValue,
+                        )
+                    ) {
+                        val previewEnd = minOf(bytesDone, offset + 16)
+                        results += buildSnapshotSearchResult(
+                            address = segment.startAddr + offset.toUInt().toULong(),
+                            regionStart = segment.startAddr,
+                            regionEnd = segment.endAddr,
+                            preview = current.copyOfRange(offset, previewEnd),
+                            matchSize = width,
+                            valueType = valueType,
+                        )
+                    }
+                    offset += width
+                }
+            }
+        }
+
+        return MemorySearchOutcome(
+            searchedVmaCount = snapshot.rangeCount,
+            scannedBytes = scannedBytes,
+            results = results,
+        )
+    }
+
+    private fun buildSnapshotSearchResult(
+        address: ULong,
+        regionStart: ULong,
+        regionEnd: ULong,
+        preview: ByteArray,
+        matchSize: Int,
+        valueType: MemorySearchValueType,
+    ): MemorySearchResult {
+        val region = state.value.vmas.firstOrNull { address >= it.startAddr && address < it.endAddr }
+        val regionName = region?.name?.ifBlank {
+            "${hex64(region.startAddr)} - ${hex64(region.endAddr)}"
+        } ?: "${hex64(regionStart)} - ${hex64(regionEnd)}"
+        return MemorySearchResult(
+            address = address,
+            regionName = regionName,
+            regionStart = regionStart,
+            regionEnd = regionEnd,
+            matchSize = matchSize,
+            previewBytes = preview.copyOf(),
+            previewHex = preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
+            valueSummary = describeSearchPreview(valueType, preview, matchSize),
+        )
+    }
+
+    private fun supportsUnknownInitial(valueType: MemorySearchValueType): Boolean =
+        when (valueType) {
+            MemorySearchValueType.Int32,
+            MemorySearchValueType.Int64,
+            MemorySearchValueType.Float32,
+            MemorySearchValueType.Float64 -> true
+
+            MemorySearchValueType.HexBytes,
+            MemorySearchValueType.Ascii -> false
+        }
+
+    private fun unknownInitialWidth(valueType: MemorySearchValueType): Int =
+        when (valueType) {
+            MemorySearchValueType.Int32, MemorySearchValueType.Float32 -> 4
+            MemorySearchValueType.Int64, MemorySearchValueType.Float64 -> 8
+            MemorySearchValueType.HexBytes, MemorySearchValueType.Ascii ->
+                throw IllegalArgumentException("unknown initial unsupported for variable-width types")
+        }
+
+    private fun matchesUnknownInitialRefine(
+        valueType: MemorySearchValueType,
+        refineMode: MemorySearchRefineMode,
+        previous: ByteArray,
+        current: ByteArray,
+    ): Boolean = when (refineMode) {
+        MemorySearchRefineMode.Exact -> false
+        MemorySearchRefineMode.Changed -> !current.contentEquals(previous)
+        MemorySearchRefineMode.Unchanged -> current.contentEquals(previous)
+        MemorySearchRefineMode.Increased -> compareNumericSearchValue(valueType, current, previous) > 0
+        MemorySearchRefineMode.Decreased -> compareNumericSearchValue(valueType, current, previous) < 0
+    }
+
+    private fun compareNumericSearchValue(
+        valueType: MemorySearchValueType,
+        current: ByteArray,
+        previous: ByteArray,
+    ): Int = when (valueType) {
+        MemorySearchValueType.Int32 ->
+            scalarInt32Bits(current, current.size)!!.compareTo(scalarInt32Bits(previous, previous.size)!!)
+
+        MemorySearchValueType.Int64 ->
+            scalarInt64Bits(current, current.size)!!.compareTo(scalarInt64Bits(previous, previous.size)!!)
+
+        MemorySearchValueType.Float32 ->
+            Float.fromBits(scalarInt32Bits(current, current.size)!!)
+                .compareTo(Float.fromBits(scalarInt32Bits(previous, previous.size)!!))
+
+        MemorySearchValueType.Float64 ->
+            Double.fromBits(scalarInt64Bits(current, current.size)!!)
+                .compareTo(Double.fromBits(scalarInt64Bits(previous, previous.size)!!))
+
+        MemorySearchValueType.HexBytes, MemorySearchValueType.Ascii ->
+            throw IllegalArgumentException("numeric compare requires numeric value type")
+    }
+
+    private fun describeSearchPreview(
+        valueType: MemorySearchValueType,
+        preview: ByteArray,
+        matchSize: Int,
+    ): String {
+        val slice = preview.copyOf(minOf(matchSize, preview.size))
+        return when (valueType) {
+            MemorySearchValueType.Int32 ->
+                scalarInt32(slice, slice.size) ?: preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+            MemorySearchValueType.Int64 ->
+                scalarInt64(slice, slice.size) ?: preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+            MemorySearchValueType.Float32 ->
+                scalarFloat32(slice, slice.size) ?: preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+            MemorySearchValueType.Float64 ->
+                scalarFloat64(slice, slice.size) ?: preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+            MemorySearchValueType.HexBytes ->
+                preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+            MemorySearchValueType.Ascii ->
+                preview.decodeToString()
+        }
+    }
+
+    private fun discardMemorySearchSnapshot() {
+        memorySearchSnapshot?.file?.delete()
+        memorySearchSnapshot = null
+        _state.update { current ->
+            current.copy(
+                memorySearch = current.memorySearch.copy(
+                    snapshotReady = false,
+                ),
+            )
         }
     }
 

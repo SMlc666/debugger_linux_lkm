@@ -271,7 +271,8 @@ internal fun MemoryScreen(
                 }
                 FilledTonalButton(
                     onClick = onRefineMemory,
-                    enabled = !state.busy && state.memorySearch.results.isNotEmpty(),
+                    enabled = !state.busy &&
+                        (state.memorySearch.results.isNotEmpty() || state.memorySearch.snapshotReady),
                 ) {
                     Text(stringResource(R.string.memory_action_refine))
                 }

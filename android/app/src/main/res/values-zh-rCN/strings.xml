@@ -104,7 +104,11 @@
     <string name="memory_search_query_placeholder">42、3.14、7f 45 4c 46、hello</string>
     <string name="memory_search_summary">%1$d 个命中，覆盖 %2$d 个区域，扫描 %3$s 字节</string>
     <string name="memory_search_refine_summary">精炼后 %1$d / %2$d 个命中，重读 %3$s 字节</string>
+    <string name="memory_search_fuzzy_summary">基于快照在 %2$d 个区域得到 %1$d 个命中，重读 %3$s 字节</string>
     <string name="memory_search_refine_empty">当前没有可精炼的旧命中，请先做一次搜索。</string>
+    <string name="memory_search_snapshot_captured">已在 %1$d 个区域抓取模糊基线，保存 %2$s 字节</string>
+    <string name="memory_search_snapshot_missing">当前没有模糊搜索基线，请先点击搜索抓取。</string>
+    <string name="memory_search_fuzzy_requires_numeric">未知初值模糊搜索当前只支持 int32、int64、float 和 double。</string>
     <string name="memory_search_results_empty">还没有搜索结果。先选择类型和区域，再开始搜索。</string>
     <string name="memory_search_type_int32">int32</string>
     <string name="memory_search_type_int64">int64</string>
