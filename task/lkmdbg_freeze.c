@@ -12,9 +12,6 @@
 #define LKMDBG_FREEZE_DEFAULT_TIMEOUT_MS 1000U
 #define LKMDBG_TASK_WORK_NOTIFY_RESUME 1U
 
-typedef int (*lkmdbg_task_work_add_fn)(struct task_struct *task,
-				       struct callback_head *work,
-				       unsigned int notify);
 typedef struct callback_head *(*lkmdbg_task_work_cancel_match_fn)(
 	struct task_struct *task,
 	bool (*match)(struct callback_head *cb, void *data), void *data);
@@ -114,13 +111,8 @@ static bool lkmdbg_freeze_work_match(struct callback_head *cb, void *data)
 static int lkmdbg_task_work_add_resume(struct task_struct *task,
 				       struct callback_head *work)
 {
-	lkmdbg_task_work_add_fn fn;
-
-	if (!lkmdbg_symbols.task_work_add_sym)
-		return -EOPNOTSUPP;
-
-	fn = (lkmdbg_task_work_add_fn)lkmdbg_symbols.task_work_add_sym;
-	return fn(task, work, LKMDBG_TASK_WORK_NOTIFY_RESUME);
+	return lkmdbg_task_work_add_runtime(task, work,
+					    LKMDBG_TASK_WORK_NOTIFY_RESUME);
 }
 
 static bool lkmdbg_freezer_thread_settled_locked(

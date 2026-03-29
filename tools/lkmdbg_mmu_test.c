@@ -503,6 +503,14 @@ static bool is_ptrace_signal_event(const struct lkmdbg_event_record *event)
 	       event->code == SIGTRAP;
 }
 
+static bool is_mprotect_read_event(const struct lkmdbg_event_record *event)
+{
+	if (!event || event->type != LKMDBG_EVENT_TARGET_MPROTECT)
+		return false;
+
+	return event->code == PROT_READ;
+}
+
 static int expect_no_stop_event_filtered(
 	int session_fd, const char *label,
 	bool (*ignore_event)(const struct lkmdbg_event_record *event))
@@ -604,6 +612,19 @@ static int expect_command_no_stop(int session_fd, int cmd_fd, int reply_fd,
 	if (send_child_command(cmd_fd, op) < 0)
 		return -1;
 	if (expect_no_stop_event(session_fd, label) < 0)
+		return -1;
+	if (expect_child_reply_ok(reply_fd, label) < 0)
+		return -1;
+	return 0;
+}
+
+static int expect_command_no_stop_filtered(
+	int session_fd, int cmd_fd, int reply_fd, uint32_t op, const char *label,
+	bool (*ignore_event)(const struct lkmdbg_event_record *event))
+{
+	if (send_child_command(cmd_fd, op) < 0)
+		return -1;
+	if (expect_no_stop_event_filtered(session_fd, label, ignore_event) < 0)
 		return -1;
 	if (expect_child_reply_ok(reply_fd, label) < 0)
 		return -1;
@@ -1950,9 +1971,10 @@ static int test_mutated_mapping(int session_fd, int cmd_fd, int reply_fd,
 	if (add_hwpoint(session_fd, info->mutate_addr, LKMDBG_HWPOINT_TYPE_WRITE,
 			8, LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
-	if (expect_command_no_stop(session_fd, cmd_fd, reply_fd,
-				   CHILD_OP_MPROTECT_MUTATE_READ,
-				   "mutate_mprotect") < 0)
+	if (expect_command_no_stop_filtered(session_fd, cmd_fd, reply_fd,
+					    CHILD_OP_MPROTECT_MUTATE_READ,
+					    "mutate_mprotect",
+					    is_mprotect_read_event) < 0)
 		goto fail;
 	if (expect_hwpoint_state_bits(session_fd, req.id,
 				      LKMDBG_HWPOINT_STATE_MUTATED,

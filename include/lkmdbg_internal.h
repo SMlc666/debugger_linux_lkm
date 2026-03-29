@@ -206,6 +206,9 @@ struct lkmdbg_syscall_control_state {
 int lkmdbg_disable_kprobe_blacklist(void);
 int lkmdbg_cfi_bypass(void);
 void lkmdbg_flush_icache_runtime(unsigned long start, unsigned long end);
+int lkmdbg_task_work_add_runtime(struct task_struct *task,
+				 struct callback_head *work,
+				 unsigned int notify);
 
 struct lkmdbg_session {
 	struct list_head node;

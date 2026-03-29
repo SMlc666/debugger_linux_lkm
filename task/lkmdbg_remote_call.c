@@ -19,9 +19,6 @@
 
 #define LKMDBG_TASK_WORK_NOTIFY_RESUME 1U
 
-typedef int (*lkmdbg_task_work_add_fn)(struct task_struct *task,
-				       struct callback_head *work,
-				       unsigned int notify);
 typedef void (*lkmdbg_perf_event_disable_local_fn)(struct perf_event *event);
 
 #ifdef CONFIG_ARM64
@@ -230,16 +227,14 @@ static void lkmdbg_remote_call_park_work(struct callback_head *work)
 
 static int lkmdbg_remote_call_queue_park(struct lkmdbg_session *session)
 {
-	lkmdbg_task_work_add_fn add_fn;
-
-	add_fn = (lkmdbg_task_work_add_fn)lkmdbg_symbols.task_work_add_sym;
-	if (!add_fn)
+	if (!lkmdbg_symbols.task_work_add_sym)
 		return -EOPNOTSUPP;
 
 	init_task_work(&session->remote_call.park_work,
 		       lkmdbg_remote_call_park_work);
-	return add_fn(current, &session->remote_call.park_work,
-		      LKMDBG_TASK_WORK_NOTIFY_RESUME);
+	return lkmdbg_task_work_add_runtime(
+		current, &session->remote_call.park_work,
+		LKMDBG_TASK_WORK_NOTIFY_RESUME);
 }
 
 static void lkmdbg_remote_call_disable_breakpoint(struct perf_event *event)

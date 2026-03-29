@@ -3,6 +3,10 @@
 
 #include "lkmdbg_internal.h"
 
+typedef int (*lkmdbg_task_work_add_runtime_fn)(struct task_struct *task,
+					       struct callback_head *work,
+					       unsigned int notify);
+
 static unsigned long lkmdbg_lookup_runtime_symbol(const char *name)
 {
 	struct kprobe kp = {
@@ -204,6 +208,19 @@ void __nocfi lkmdbg_flush_icache_runtime(unsigned long start, unsigned long end)
 		return;
 
 	lkmdbg_symbols.flush_icache_range(start, end);
+}
+
+int __nocfi lkmdbg_task_work_add_runtime(struct task_struct *task,
+					 struct callback_head *work,
+					 unsigned int notify)
+{
+	lkmdbg_task_work_add_runtime_fn fn;
+
+	if (!lkmdbg_symbols.task_work_add_sym)
+		return -EOPNOTSUPP;
+
+	fn = (lkmdbg_task_work_add_runtime_fn)lkmdbg_symbols.task_work_add_sym;
+	return fn(task, work, notify);
 }
 
 void lkmdbg_symbols_exit(void)
