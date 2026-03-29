@@ -102,7 +102,7 @@ class SessionBridgeRepository(
     companion object {
         private const val MEMORY_BROWSER_PAGE_SIZE: UInt = 256u
         private const val MEMORY_ROW_BYTES = 16
-        private const val MEMORY_SEARCH_SNAPSHOT_CHUNK_SIZE: UInt = 256u * 1024u
+        private const val MEMORY_SEARCH_SNAPSHOT_CHUNK_SIZE: UInt = 262144u
     }
 
     private val appContext = context.applicationContext

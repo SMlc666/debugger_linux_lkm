@@ -34,6 +34,33 @@ class MemorySearchEngine(
         private fun leFloat(bytes: ByteArray): Float = Float.fromBits(leInt(bytes))
 
         private fun leDouble(bytes: ByteArray): Double = Double.fromBits(leLong(bytes))
+
+        private fun describePreview(
+            valueType: MemorySearchValueType,
+            preview: ByteArray,
+        ): String {
+            if (preview.isEmpty())
+                return ""
+            return when (valueType) {
+                MemorySearchValueType.Int32 ->
+                    if (preview.size >= 4) leInt(preview).toString() else preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+                MemorySearchValueType.Int64 ->
+                    if (preview.size >= 8) leLong(preview).toString() else preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+                MemorySearchValueType.Float32 ->
+                    if (preview.size >= 4) leFloat(preview).toString() else preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+                MemorySearchValueType.Float64 ->
+                    if (preview.size >= 8) leDouble(preview).toString() else preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+                MemorySearchValueType.HexBytes ->
+                    preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+                MemorySearchValueType.Ascii ->
+                    preview.decodeToString()
+            }
+        }
     }
 
     open class PreparedSearchPattern(
@@ -251,33 +278,6 @@ class MemorySearchEngine(
         MemorySearchValueType.Float64 -> leDouble(current).compareTo(leDouble(previous))
         MemorySearchValueType.HexBytes, MemorySearchValueType.Ascii ->
             throw IllegalArgumentException("increased/decreased only supported for numeric refine")
-    }
-
-    private fun describePreview(
-        valueType: MemorySearchValueType,
-        preview: ByteArray,
-    ): String {
-        if (preview.isEmpty())
-            return ""
-        return when (valueType) {
-            MemorySearchValueType.Int32 ->
-                if (preview.size >= 4) leInt(preview).toString() else preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
-
-            MemorySearchValueType.Int64 ->
-                if (preview.size >= 8) leLong(preview).toString() else preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
-
-            MemorySearchValueType.Float32 ->
-                if (preview.size >= 4) leFloat(preview).toString() else preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
-
-            MemorySearchValueType.Float64 ->
-                if (preview.size >= 8) leDouble(preview).toString() else preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
-
-            MemorySearchValueType.HexBytes ->
-                preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
-
-            MemorySearchValueType.Ascii ->
-                preview.decodeToString()
-        }
     }
 
     private class SearchPattern(
