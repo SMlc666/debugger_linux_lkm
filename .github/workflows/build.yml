@@ -114,36 +114,54 @@ jobs:
             use_llvm: true
             artifact_name: qemu-arm64-boot-5.10
             cache_suffix: v5.10-gki
+            disable_lto: false
+            disable_btf: false
+            kernel_make_jobs: 0
           - label: 5.15
             kernel_ref: android13-5.15
             kernel_config: gki_defconfig
             use_llvm: true
             artifact_name: qemu-arm64-boot-5.15
             cache_suffix: v5.15-gki
+            disable_lto: true
+            disable_btf: false
+            kernel_make_jobs: 4
           - label: 6.1
             kernel_ref: android14-6.1
             kernel_config: gki_defconfig
             use_llvm: true
             artifact_name: qemu-arm64-boot-6.1
             cache_suffix: v6.1-android14-gki
+            disable_lto: false
+            disable_btf: false
+            kernel_make_jobs: 0
           - label: 6.6
             kernel_ref: android15-6.6
             kernel_config: gki_defconfig
             use_llvm: true
             artifact_name: qemu-arm64-boot-6.6
             cache_suffix: v6.6-gki
+            disable_lto: false
+            disable_btf: false
+            kernel_make_jobs: 0
           - label: 6.12
             kernel_ref: android16-6.12
             kernel_config: gki_defconfig
             use_llvm: true
             artifact_name: qemu-arm64-boot-6.12
             cache_suffix: v6.12-gki
+            disable_lto: false
+            disable_btf: true
+            kernel_make_jobs: 0
           - label: 6.18
             kernel_ref: android17-6.18
             kernel_config: gki_defconfig
             use_llvm: true
             artifact_name: qemu-arm64-boot-6.18
             cache_suffix: v6.18-gki
+            disable_lto: false
+            disable_btf: true
+            kernel_make_jobs: 0
     env:
       KERNEL_REPO: https://android.googlesource.com/kernel/common
       KERNEL_REF: ${{ matrix.kernel_ref }}
@@ -203,6 +221,10 @@ jobs:
         run: |
           KERNEL_DIR="$RUNNER_TEMP/linux-arm64-qemu"
           OUT_DIR="$KERNEL_OUT_DIR"
+          BUILD_JOBS="${{ matrix.kernel_make_jobs }}"
+          if [ -z "$BUILD_JOBS" ] || [ "$BUILD_JOBS" = "0" ]; then
+            BUILD_JOBS="$(nproc)"
+          fi
           COMMON_ARGS=(-C "$KERNEL_DIR" O="$OUT_DIR" ARCH=arm64)
           if [ "${{ matrix.use_llvm }}" = "true" ]; then
             COMMON_ARGS+=(
@@ -235,12 +257,26 @@ jobs:
               -e MODULE_UNLOAD \
               -e PROC_FS \
               -e VIRTIO_INPUT
+            if [ "${{ matrix.disable_lto }}" = "true" ]; then
+              "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+                -d LTO_CLANG \
+                -d LTO_CLANG_THIN \
+                -d LTO_CLANG_FULL \
+                -d THINLTO \
+                -e LTO_NONE || true
+            fi
+            if [ "${{ matrix.disable_btf }}" = "true" ]; then
+              "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+                -d DEBUG_INFO_BTF \
+                -d DEBUG_INFO_BTF_MODULES \
+                -d PAHOLE_HAS_SPLIT_BTF || true
+            fi
             make "${COMMON_ARGS[@]}" olddefconfig
-            make "${COMMON_ARGS[@]}" -j"$(nproc)" Image modules
+            make "${COMMON_ARGS[@]}" -j"$BUILD_JOBS" Image modules
           else
             echo "Reusing cached arm64 kernel output from $OUT_DIR"
           fi
-          MODULE_ARGS=(-C "$KERNEL_DIR" O="$OUT_DIR" M="$GITHUB_WORKSPACE" ARCH=arm64 -j"$(nproc)" modules)
+          MODULE_ARGS=(-C "$KERNEL_DIR" O="$OUT_DIR" M="$GITHUB_WORKSPACE" ARCH=arm64 -j"$BUILD_JOBS" modules)
           if [ "${{ matrix.use_llvm }}" = "true" ]; then
             MODULE_ARGS=(
               LLVM=1
