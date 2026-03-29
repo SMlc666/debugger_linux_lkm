@@ -12,6 +12,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.LifecycleService
+import com.smlc666.lkmdbg.CrashLogger
 import com.smlc666.lkmdbg.LkmdbgApplication
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.ui.theme.LkmdbgTheme
@@ -33,9 +34,16 @@ class LkmdbgOverlayService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         running.set(true)
-        repository = (application as LkmdbgApplication).sessionRepository
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        createOverlay()
+        try {
+            repository = (application as LkmdbgApplication).sessionRepository
+            windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+            createOverlay()
+        } catch (t: Throwable) {
+            CrashLogger.logHandled(this, "overlay_on_create", t)
+            running.set(false)
+            stopSelf()
+            throw t
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -147,12 +155,20 @@ class LkmdbgOverlayService : LifecycleService() {
             if (!OverlayPermission.hasPermission(context))
                 return
             val intent = Intent(context, LkmdbgOverlayService::class.java).setAction(ACTION_SHOW)
-            context.startService(intent)
+            runCatching {
+                context.startService(intent)
+            }.onFailure { throwable ->
+                CrashLogger.logHandled(context, "overlay_start", throwable)
+            }
         }
 
         fun stop(context: Context) {
             val intent = Intent(context, LkmdbgOverlayService::class.java).setAction(ACTION_STOP)
-            context.startService(intent)
+            runCatching {
+                context.startService(intent)
+            }.onFailure { throwable ->
+                CrashLogger.logHandled(context, "overlay_stop", throwable)
+            }
         }
     }
 }

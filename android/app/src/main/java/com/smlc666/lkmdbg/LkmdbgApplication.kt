@@ -7,4 +7,9 @@ class LkmdbgApplication : Application() {
     val sessionRepository: SessionBridgeRepository by lazy {
         SessionBridgeRepository(applicationContext)
     }
+
+    override fun onCreate() {
+        super.onCreate()
+        CrashLogger.install(this)
+    }
 }

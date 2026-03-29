@@ -13,6 +13,16 @@ android {
     compileSdk = 35
     ndkVersion = "27.1.12297006"
 
+    signingConfigs {
+        create("fixedDebug") {
+            storeFile = file("signing/lkmdbg-debug.p12")
+            storePassword = "androiddebug"
+            keyAlias = "lkmdbgdebug"
+            keyPassword = "androiddebug"
+            storeType = "PKCS12"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.smlc666.lkmdbg"
         minSdk = 26
@@ -36,7 +46,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("fixedDebug")
+        }
+
         release {
+            signingConfig = signingConfigs.getByName("fixedDebug")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
