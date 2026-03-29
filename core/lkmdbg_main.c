@@ -77,7 +77,8 @@ static u64 lkmdbg_selftest_model(u64 value)
 	return value;
 }
 
-static noinline __aligned(PAGE_SIZE) u64 lkmdbg_selftest_replacement(u64 value)
+static noinline __nocfi __aligned(PAGE_SIZE) u64
+lkmdbg_selftest_replacement(u64 value)
 {
 	u64 original;
 

@@ -177,8 +177,9 @@ static void lkmdbg_owner_proc_drop_cached_pid_dentry(pid_t tgid)
 		lkmdbg_owner_proc_drop_cached_path(proc_path);
 }
 
-static ssize_t lkmdbg_seq_read_replacement(struct file *file, char __user *buf,
-					   size_t count, loff_t *ppos)
+static ssize_t __nocfi
+lkmdbg_seq_read_replacement(struct file *file, char __user *buf, size_t count,
+			    loff_t *ppos)
 {
 	struct lkmdbg_hook_registry_entry *registry;
 	ssize_t (*orig)(struct file *file, char __user *buf, size_t count,
@@ -254,7 +255,7 @@ static int lkmdbg_install_seq_read_hook(void)
 	return 0;
 }
 
-static struct dentry *
+static struct dentry *__nocfi
 lkmdbg_proc_pid_lookup_replacement(struct dentry *dentry, unsigned int flags)
 {
 	struct lkmdbg_hook_registry_entry *registry;
@@ -315,8 +316,8 @@ lkmdbg_proc_pid_readdir_actor(struct dir_context *ctx, const char *name,
 					ino, d_type);
 }
 
-static int lkmdbg_proc_pid_readdir_replacement(struct file *file,
-					       struct dir_context *ctx)
+static int __nocfi lkmdbg_proc_pid_readdir_replacement(
+	struct file *file, struct dir_context *ctx)
 {
 	struct lkmdbg_hook_registry_entry *registry;
 	int (*orig)(struct file *file, struct dir_context *ctx);
@@ -358,7 +359,7 @@ out:
 	return ret;
 }
 
-static struct dentry *lkmdbg_proc_tgid_base_lookup_replacement(
+static struct dentry *__nocfi lkmdbg_proc_tgid_base_lookup_replacement(
 	struct inode *dir, struct dentry *dentry, unsigned int flags)
 {
 	struct lkmdbg_hook_registry_entry *registry;

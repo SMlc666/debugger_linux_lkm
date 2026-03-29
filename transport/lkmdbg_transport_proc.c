@@ -49,7 +49,8 @@ static long lkmdbg_bootstrap_ioctl(struct file *file, unsigned int cmd,
 	return ret;
 }
 
-static int lkmdbg_proc_version_open(struct inode *inode, struct file *file)
+static int __nocfi lkmdbg_proc_version_open(struct inode *inode,
+					    struct file *file)
 {
 	struct lkmdbg_hook_registry_entry *registry;
 	int (*orig_open)(struct inode *inode, struct file *file);

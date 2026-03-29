@@ -266,18 +266,18 @@ static void lkmdbg_queue_syscall_enter_teardown(void);
 static void lkmdbg_syscall_enter_broadcast_regs(struct pt_regs *regs, s32 nr);
 static void lkmdbg_syscall_exit_broadcast_regs(struct pt_regs *regs, s32 nr,
 					       s64 retval);
-static void lkmdbg_invoke_syscall_replacement(
+static void __nocfi lkmdbg_invoke_syscall_replacement(
 	struct pt_regs *regs, unsigned int scno, unsigned int sc_nr,
 	const syscall_fn_t syscall_table[]);
-static long lkmdbg_invoke_syscall_inner_replacement(
+static long __nocfi lkmdbg_invoke_syscall_inner_replacement(
 	struct pt_regs *regs, syscall_fn_t syscall_fn);
-static void lkmdbg_do_el0_svc_replacement(struct pt_regs *regs);
-static void lkmdbg_do_el0_softstep_replacement(unsigned long esr,
-					       struct pt_regs *regs);
-static int lkmdbg_do_page_fault_replacement(unsigned long far,
-					    unsigned long esr,
-					    struct pt_regs *regs);
-static vm_fault_t lkmdbg_do_page_fault_inner_replacement(
+static void __nocfi lkmdbg_do_el0_svc_replacement(struct pt_regs *regs);
+static void __nocfi lkmdbg_do_el0_softstep_replacement(unsigned long esr,
+						       struct pt_regs *regs);
+static int __nocfi lkmdbg_do_page_fault_replacement(unsigned long far,
+						    unsigned long esr,
+						    struct pt_regs *regs);
+static vm_fault_t __nocfi lkmdbg_do_page_fault_inner_replacement(
 	struct mm_struct *mm, struct vm_area_struct *vma, unsigned long addr,
 	unsigned int mm_flags, unsigned long vm_flags, struct pt_regs *regs);
 #if LKMDBG_ARM64_USER_STEP_HOOKS
@@ -1191,12 +1191,10 @@ static void lkmdbg_mmu_recover_after_remote_vm_write(struct mm_struct *mm,
 	}
 }
 
-static ssize_t lkmdbg_process_vm_rw_replacement(pid_t pid,
-						const struct iovec __user *lvec,
-						unsigned long liovcnt,
-						const struct iovec __user *rvec,
-						unsigned long riovcnt,
-						unsigned long flags, int vm_write)
+static ssize_t __nocfi lkmdbg_process_vm_rw_replacement(
+	pid_t pid, const struct iovec __user *lvec, unsigned long liovcnt,
+	const struct iovec __user *rvec, unsigned long riovcnt,
+	unsigned long flags, int vm_write)
 {
 	ssize_t ret;
 
@@ -1213,7 +1211,7 @@ static ssize_t lkmdbg_process_vm_rw_replacement(pid_t pid,
 	return ret;
 }
 
-static ssize_t lkmdbg_do_sys_process_vm_writev_replacement(
+static ssize_t __nocfi lkmdbg_do_sys_process_vm_writev_replacement(
 	pid_t pid, const struct iovec __user *lvec, unsigned long liovcnt,
 	const struct iovec __user *rvec, unsigned long riovcnt,
 	unsigned long flags)
@@ -1234,9 +1232,9 @@ static ssize_t lkmdbg_do_sys_process_vm_writev_replacement(
 	return ret;
 }
 
-static int lkmdbg_access_remote_vm_replacement(struct mm_struct *mm,
-					       unsigned long addr, void *buf,
-					       int len, unsigned int gup_flags)
+static int __nocfi
+lkmdbg_access_remote_vm_replacement(struct mm_struct *mm, unsigned long addr,
+				    void *buf, int len, unsigned int gup_flags)
 {
 	int ret;
 
@@ -1251,10 +1249,9 @@ static int lkmdbg_access_remote_vm_replacement(struct mm_struct *mm,
 	return ret;
 }
 
-static int lkmdbg_access_remote_vm_inner_replacement(struct mm_struct *mm,
-						     unsigned long addr,
-						     void *buf, int len,
-						     unsigned int gup_flags)
+static int __nocfi lkmdbg_access_remote_vm_inner_replacement(
+	struct mm_struct *mm, unsigned long addr, void *buf, int len,
+	unsigned int gup_flags)
 {
 	int ret;
 
@@ -2184,7 +2181,7 @@ static void lkmdbg_syscall_exit_broadcast_regs(struct pt_regs *regs, s32 nr,
 		nr, retval, stop_regs_ptr);
 }
 
-static void lkmdbg_invoke_syscall_replacement(
+static void __nocfi lkmdbg_invoke_syscall_replacement(
 	struct pt_regs *regs, unsigned int scno, unsigned int sc_nr,
 	const syscall_fn_t syscall_table[])
 {
@@ -2208,7 +2205,7 @@ static void lkmdbg_invoke_syscall_replacement(
 		wake_up_all(&lkmdbg_syscall_enter_waitq);
 }
 
-static long lkmdbg_invoke_syscall_inner_replacement(
+static long __nocfi lkmdbg_invoke_syscall_inner_replacement(
 	struct pt_regs *regs, syscall_fn_t syscall_fn)
 {
 	bool skip = false;
@@ -2238,7 +2235,7 @@ static long lkmdbg_invoke_syscall_inner_replacement(
 	return ret;
 }
 
-static void lkmdbg_do_el0_svc_replacement(struct pt_regs *regs)
+static void __nocfi lkmdbg_do_el0_svc_replacement(struct pt_regs *regs)
 {
 	s32 nr = -1;
 	bool skip = false;
@@ -2477,9 +2474,9 @@ armed_ok:
 	return true;
 }
 
-static int lkmdbg_do_page_fault_replacement(unsigned long far,
-					    unsigned long esr,
-					    struct pt_regs *regs)
+static int __nocfi lkmdbg_do_page_fault_replacement(unsigned long far,
+						    unsigned long esr,
+						    struct pt_regs *regs)
 {
 	u32 actual_type;
 	int ret;
@@ -2510,7 +2507,7 @@ passthrough:
 	return ret;
 }
 
-static vm_fault_t lkmdbg_do_page_fault_inner_replacement(
+static vm_fault_t __nocfi lkmdbg_do_page_fault_inner_replacement(
 	struct mm_struct *mm, struct vm_area_struct *vma, unsigned long addr,
 	unsigned int mm_flags, unsigned long vm_flags, struct pt_regs *regs)
 {
@@ -2617,8 +2614,8 @@ static int lkmdbg_user_step_handler(struct pt_regs *regs,
 #endif
 
 #ifdef CONFIG_ARM64
-static void lkmdbg_do_el0_softstep_replacement(unsigned long esr,
-					       struct pt_regs *regs)
+static void __nocfi lkmdbg_do_el0_softstep_replacement(
+	unsigned long esr, struct pt_regs *regs)
 {
 	atomic_inc(&lkmdbg_do_el0_softstep_inflight);
 
