@@ -198,6 +198,14 @@ int lkmdbg_symbols_init(void)
 	return lkmdbg_resolve_runtime_symbols();
 }
 
+void __nocfi lkmdbg_flush_icache_runtime(unsigned long start, unsigned long end)
+{
+	if (!lkmdbg_symbols.flush_icache_range)
+		return;
+
+	lkmdbg_symbols.flush_icache_range(start, end);
+}
+
 void lkmdbg_symbols_exit(void)
 {
 	lkmdbg_symbols.kallsyms_lookup_name = NULL;

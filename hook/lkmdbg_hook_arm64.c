@@ -175,8 +175,8 @@ static int lkmdbg_write_text_insn(void *addr, u32 insn)
 		lkmdbg_alias_unmap_page();
 	}
 
-	lkmdbg_symbols.flush_icache_range((unsigned long)addr,
-					  (unsigned long)addr + sizeof(insn));
+	lkmdbg_flush_icache_runtime((unsigned long)addr,
+				    (unsigned long)addr + sizeof(insn));
 	return 0;
 }
 
@@ -214,9 +214,9 @@ static int lkmdbg_write_text_words(void *addr, const u32 *insns, u32 words)
 			return ret;
 	}
 
-	lkmdbg_symbols.flush_icache_range((unsigned long)addr,
-					  (unsigned long)addr +
-					  words * sizeof(u32));
+	lkmdbg_flush_icache_runtime((unsigned long)addr,
+				    (unsigned long)addr +
+				    words * sizeof(u32));
 	return 0;
 }
 
@@ -503,9 +503,9 @@ int lkmdbg_hook_prepare_exec(struct lkmdbg_inline_hook *hook, void **orig_out)
 
 	memcpy(hook->exec_buf, hook->core.relo_insts,
 	       hook->core.relo_insts_num * sizeof(u32));
-	lkmdbg_symbols.flush_icache_range((unsigned long)hook->exec_buf,
-					  (unsigned long)hook->exec_buf +
-					  hook->core.relo_insts_num * sizeof(u32));
+	lkmdbg_flush_icache_runtime((unsigned long)hook->exec_buf,
+				    (unsigned long)hook->exec_buf +
+				    hook->core.relo_insts_num * sizeof(u32));
 	hook->exec_ready = true;
 
 	mutex_lock(&lkmdbg_state.lock);

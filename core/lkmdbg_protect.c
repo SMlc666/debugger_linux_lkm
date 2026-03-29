@@ -16,8 +16,8 @@ static int write_insn(void *target, u32 insn)
 	if (lkmdbg_symbols.aarch64_insn_write(target, insn))
 		return -EIO;
 
-	lkmdbg_symbols.flush_icache_range((unsigned long)target,
-					   (unsigned long)target + sizeof(u32));
+	lkmdbg_flush_icache_runtime((unsigned long)target,
+				    (unsigned long)target + sizeof(u32));
 	return 0;
 }
 
@@ -84,4 +84,3 @@ int lkmdbg_cfi_bypass(void)
 
 	return patched ? patched : -ENOENT;
 }
-
