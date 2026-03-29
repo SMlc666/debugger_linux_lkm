@@ -110,26 +110,38 @@ jobs:
         include:
           - label: 5.10
             kernel_ref: android12-5.10
+            kernel_config: defconfig
+            use_llvm: false
             artifact_name: qemu-arm64-boot-5.10
             cache_suffix: v5.10
           - label: 5.15
             kernel_ref: android13-5.15
+            kernel_config: defconfig
+            use_llvm: false
             artifact_name: qemu-arm64-boot-5.15
             cache_suffix: v5.15
           - label: 6.1
-            kernel_ref: android14-6.1-lts
+            kernel_ref: android14-6.1
+            kernel_config: gki_defconfig
+            use_llvm: true
             artifact_name: qemu-arm64-boot-6.1
-            cache_suffix: v6.1
+            cache_suffix: v6.1-android14-gki
           - label: 6.6
             kernel_ref: android15-6.6
+            kernel_config: defconfig
+            use_llvm: false
             artifact_name: qemu-arm64-boot-6.6
             cache_suffix: v6.6
           - label: 6.12
             kernel_ref: android16-6.12
+            kernel_config: defconfig
+            use_llvm: false
             artifact_name: qemu-arm64-boot-6.12
             cache_suffix: v6.12
           - label: 6.18
             kernel_ref: android17-6.18
+            kernel_config: defconfig
+            use_llvm: false
             artifact_name: qemu-arm64-boot-6.18
             cache_suffix: v6.18
     env:
@@ -149,8 +161,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.KERNEL_OUT_DIR }}
-          key: ${{ runner.os }}-qemu-arm64-kernel-out-ack-${{ matrix.cache_suffix }}-v1
+          key: ${{ runner.os }}-qemu-arm64-kernel-out-ack-${{ matrix.cache_suffix }}-${{ matrix.kernel_ref }}-${{ matrix.kernel_config }}-llvm-${{ matrix.use_llvm }}-v2
           restore-keys: |
+            ${{ runner.os }}-qemu-arm64-kernel-out-ack-${{ matrix.cache_suffix }}-${{ matrix.kernel_ref }}-${{ matrix.kernel_config }}-llvm-${{ matrix.use_llvm }}-
             ${{ runner.os }}-qemu-arm64-kernel-out-ack-${{ matrix.cache_suffix }}-
 
       - name: Inspect restored QEMU kernel cache
@@ -190,16 +203,22 @@ jobs:
         run: |
           KERNEL_DIR="$RUNNER_TEMP/linux-arm64-qemu"
           OUT_DIR="$KERNEL_OUT_DIR"
-          COMMON_ARGS=(
-            -C "$KERNEL_DIR"
-            O="$OUT_DIR"
-            ARCH=arm64
-            CROSS_COMPILE=aarch64-linux-gnu-
-            CC="aarch64-linux-gnu-gcc"
-            HOSTCC="gcc"
-          )
+          COMMON_ARGS=(-C "$KERNEL_DIR" O="$OUT_DIR" ARCH=arm64)
+          if [ "${{ matrix.use_llvm }}" = "true" ]; then
+            COMMON_ARGS+=(
+              LLVM=1
+              CC="clang"
+              HOSTCC="clang"
+            )
+          else
+            COMMON_ARGS+=(
+              CROSS_COMPILE=aarch64-linux-gnu-
+              CC="aarch64-linux-gnu-gcc"
+              HOSTCC="gcc"
+            )
+          fi
           if [ "${{ steps.qemu-kernel-cache-state.outputs.reuse_kernel }}" != "true" ]; then
-            make "${COMMON_ARGS[@]}" defconfig
+            make "${COMMON_ARGS[@]}" "${{ matrix.kernel_config }}"
             "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
               -e DEBUG_FS \
               -e DEVTMPFS \
@@ -210,6 +229,7 @@ jobs:
               -e KALLSYMS_ALL \
               -e KPROBES \
               -e MODULES \
+              -e MODVERSIONS \
               -e MODULE_UNLOAD \
               -e PROC_FS \
               -e VIRTIO_INPUT
@@ -218,11 +238,20 @@ jobs:
           else
             echo "Reusing cached arm64 kernel output from $OUT_DIR"
           fi
-          make -C "$KERNEL_DIR" O="$OUT_DIR" M="$GITHUB_WORKSPACE" \
-            ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CC="aarch64-linux-gnu-gcc" \
-            HOSTCC="gcc" \
-            -j"$(nproc)" modules
+          MODULE_ARGS=(-C "$KERNEL_DIR" O="$OUT_DIR" M="$GITHUB_WORKSPACE" ARCH=arm64 -j"$(nproc)" modules)
+          if [ "${{ matrix.use_llvm }}" = "true" ]; then
+            MODULE_ARGS=(LLVM=1 CC="clang" HOSTCC="clang" "${MODULE_ARGS[@]}")
+          else
+            MODULE_ARGS=(CROSS_COMPILE=aarch64-linux-gnu- CC="aarch64-linux-gnu-gcc" HOSTCC="gcc" "${MODULE_ARGS[@]}")
+          fi
+          make "${MODULE_ARGS[@]}"
+
+      - name: Prepare stripped module artifact
+        run: |
+          cp "$GITHUB_WORKSPACE/lkmdbg.ko" "$RUNNER_TEMP/lkmdbg.unstripped.ko"
+          aarch64-linux-gnu-strip --strip-debug \
+            -o "$RUNNER_TEMP/lkmdbg.ko" \
+            "$GITHUB_WORKSPACE/lkmdbg.ko"
 
       - name: Verify rebuilt QEMU kernel cache
         id: qemu-kernel-cache-verify
@@ -357,7 +386,7 @@ jobs:
             "$INITRAMFS_DIR/lkmdbg_example_phys_translate_read"
           install -m 0755 "$RUNNER_TEMP/lkmdbg_example_perf_baseline" \
             "$INITRAMFS_DIR/lkmdbg_example_perf_baseline"
-          cp "$GITHUB_WORKSPACE/lkmdbg.ko" "$INITRAMFS_DIR/lkmdbg.ko"
+          cp "$RUNNER_TEMP/lkmdbg.ko" "$INITRAMFS_DIR/lkmdbg.ko"
           (
             cd "$INITRAMFS_DIR"
             find . -print0 | cpio --null -ov --format=newc | gzip -9 \
@@ -372,7 +401,8 @@ jobs:
           mkdir -p "$ARTIFACT_DIR"
           cp "$KERNEL_IMAGE" "$ARTIFACT_DIR/Image"
           cp "$INITRAMFS" "$ARTIFACT_DIR/initramfs.cpio.gz"
-          cp "$GITHUB_WORKSPACE/lkmdbg.ko" "$ARTIFACT_DIR/lkmdbg.ko"
+          cp "$RUNNER_TEMP/lkmdbg.ko" "$ARTIFACT_DIR/lkmdbg.ko"
+          cp "$RUNNER_TEMP/lkmdbg.unstripped.ko" "$ARTIFACT_DIR/lkmdbg.unstripped.ko"
 
       - name: Upload QEMU boot artifacts
         uses: actions/upload-artifact@v4
@@ -386,7 +416,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ env.KERNEL_OUT_DIR }}
-          key: ${{ runner.os }}-qemu-arm64-kernel-out-ack-${{ matrix.cache_suffix }}-v1
+          key: ${{ runner.os }}-qemu-arm64-kernel-out-ack-${{ matrix.cache_suffix }}-${{ matrix.kernel_ref }}-${{ matrix.kernel_config }}-llvm-${{ matrix.use_llvm }}-v2
 
   qemu-arm64-smoke:
     runs-on: ubuntu-24.04
