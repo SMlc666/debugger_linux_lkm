@@ -68,6 +68,7 @@ data class SessionBridgeState(
     val memorySelectionSize: Int = 4,
     val memoryWriteHexInput: String = "",
     val memoryWriteAsciiInput: String = "",
+    val memoryWriteAsmInput: String = "",
     val memoryPage: MemoryPage? = null,
     val memorySearch: MemorySearchUiState = MemorySearchUiState(),
 )
@@ -137,6 +138,10 @@ class SessionBridgeRepository(
 
     fun updateMemoryWriteAsciiInput(value: String) {
         _state.update { current -> current.copy(memoryWriteAsciiInput = value) }
+    }
+
+    fun updateMemoryWriteAsmInput(value: String) {
+        _state.update { current -> current.copy(memoryWriteAsmInput = value) }
     }
 
     fun updateMemorySearchValueType(valueType: MemorySearchValueType) {
@@ -296,6 +301,53 @@ class SessionBridgeRepository(
         }
     }
 
+    suspend fun refineMemorySearch() {
+        runOperation {
+            if (!hasActiveTarget()) {
+                updateMessage(appContext.getString(R.string.memory_error_no_target))
+                return@runOperation
+            }
+            val currentResults = state.value.memorySearch.results
+            if (currentResults.isEmpty()) {
+                updateMessage(appContext.getString(R.string.memory_search_refine_empty))
+                return@runOperation
+            }
+            if (state.value.vmas.isEmpty())
+                refreshVmasUnsafe()
+
+            val search = state.value.memorySearch
+            val outcome = searchEngine.refine(
+                vmas = state.value.vmas,
+                sourceResults = currentResults,
+                valueType = search.valueType,
+                query = search.query,
+                reader = { address, length ->
+                    val reply = client.readMemory(address, length)
+                    if (reply.status != 0) {
+                        ByteArray(0)
+                    } else {
+                        reply.data.copyOf(reply.bytesDone.toInt())
+                    }
+                },
+            )
+            val summary = appContext.getString(
+                R.string.memory_search_refine_summary,
+                outcome.results.size,
+                currentResults.size,
+                outcome.scannedBytes.toString(),
+            )
+            _state.update { current ->
+                current.copy(
+                    memorySearch = current.memorySearch.copy(
+                        summary = summary,
+                        results = outcome.results,
+                    ),
+                    lastMessage = summary,
+                )
+            }
+        }
+    }
+
     suspend fun openMemoryPage(remoteAddr: ULong) {
         runOperation {
             openMemoryPageUnsafe(remoteAddr)
@@ -395,6 +447,70 @@ class SessionBridgeRepository(
                     memoryWriteHexInput = bytes.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
                     memoryWriteAsciiInput = bytes.decodeToString(),
                     lastMessage = appContext.getString(R.string.memory_message_editor_loaded, bytes.size),
+                )
+            }
+        }
+    }
+
+    suspend fun assembleArm64ToEditors() {
+        runOperation {
+            val page = state.value.memoryPage ?: run {
+                updateMessage(appContext.getString(R.string.memory_error_no_page))
+                return@runOperation
+            }
+            val source = state.value.memoryWriteAsmInput.trim()
+            if (source.isEmpty()) {
+                updateMessage(appContext.getString(R.string.memory_error_invalid_asm))
+                return@runOperation
+            }
+            val encoded = NativeAssembler.assembleArm64(page.focusAddress, source)
+            if (encoded.isEmpty()) {
+                updateMessage(appContext.getString(R.string.memory_error_invalid_asm))
+                return@runOperation
+            }
+            _state.update { current ->
+                current.copy(
+                    memoryWriteHexInput = encoded.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
+                    memoryWriteAsciiInput = encoded.decodeToString(),
+                    lastMessage = appContext.getString(
+                        R.string.memory_message_asm_complete,
+                        encoded.size,
+                        hex64(page.focusAddress),
+                    ),
+                )
+            }
+        }
+    }
+
+    suspend fun assembleArm64AndWrite() {
+        runOperation {
+            val page = state.value.memoryPage ?: run {
+                updateMessage(appContext.getString(R.string.memory_error_no_page))
+                return@runOperation
+            }
+            val source = state.value.memoryWriteAsmInput.trim()
+            if (source.isEmpty()) {
+                updateMessage(appContext.getString(R.string.memory_error_invalid_asm))
+                return@runOperation
+            }
+            val encoded = NativeAssembler.assembleArm64(page.focusAddress, source)
+            if (encoded.isEmpty()) {
+                updateMessage(appContext.getString(R.string.memory_error_invalid_asm))
+                return@runOperation
+            }
+            val reply = client.writeMemory(page.focusAddress, encoded)
+            if (reply.status != 0 || reply.bytesDone.toInt() != encoded.size)
+                throw IllegalStateException(reply.message.ifBlank { "write failed bytes_done=${reply.bytesDone}" })
+            openMemoryPageUnsafe(page.focusAddress)
+            _state.update { current ->
+                current.copy(
+                    memoryWriteHexInput = encoded.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
+                    memoryWriteAsciiInput = encoded.decodeToString(),
+                    lastMessage = appContext.getString(
+                        R.string.memory_message_asm_write_complete,
+                        encoded.size,
+                        hex64(page.focusAddress),
+                    ),
                 )
             }
         }

@@ -9,66 +9,34 @@ private const val SEARCH_MAX_RESULTS = 128
 class MemorySearchEngine(
     private val backend: Backend,
 ) {
-    interface Backend {
-        suspend fun search(regionPreset: UInt, maxResults: UInt, pattern: ByteArray): BridgeMemorySearchReply
-    }
-
-    suspend fun search(
-        vmas: List<BridgeVmaRecord>,
-        preset: MemoryRegionPreset,
-        valueType: MemorySearchValueType,
-        query: String,
-        maxResults: Int = SEARCH_MAX_RESULTS,
-    ): MemorySearchOutcome {
-        val pattern = SearchPattern.parse(valueType, query)
-        val reply = backend.search(
-            regionPreset = preset.wireValue,
-            maxResults = min(maxResults, SEARCH_MAX_RESULTS).toUInt(),
-            pattern = pattern.bytes,
-        )
-        require(reply.status == 0) { reply.message.ifBlank { "search failed status=${reply.status}" } }
-
-        val results = ArrayList<MemorySearchResult>(reply.results.size)
-        for (record in reply.results) {
-            val previewSize = min(record.previewSize.toInt(), record.preview.size)
-            val preview = record.preview.copyOf(previewSize)
-            val region = vmas.firstOrNull {
-                record.address >= it.startAddr && record.address < it.endAddr
+    companion object {
+        private fun parseHexBytes(text: String): ByteArray {
+            val compact = text.replace(" ", "").replace("\n", "")
+            require(compact.length % 2 == 0) { "hex bytes must have even length" }
+            return ByteArray(compact.length / 2) { index ->
+                compact.substring(index * 2, index * 2 + 2).toInt(16).toByte()
             }
-            val regionName = if (region != null) {
-                region.name.ifBlank { describeVma(region) }
-            } else {
-                describeRange(record.regionStart, record.regionEnd)
-            }
-            results += MemorySearchResult(
-                address = record.address,
-                regionName = regionName,
-                regionStart = record.regionStart,
-                regionEnd = record.regionEnd,
-                previewHex = preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
-                valueSummary = pattern.describe(preview),
-            )
         }
 
-        return MemorySearchOutcome(
-            searchedVmaCount = reply.searchedVmaCount.toInt(),
-            scannedBytes = reply.scannedBytes,
-            results = results,
-        )
-    }
+        private fun leInt(bytes: ByteArray): Int =
+            (bytes[0].toInt() and 0xff) or
+                ((bytes[1].toInt() and 0xff) shl 8) or
+                ((bytes[2].toInt() and 0xff) shl 16) or
+                ((bytes[3].toInt() and 0xff) shl 24)
 
-    private fun describeVma(it: BridgeVmaRecord): String = describeRange(it.startAddr, it.endAddr)
-
-    private fun describeRange(start: ULong, end: ULong): String =
-        buildString {
-            append(hex64(start))
-            append(" - ")
-            append(hex64(end))
+        private fun leLong(bytes: ByteArray): Long {
+            var value = 0L
+            for (i in 0 until Long.SIZE_BYTES)
+                value = value or ((bytes[i].toLong() and 0xffL) shl (i * 8))
+            return value
         }
 
-    private fun hex64(value: ULong): String = "0x${value.toString(16)}"
+        private fun leFloat(bytes: ByteArray): Float = Float.fromBits(leInt(bytes))
 
-    private data class SearchPattern(
+        private fun leDouble(bytes: ByteArray): Double = Double.fromBits(leLong(bytes))
+    }
+
+    open class PreparedSearchPattern(
         val valueType: MemorySearchValueType,
         val query: String,
         val bytes: ByteArray,
@@ -85,7 +53,128 @@ class MemorySearchEngine(
                 MemorySearchValueType.Ascii -> preview.copyOf(bytes.size).decodeToString()
             }
         }
+    }
 
+    interface Backend {
+        suspend fun search(regionPreset: UInt, maxResults: UInt, pattern: ByteArray): BridgeMemorySearchReply
+    }
+
+    suspend fun search(
+        vmas: List<BridgeVmaRecord>,
+        preset: MemoryRegionPreset,
+        valueType: MemorySearchValueType,
+        query: String,
+        maxResults: Int = SEARCH_MAX_RESULTS,
+    ): MemorySearchOutcome {
+        val pattern = preparePattern(valueType, query)
+        val reply = backend.search(
+            regionPreset = preset.wireValue,
+            maxResults = min(maxResults, SEARCH_MAX_RESULTS).toUInt(),
+            pattern = pattern.bytes,
+        )
+        require(reply.status == 0) { reply.message.ifBlank { "search failed status=${reply.status}" } }
+
+        val results = ArrayList<MemorySearchResult>(reply.results.size)
+        for (record in reply.results) {
+            val previewSize = min(record.previewSize.toInt(), record.preview.size)
+            val preview = record.preview.copyOf(previewSize)
+            results += buildSearchResult(vmas, record.address, record.regionStart, record.regionEnd, preview, pattern)
+        }
+
+        return MemorySearchOutcome(
+            searchedVmaCount = reply.searchedVmaCount.toInt(),
+            scannedBytes = reply.scannedBytes,
+            results = results,
+        )
+    }
+
+    suspend fun refine(
+        vmas: List<BridgeVmaRecord>,
+        sourceResults: List<MemorySearchResult>,
+        valueType: MemorySearchValueType,
+        query: String,
+        reader: suspend (ULong, UInt) -> ByteArray,
+        maxResults: Int = SEARCH_MAX_RESULTS,
+    ): MemorySearchOutcome {
+        val pattern = preparePattern(valueType, query)
+        val results = ArrayList<MemorySearchResult>(min(sourceResults.size, maxResults))
+        var rereadBytes = 0uL
+
+        sourceResults.take(min(sourceResults.size, maxResults)).forEach { result ->
+            val preview = reader(result.address, maxOf(pattern.bytes.size, 16).toUInt())
+            rereadBytes += preview.size.toULong()
+            if (preview.size < pattern.bytes.size)
+                return@forEach
+            if (!preview.copyOf(pattern.bytes.size).contentEquals(pattern.bytes))
+                return@forEach
+            results += buildSearchResult(
+                vmas = vmas,
+                address = result.address,
+                regionStart = result.regionStart,
+                regionEnd = result.regionEnd,
+                preview = preview,
+                pattern = pattern,
+            )
+        }
+
+        return MemorySearchOutcome(
+            searchedVmaCount = sourceResults.size,
+            scannedBytes = rereadBytes,
+            results = results,
+        )
+    }
+
+    fun preparePattern(
+        valueType: MemorySearchValueType,
+        query: String,
+    ): PreparedSearchPattern = SearchPattern.parse(valueType, query)
+
+    private fun describeVma(it: BridgeVmaRecord): String = describeRange(it.startAddr, it.endAddr)
+
+    private fun describeRange(start: ULong, end: ULong): String =
+        buildString {
+            append(hex64(start))
+            append(" - ")
+            append(hex64(end))
+        }
+
+    private fun hex64(value: ULong): String = "0x${value.toString(16)}"
+
+    private fun buildSearchResult(
+        vmas: List<BridgeVmaRecord>,
+        address: ULong,
+        regionStart: ULong,
+        regionEnd: ULong,
+        preview: ByteArray,
+        pattern: PreparedSearchPattern,
+    ): MemorySearchResult {
+        val region = vmas.firstOrNull {
+            address >= it.startAddr && address < it.endAddr
+        }
+        val regionName = if (region != null) {
+            region.name.ifBlank { describeVma(region) }
+        } else {
+            describeRange(regionStart, regionEnd)
+        }
+        return MemorySearchResult(
+            address = address,
+            regionName = regionName,
+            regionStart = regionStart,
+            regionEnd = regionEnd,
+            previewHex = preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
+            valueSummary = pattern.describe(preview),
+        )
+    }
+
+    private class SearchPattern(
+        valueType: MemorySearchValueType,
+        query: String,
+        bytes: ByteArray,
+    ) : PreparedSearchPattern(
+        valueType = valueType,
+        query = query,
+        bytes = bytes,
+    ) {
         companion object {
             fun parse(type: MemorySearchValueType, query: String): SearchPattern {
                 val trimmed = query.trim()
@@ -126,31 +215,6 @@ class MemorySearchEngine(
                 }
                 return SearchPattern(type, trimmed, bytes)
             }
-
-            private fun parseHexBytes(text: String): ByteArray {
-                val compact = text.replace(" ", "").replace("\n", "")
-                require(compact.length % 2 == 0) { "hex bytes must have even length" }
-                return ByteArray(compact.length / 2) { index ->
-                    compact.substring(index * 2, index * 2 + 2).toInt(16).toByte()
-                }
-            }
-
-            private fun leInt(bytes: ByteArray): Int =
-                (bytes[0].toInt() and 0xff) or
-                    ((bytes[1].toInt() and 0xff) shl 8) or
-                    ((bytes[2].toInt() and 0xff) shl 16) or
-                    ((bytes[3].toInt() and 0xff) shl 24)
-
-            private fun leLong(bytes: ByteArray): Long {
-                var value = 0L
-                for (i in 0 until Long.SIZE_BYTES)
-                    value = value or ((bytes[i].toLong() and 0xffL) shl (i * 8))
-                return value
-            }
-
-            private fun leFloat(bytes: ByteArray): Float = Float.fromBits(leInt(bytes))
-
-            private fun leDouble(bytes: ByteArray): Double = Double.fromBits(leLong(bytes))
         }
     }
 }

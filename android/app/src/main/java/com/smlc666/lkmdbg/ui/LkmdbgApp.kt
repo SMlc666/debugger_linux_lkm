@@ -79,6 +79,7 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onRefreshImages = { coroutineScope.launch { repository.refreshImages() } },
                     onRefreshVmas = { coroutineScope.launch { repository.refreshVmas() } },
                     onSearchMemory = { coroutineScope.launch { repository.runMemorySearch() } },
+                    onRefineMemory = { coroutineScope.launch { repository.refineMemorySearch() } },
                     onPreviewSelectedPc = { coroutineScope.launch { repository.previewSelectedPc() } },
                     onJumpMemoryAddress = { coroutineScope.launch { repository.jumpToMemoryAddress() } },
                     onStepMemoryPage = { direction ->
@@ -95,6 +96,12 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     },
                     onWriteHexAtFocus = { coroutineScope.launch { repository.writeHexAtFocus() } },
                     onWriteAsciiAtFocus = { coroutineScope.launch { repository.writeAsciiAtFocus() } },
+                    onAssembleArm64ToEditors = {
+                        coroutineScope.launch { repository.assembleArm64ToEditors() }
+                    },
+                    onAssembleArm64AndWrite = {
+                        coroutineScope.launch { repository.assembleArm64AndWrite() }
+                    },
                     onSelectMemoryAddress = { address ->
                         coroutineScope.launch { repository.selectMemoryAddress(address) }
                     },
@@ -112,6 +119,7 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onMemorySelectionSizeChanged = repository::updateMemorySelectionSize,
                     onMemoryWriteHexChanged = repository::updateMemoryWriteHexInput,
                     onMemoryWriteAsciiChanged = repository::updateMemoryWriteAsciiInput,
+                    onMemoryWriteAsmChanged = repository::updateMemoryWriteAsmInput,
                     onProcessFilterChanged = repository::updateProcessFilter,
                     onMemorySearchQueryChanged = repository::updateMemorySearchQuery,
                     onMemorySearchValueTypeChanged = repository::updateMemorySearchValueType,
@@ -136,6 +144,7 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onRefreshImages = { coroutineScope.launch { repository.refreshImages() } },
                     onRefreshVmas = { coroutineScope.launch { repository.refreshVmas() } },
                     onSearchMemory = { coroutineScope.launch { repository.runMemorySearch() } },
+                    onRefineMemory = { coroutineScope.launch { repository.refineMemorySearch() } },
                     onPreviewSelectedPc = { coroutineScope.launch { repository.previewSelectedPc() } },
                     onJumpMemoryAddress = { coroutineScope.launch { repository.jumpToMemoryAddress() } },
                     onStepMemoryPage = { direction ->
@@ -152,6 +161,12 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     },
                     onWriteHexAtFocus = { coroutineScope.launch { repository.writeHexAtFocus() } },
                     onWriteAsciiAtFocus = { coroutineScope.launch { repository.writeAsciiAtFocus() } },
+                    onAssembleArm64ToEditors = {
+                        coroutineScope.launch { repository.assembleArm64ToEditors() }
+                    },
+                    onAssembleArm64AndWrite = {
+                        coroutineScope.launch { repository.assembleArm64AndWrite() }
+                    },
                     onSelectMemoryAddress = { address ->
                         coroutineScope.launch { repository.selectMemoryAddress(address) }
                     },
@@ -169,6 +184,7 @@ fun LkmdbgApp(repository: SessionBridgeRepository) {
                     onMemorySelectionSizeChanged = repository::updateMemorySelectionSize,
                     onMemoryWriteHexChanged = repository::updateMemoryWriteHexInput,
                     onMemoryWriteAsciiChanged = repository::updateMemoryWriteAsciiInput,
+                    onMemoryWriteAsmChanged = repository::updateMemoryWriteAsmInput,
                     onProcessFilterChanged = repository::updateProcessFilter,
                     onMemorySearchQueryChanged = repository::updateMemorySearchQuery,
                     onMemorySearchValueTypeChanged = repository::updateMemorySearchValueType,
@@ -200,6 +216,7 @@ private fun DashboardContent(
     onRefreshImages: () -> Unit,
     onRefreshVmas: () -> Unit,
     onSearchMemory: () -> Unit,
+    onRefineMemory: () -> Unit,
     onPreviewSelectedPc: () -> Unit,
     onJumpMemoryAddress: () -> Unit,
     onStepMemoryPage: (Int) -> Unit,
@@ -208,6 +225,8 @@ private fun DashboardContent(
     onLoadSelectionIntoEditors: () -> Unit,
     onWriteHexAtFocus: () -> Unit,
     onWriteAsciiAtFocus: () -> Unit,
+    onAssembleArm64ToEditors: () -> Unit,
+    onAssembleArm64AndWrite: () -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
     onAttachProcess: (Int) -> Unit,
     onSelectThread: (Int) -> Unit,
@@ -216,6 +235,7 @@ private fun DashboardContent(
     onMemorySelectionSizeChanged: (Int) -> Unit,
     onMemoryWriteHexChanged: (String) -> Unit,
     onMemoryWriteAsciiChanged: (String) -> Unit,
+    onMemoryWriteAsmChanged: (String) -> Unit,
     onProcessFilterChanged: (ProcessFilter) -> Unit,
     onMemorySearchQueryChanged: (String) -> Unit,
     onMemorySearchValueTypeChanged: (com.smlc666.lkmdbg.data.MemorySearchValueType) -> Unit,
@@ -256,6 +276,7 @@ private fun DashboardContent(
                     onRefreshImages = onRefreshImages,
                     onRefreshVmas = onRefreshVmas,
                     onSearchMemory = onSearchMemory,
+                    onRefineMemory = onRefineMemory,
                     onPreviewSelectedPc = onPreviewSelectedPc,
                     onJumpMemoryAddress = onJumpMemoryAddress,
                     onStepMemoryPage = onStepMemoryPage,
@@ -264,11 +285,14 @@ private fun DashboardContent(
                     onLoadSelectionIntoEditors = onLoadSelectionIntoEditors,
                     onWriteHexAtFocus = onWriteHexAtFocus,
                     onWriteAsciiAtFocus = onWriteAsciiAtFocus,
+                    onAssembleArm64ToEditors = onAssembleArm64ToEditors,
+                    onAssembleArm64AndWrite = onAssembleArm64AndWrite,
                     onSelectMemoryAddress = onSelectMemoryAddress,
                     onMemoryAddressChanged = onMemoryAddressChanged,
                     onSelectionSizeChanged = onMemorySelectionSizeChanged,
                     onWriteHexChanged = onMemoryWriteHexChanged,
                     onWriteAsciiChanged = onMemoryWriteAsciiChanged,
+                    onWriteAsmChanged = onMemoryWriteAsmChanged,
                     onSearchQueryChanged = onMemorySearchQueryChanged,
                     onSearchValueTypeChanged = onMemorySearchValueTypeChanged,
                     onRegionPresetChanged = onMemoryRegionPresetChanged,

@@ -68,7 +68,10 @@
     <string name="memory_action_load_selection">Load selection</string>
     <string name="memory_action_write_hex">Write hex</string>
     <string name="memory_action_write_ascii">Write ascii</string>
+    <string name="memory_action_asm_to_editor">Asm to editor</string>
+    <string name="memory_action_asm_write">Asm write</string>
     <string name="memory_action_search">Search</string>
+    <string name="memory_action_refine">Refine</string>
     <string name="memory_action_refresh_ranges">Refresh ranges</string>
     <string name="memory_action_ranges">Ranges</string>
     <string name="memory_action_refresh_images">Refresh images</string>
@@ -80,6 +83,7 @@
     <string name="memory_error_no_selection">Select a byte range first.</string>
     <string name="memory_error_invalid_hex">Enter valid hex bytes first.</string>
     <string name="memory_error_invalid_ascii">Enter ASCII text first.</string>
+    <string name="memory_error_invalid_asm">Enter valid AArch64 assembly first.</string>
     <string name="memory_message_images">%1$d images refreshed</string>
     <string name="memory_message_vmas">%1$d ranges refreshed</string>
     <string name="memory_message_preview">previewed %1$s bytes at %2$s</string>
@@ -87,9 +91,13 @@
     <string name="memory_message_search_query_loaded">loaded query: %1$s</string>
     <string name="memory_message_editor_loaded">loaded %1$d bytes into editors</string>
     <string name="memory_message_write_complete">wrote %1$d bytes at %2$s</string>
+    <string name="memory_message_asm_complete">assembled %1$d bytes at %2$s</string>
+    <string name="memory_message_asm_write_complete">assembled and wrote %1$d bytes at %2$s</string>
     <string name="memory_search_query_label">Search value</string>
     <string name="memory_search_query_placeholder">42, 3.14, 7f 45 4c 46, hello</string>
     <string name="memory_search_summary">%1$d hits across %2$d ranges, scanned %3$s bytes</string>
+    <string name="memory_search_refine_summary">refined %1$d / %2$d hits, reread %3$s bytes</string>
+    <string name="memory_search_refine_empty">No prior hits to refine. Run a search first.</string>
     <string name="memory_search_results_empty">No search results yet. Pick a type, a region preset, then search.</string>
     <string name="memory_search_type_int32">int32</string>
     <string name="memory_search_type_int64">int64</string>
@@ -128,6 +136,8 @@
     <string name="memory_write_hex_placeholder">90 00 00 14</string>
     <string name="memory_write_ascii_label">ASCII patch text</string>
     <string name="memory_write_ascii_placeholder">patched-by-lkmdbg</string>
+    <string name="memory_write_asm_label">AArch64 assembly</string>
+    <string name="memory_write_asm_placeholder">mov x0, x0\nret</string>
     <string name="memory_preview_hex_title">Memory page</string>
     <string name="memory_preview_disasm_title">Capstone disassembly (local JNI)</string>
     <string name="memory_preview_disasm_empty">No local disassembly available for this preview.</string>

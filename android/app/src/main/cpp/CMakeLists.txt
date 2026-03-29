@@ -19,6 +19,15 @@ set(CAPSTONE_AARCH64_SUPPORT ON CACHE BOOL "" FORCE)
 set(CAPSTONE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/capstone)
 add_subdirectory(${CAPSTONE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/capstone)
 
+set(BUILD_LIBS_ONLY ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(KEYSTONE_BUILD_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
+set(LLVM_TARGETS_TO_BUILD "AArch64" CACHE STRING "" FORCE)
+
+set(KEYSTONE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/keystone)
+add_subdirectory(${KEYSTONE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/keystone)
+
 add_library(lkmdbg_native SHARED native_disassembler.cpp)
 target_compile_definitions(lkmdbg_native PRIVATE CAPSTONE_STATIC)
-target_link_libraries(lkmdbg_native PRIVATE capstone_static log)
+target_include_directories(lkmdbg_native PRIVATE ${KEYSTONE_DIR}/include)
+target_link_libraries(lkmdbg_native PRIVATE capstone_static keystone log)

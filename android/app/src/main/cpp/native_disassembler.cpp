@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "capstone/capstone.h"
+#include "keystone/keystone.h"
 
 namespace {
 
@@ -52,6 +53,19 @@ static jobjectArray make_string_array(JNIEnv *env, const std::vector<std::string
 	}
 
 	return out;
+}
+
+static void throw_java_exception(JNIEnv *env, const char *class_name,
+				 const std::string &message)
+{
+	jclass ex_class;
+
+	if (!env || message.empty())
+		return;
+	ex_class = env->FindClass(class_name);
+	if (!ex_class)
+		return;
+	env->ThrowNew(ex_class, message.c_str());
 }
 
 } // namespace
@@ -108,4 +122,64 @@ Java_com_smlc666_lkmdbg_data_NativeDisassembler_nativeDisassembleArm64(
 	cs_free(insn, count);
 	cs_close(&handle);
 	return make_string_array(env, lines);
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_smlc666_lkmdbg_data_NativeAssembler_nativeAssembleArm64(
+	JNIEnv *env, jclass, jlong base_address, jstring source_text)
+{
+	ks_engine *engine = nullptr;
+	jbyteArray out = nullptr;
+	unsigned char *encoded = nullptr;
+	size_t encoded_size = 0;
+	size_t statement_count = 0;
+	const char *source = nullptr;
+	ks_err err;
+	std::string error;
+
+	if (!source_text) {
+		throw_java_exception(env, "java/lang/IllegalArgumentException",
+				     "assembly source must not be null");
+		return nullptr;
+	}
+
+	source = env->GetStringUTFChars(source_text, nullptr);
+	if (!source)
+		return nullptr;
+	if (!source[0]) {
+		env->ReleaseStringUTFChars(source_text, source);
+		throw_java_exception(env, "java/lang/IllegalArgumentException",
+				     "assembly source must not be empty");
+		return nullptr;
+	}
+
+	err = ks_open(KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN, &engine);
+	if (err != KS_ERR_OK) {
+		env->ReleaseStringUTFChars(source_text, source);
+		error = std::string("ks_open failed: ") + ks_strerror(err);
+		throw_java_exception(env, "java/lang/IllegalStateException", error);
+		return nullptr;
+	}
+
+	err = ks_asm(engine, source, static_cast<uint64_t>(base_address), &encoded,
+		     &encoded_size, &statement_count);
+	env->ReleaseStringUTFChars(source_text, source);
+	if (err != KS_ERR_OK) {
+		error = std::string("arm64 assembly failed: ") + ks_strerror(err);
+		if (ks_errno(engine) == KS_ERR_ASM_INVALIDOPERAND)
+			error.append(" (invalid operand)");
+		ks_close(engine);
+		throw_java_exception(env, "java/lang/IllegalArgumentException", error);
+		return nullptr;
+	}
+
+	out = env->NewByteArray(static_cast<jsize>(encoded_size));
+	if (out && encoded_size) {
+		env->SetByteArrayRegion(out, 0, static_cast<jsize>(encoded_size),
+				       reinterpret_cast<const jbyte *>(encoded));
+	}
+
+	ks_free(encoded);
+	ks_close(engine);
+	return out;
 }

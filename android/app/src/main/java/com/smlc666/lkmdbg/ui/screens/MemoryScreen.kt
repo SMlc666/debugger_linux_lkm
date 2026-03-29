@@ -48,6 +48,7 @@ internal fun MemoryScreen(
     onRefreshImages: () -> Unit,
     onRefreshVmas: () -> Unit,
     onSearchMemory: () -> Unit,
+    onRefineMemory: () -> Unit,
     onPreviewSelectedPc: () -> Unit,
     onJumpMemoryAddress: () -> Unit,
     onStepMemoryPage: (Int) -> Unit,
@@ -56,11 +57,14 @@ internal fun MemoryScreen(
     onLoadSelectionIntoEditors: () -> Unit,
     onWriteHexAtFocus: () -> Unit,
     onWriteAsciiAtFocus: () -> Unit,
+    onAssembleArm64ToEditors: () -> Unit,
+    onAssembleArm64AndWrite: () -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
     onMemoryAddressChanged: (String) -> Unit,
     onSelectionSizeChanged: (Int) -> Unit,
     onWriteHexChanged: (String) -> Unit,
     onWriteAsciiChanged: (String) -> Unit,
+    onWriteAsmChanged: (String) -> Unit,
     onSearchQueryChanged: (String) -> Unit,
     onSearchValueTypeChanged: (MemorySearchValueType) -> Unit,
     onRegionPresetChanged: (MemoryRegionPreset) -> Unit,
@@ -197,6 +201,24 @@ internal fun MemoryScreen(
                         Text(stringResource(R.string.memory_action_write_ascii))
                     }
                 }
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = state.memoryWriteAsmInput,
+                    onValueChange = onWriteAsmChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.memory_write_asm_label)) },
+                    placeholder = { Text(stringResource(R.string.memory_write_asm_placeholder)) },
+                    minLines = 2,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(onClick = onAssembleArm64ToEditors, enabled = !state.busy) {
+                        Text(stringResource(R.string.memory_action_asm_to_editor))
+                    }
+                    FilledTonalButton(onClick = onAssembleArm64AndWrite, enabled = !state.busy) {
+                        Text(stringResource(R.string.memory_action_asm_write))
+                    }
+                }
                 Spacer(Modifier.height(14.dp))
             }
 
@@ -231,8 +253,16 @@ internal fun MemoryScreen(
             }
             Spacer(Modifier.height(12.dp))
 
-            FilledTonalButton(onClick = onSearchMemory, enabled = !state.busy) {
-                Text(stringResource(R.string.memory_action_search))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = onSearchMemory, enabled = !state.busy) {
+                    Text(stringResource(R.string.memory_action_search))
+                }
+                FilledTonalButton(
+                    onClick = onRefineMemory,
+                    enabled = !state.busy && state.memorySearch.results.isNotEmpty(),
+                ) {
+                    Text(stringResource(R.string.memory_action_refine))
+                }
             }
 
             Spacer(Modifier.height(12.dp))
