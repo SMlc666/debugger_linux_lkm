@@ -18,7 +18,7 @@ RUN apt-get update && \
         gcc-aarch64-linux-gnu \
         git \
         gzip \
-        libdwarf-dev \
+        libdw-dev \
         libc6-dev-arm64-cross \
         libelf-dev \
         lld \
