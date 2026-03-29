@@ -168,10 +168,36 @@ static void lkmdbg_input_snapshot_string(char *dst, size_t dst_size,
 	dst[dst_size - 1] = '\0';
 }
 
+static void lkmdbg_input_refresh_device_metadata(
+	struct lkmdbg_input_device *device)
+{
+	struct input_dev *dev;
+
+	if (!device)
+		return;
+
+	dev = READ_ONCE(device->input_dev);
+	if (!dev)
+		return;
+
+	device->bustype = dev->id.bustype;
+	device->vendor = dev->id.vendor;
+	device->product = dev->id.product;
+	device->version_id = dev->id.version;
+	device->flags = lkmdbg_input_device_flags_from_dev(dev);
+	lkmdbg_input_snapshot_string(device->name, sizeof(device->name),
+				     dev->name);
+	lkmdbg_input_snapshot_string(device->phys, sizeof(device->phys),
+				     dev->phys);
+	lkmdbg_input_snapshot_string(device->uniq, sizeof(device->uniq),
+				     dev->uniq);
+}
+
 static void lkmdbg_input_fill_device_entry(
 	struct lkmdbg_input_device *device,
 	struct lkmdbg_input_device_entry *entry)
 {
+	lkmdbg_input_refresh_device_metadata(device);
 	memset(entry, 0, sizeof(*entry));
 	entry->device_id = device->device_id;
 	entry->bustype = device->bustype;
@@ -202,13 +228,18 @@ static void
 lkmdbg_input_fill_device_info(struct lkmdbg_input_device *device,
 			      struct lkmdbg_input_device_info_request *req)
 {
-	struct input_dev *dev = device->input_dev;
+	struct input_dev *dev;
 	unsigned int i;
 
 	memset(req, 0, sizeof(*req));
 	req->version = LKMDBG_PROTO_VERSION;
 	req->size = sizeof(*req);
 	req->device_id = device->device_id;
+	lkmdbg_input_refresh_device_metadata(device);
+	dev = READ_ONCE(device->input_dev);
+	if (!dev)
+		return;
+
 	req->flags = device->flags;
 	req->supported_channel_flags = LKMDBG_INPUT_CHANNEL_FLAG_INCLUDE_INJECTED;
 	lkmdbg_input_fill_device_entry(device, &req->entry);
