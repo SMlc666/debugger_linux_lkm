@@ -11,11 +11,14 @@ RUN apt-get update && \
         ca-certificates \
         clang \
         cpio \
+        dwarves \
+        elfutils \
         file \
         flex \
         gcc-aarch64-linux-gnu \
         git \
         gzip \
+        libdwarf-dev \
         libc6-dev-arm64-cross \
         libelf-dev \
         lld \

@@ -207,7 +207,9 @@ jobs:
           if [ "${{ matrix.use_llvm }}" = "true" ]; then
             COMMON_ARGS+=(
               LLVM=1
+              CLANG_TRIPLE=aarch64-linux-gnu-
               CC="clang"
+              CROSS_COMPILE=aarch64-linux-gnu-
               HOSTCC="clang"
             )
           else
@@ -240,7 +242,14 @@ jobs:
           fi
           MODULE_ARGS=(-C "$KERNEL_DIR" O="$OUT_DIR" M="$GITHUB_WORKSPACE" ARCH=arm64 -j"$(nproc)" modules)
           if [ "${{ matrix.use_llvm }}" = "true" ]; then
-            MODULE_ARGS=(LLVM=1 CC="clang" HOSTCC="clang" "${MODULE_ARGS[@]}")
+            MODULE_ARGS=(
+              LLVM=1
+              CLANG_TRIPLE=aarch64-linux-gnu-
+              CC="clang"
+              CROSS_COMPILE=aarch64-linux-gnu-
+              HOSTCC="clang"
+              "${MODULE_ARGS[@]}"
+            )
           else
             MODULE_ARGS=(CROSS_COMPILE=aarch64-linux-gnu- CC="aarch64-linux-gnu-gcc" HOSTCC="gcc" "${MODULE_ARGS[@]}")
           fi
