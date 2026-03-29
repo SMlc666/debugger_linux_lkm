@@ -36,9 +36,6 @@
 #define LKMDBG_REMOTE_GUP_HAS_LOCKED_ONLY 0
 #endif
 
-typedef int (*lkmdbg_task_work_add_fn)(struct task_struct *task,
-				       struct callback_head *work,
-				       unsigned int notify);
 typedef unsigned long (*lkmdbg_vm_mmap_fn)(struct file *file,
 					   unsigned long addr,
 					   unsigned long len,
@@ -247,13 +244,8 @@ static int lkmdbg_validate_remote_map_req(struct lkmdbg_remote_map_request *req)
 static int lkmdbg_task_work_add_resume(struct task_struct *task,
 				       struct callback_head *work)
 {
-	lkmdbg_task_work_add_fn fn;
-
-	if (!lkmdbg_symbols.task_work_add_sym)
-		return -EOPNOTSUPP;
-
-	fn = (lkmdbg_task_work_add_fn)lkmdbg_symbols.task_work_add_sym;
-	return fn(task, work, LKMDBG_TASK_WORK_NOTIFY_RESUME);
+	return lkmdbg_task_work_add_runtime(task, work,
+					    LKMDBG_TASK_WORK_NOTIFY_RESUME);
 }
 
 static lkmdbg_vm_mmap_fn lkmdbg_remote_map_vm_mmap_resolve(void)

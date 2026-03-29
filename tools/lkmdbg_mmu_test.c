@@ -511,6 +511,14 @@ static bool is_mprotect_read_event(const struct lkmdbg_event_record *event)
 	return event->code == PROT_READ;
 }
 
+static bool is_munmap_event(const struct lkmdbg_event_record *event)
+{
+	if (!event || event->type != LKMDBG_EVENT_TARGET_MUNMAP)
+		return false;
+
+	return event->code == 0;
+}
+
 static int expect_no_stop_event_filtered(
 	int session_fd, const char *label,
 	bool (*ignore_event)(const struct lkmdbg_event_record *event))
@@ -2003,8 +2011,10 @@ static int test_lost_mapping(int session_fd, int cmd_fd, int reply_fd,
 	if (add_hwpoint(session_fd, info->lost_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
-	if (expect_command_no_stop(session_fd, cmd_fd, reply_fd, CHILD_OP_MUNMAP_LOST,
-				   "lost_munmap") < 0)
+	if (expect_command_no_stop_filtered(session_fd, cmd_fd, reply_fd,
+					    CHILD_OP_MUNMAP_LOST,
+					    "lost_munmap",
+					    is_munmap_event) < 0)
 		goto fail;
 	if (expect_hwpoint_state_bits(session_fd, req.id,
 				      LKMDBG_HWPOINT_STATE_LOST,
