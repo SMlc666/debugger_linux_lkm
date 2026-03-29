@@ -15,12 +15,12 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
-import androidx.lifecycle.ViewTreeLifecycleOwner
-import androidx.lifecycle.ViewTreeViewModelStoreOwner
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
-import androidx.savedstate.ViewTreeSavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.smlc666.lkmdbg.CrashLogger
 import com.smlc666.lkmdbg.LkmdbgApplication
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
@@ -97,9 +97,9 @@ class LkmdbgOverlayService : LifecycleService() {
 
         val composeView = ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
-            ViewTreeLifecycleOwner.set(this, this@LkmdbgOverlayService)
-            ViewTreeViewModelStoreOwner.set(this, overlayViewTreeOwner)
-            ViewTreeSavedStateRegistryOwner.set(this, overlayViewTreeOwner)
+            setViewTreeLifecycleOwner(this@LkmdbgOverlayService)
+            setViewTreeViewModelStoreOwner(overlayViewTreeOwner)
+            setViewTreeSavedStateRegistryOwner(overlayViewTreeOwner)
             setContent {
                 LkmdbgTheme {
                     OverlayWorkspace(
