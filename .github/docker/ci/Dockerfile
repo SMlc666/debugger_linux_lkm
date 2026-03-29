@@ -9,6 +9,7 @@ RUN apt-get update && \
         bison \
         build-essential \
         ca-certificates \
+        clang \
         cpio \
         file \
         flex \
@@ -17,12 +18,14 @@ RUN apt-get update && \
         gzip \
         libc6-dev-arm64-cross \
         libelf-dev \
+        lld \
         libssl-dev \
         python3 \
         qemu-system-arm \
         socat \
         tar \
         unzip \
+        llvm \
         xz-utils \
         zip \
         zstd && \
