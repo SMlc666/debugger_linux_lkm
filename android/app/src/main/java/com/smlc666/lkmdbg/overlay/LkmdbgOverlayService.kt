@@ -7,8 +7,6 @@ import android.os.IBinder
 import android.os.Bundle
 import android.view.Gravity
 import android.view.WindowManager
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.LifecycleService
@@ -26,11 +24,9 @@ import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.ui.theme.LkmdbgTheme
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
-import kotlinx.coroutines.flow.MutableStateFlow
 
 class LkmdbgOverlayService : LifecycleService() {
     private val overlayViewTreeOwner = OverlayViewTreeOwner()
-    private val expandedState = MutableStateFlow(false)
     private lateinit var windowManager: WindowManager
     private lateinit var repository: SessionBridgeRepository
     private var rootView: ComposeView? = null
@@ -38,6 +34,7 @@ class LkmdbgOverlayService : LifecycleService() {
     private var collapsedDiameterPx = 0
     private var collapsedX = 0
     private var collapsedY = 0
+    private var expanded = false
 
     override fun onBind(intent: Intent): IBinder? = super.onBind(intent)
 
@@ -80,16 +77,17 @@ class LkmdbgOverlayService : LifecycleService() {
         collapsedDiameterPx = (72f * density).roundToInt()
         collapsedX = (18f * density).roundToInt()
         collapsedY = (96f * density).roundToInt()
+        mountOverlay(expanded)
+    }
 
-        val params = createLayoutParams(expanded = false)
-
+    private fun mountOverlay(expanded: Boolean) {
+        val params = createLayoutParams(expanded)
         val composeView = ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setViewTreeLifecycleOwner(this@LkmdbgOverlayService)
             setViewTreeViewModelStoreOwner(overlayViewTreeOwner)
             setViewTreeSavedStateRegistryOwner(overlayViewTreeOwner)
             setContent {
-                val expanded by expandedState.collectAsState()
                 LkmdbgTheme {
                     OverlayWorkspace(
                         repository = repository,
@@ -102,14 +100,13 @@ class LkmdbgOverlayService : LifecycleService() {
                 }
             }
         }
-
         rootView = composeView
         layoutParams = params
         windowManager.addView(composeView, params)
     }
 
     private fun moveCollapsedBall(deltaX: Float, deltaY: Float) {
-        if (expandedState.value)
+        if (expanded)
             return
         collapsedX += deltaX.roundToInt()
         collapsedY += deltaY.roundToInt()
@@ -121,27 +118,15 @@ class LkmdbgOverlayService : LifecycleService() {
     }
 
     private fun updateExpandedState(nextExpanded: Boolean) {
-        if (expandedState.value == nextExpanded)
+        if (expanded == nextExpanded)
             return
-        expandedState.value = nextExpanded
-        val params = layoutParams ?: return
-        val view = rootView ?: return
-        if (nextExpanded) {
-            params.width = WindowManager.LayoutParams.MATCH_PARENT
-            params.height = WindowManager.LayoutParams.MATCH_PARENT
-            params.flags = expandedWindowFlags()
-            params.x = 0
-            params.y = 0
-        } else {
-            params.width = collapsedDiameterPx
-            params.height = collapsedDiameterPx
-            params.flags = collapsedWindowFlags()
-            params.x = collapsedX
-            params.y = collapsedY
+        expanded = nextExpanded
+        rootView?.let { view ->
+            runCatching { windowManager.removeViewImmediate(view) }
         }
-        view.requestLayout()
-        view.invalidate()
-        windowManager.updateViewLayout(view, params)
+        rootView = null
+        layoutParams = null
+        mountOverlay(expanded)
     }
 
     private fun createLayoutParams(expanded: Boolean): WindowManager.LayoutParams =
