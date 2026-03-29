@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,14 +41,16 @@ internal fun LauncherScreen(
                         Color(0xFF0E1E25),
                     ),
                 ),
-            )
-            .padding(if (maxWidth >= 840.dp) 28.dp else 20.dp),
+            ),
     ) {
         val wideLayout = maxWidth >= 840.dp
+        val outerPadding = if (wideLayout) 28.dp else 20.dp
 
         if (wideLayout) {
             Row(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(outerPadding),
                 horizontalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 Column(
@@ -67,7 +68,9 @@ internal fun LauncherScreen(
             }
         } else {
             Column(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(outerPadding),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 LauncherIntroCard()
