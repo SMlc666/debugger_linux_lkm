@@ -135,6 +135,8 @@ Java_com_smlc666_lkmdbg_data_NativeAssembler_nativeAssembleArm64(
 	size_t statement_count = 0;
 	const char *source = nullptr;
 	ks_err err;
+	ks_err asm_err;
+	int asm_status;
 	std::string error;
 
 	if (!source_text) {
@@ -161,12 +163,13 @@ Java_com_smlc666_lkmdbg_data_NativeAssembler_nativeAssembleArm64(
 		return nullptr;
 	}
 
-	err = ks_asm(engine, source, static_cast<uint64_t>(base_address), &encoded,
-		     &encoded_size, &statement_count);
+	asm_status = ks_asm(engine, source, static_cast<uint64_t>(base_address),
+			    &encoded, &encoded_size, &statement_count);
 	env->ReleaseStringUTFChars(source_text, source);
-	if (err != KS_ERR_OK) {
-		error = std::string("arm64 assembly failed: ") + ks_strerror(err);
-		if (ks_errno(engine) == KS_ERR_ASM_INVALIDOPERAND)
+	if (asm_status != 0) {
+		asm_err = ks_errno(engine);
+		error = std::string("arm64 assembly failed: ") + ks_strerror(asm_err);
+		if (asm_err == KS_ERR_ASM_INVALIDOPERAND)
 			error.append(" (invalid operand)");
 		ks_close(engine);
 		throw_java_exception(env, "java/lang/IllegalArgumentException", error);
