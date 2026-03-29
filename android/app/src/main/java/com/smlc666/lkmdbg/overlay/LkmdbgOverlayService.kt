@@ -8,8 +8,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.LifecycleService
@@ -27,9 +26,11 @@ import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.ui.theme.LkmdbgTheme
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class LkmdbgOverlayService : LifecycleService() {
     private val overlayViewTreeOwner = OverlayViewTreeOwner()
+    private val expandedState = MutableStateFlow(false)
     private lateinit var windowManager: WindowManager
     private lateinit var repository: SessionBridgeRepository
     private var rootView: ComposeView? = null
@@ -37,7 +38,6 @@ class LkmdbgOverlayService : LifecycleService() {
     private var collapsedDiameterPx = 0
     private var collapsedX = 0
     private var collapsedY = 0
-    private var expanded by mutableStateOf(false)
 
     override fun onBind(intent: Intent): IBinder? = super.onBind(intent)
 
@@ -81,19 +81,7 @@ class LkmdbgOverlayService : LifecycleService() {
         collapsedX = (18f * density).roundToInt()
         collapsedY = (96f * density).roundToInt()
 
-        val params = WindowManager.LayoutParams(
-            collapsedDiameterPx,
-            collapsedDiameterPx,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = collapsedX
-            y = collapsedY
-        }
+        val params = createLayoutParams(expanded = false)
 
         val composeView = ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
@@ -101,6 +89,7 @@ class LkmdbgOverlayService : LifecycleService() {
             setViewTreeViewModelStoreOwner(overlayViewTreeOwner)
             setViewTreeSavedStateRegistryOwner(overlayViewTreeOwner)
             setContent {
+                val expanded by expandedState.collectAsState()
                 LkmdbgTheme {
                     OverlayWorkspace(
                         repository = repository,
@@ -120,7 +109,7 @@ class LkmdbgOverlayService : LifecycleService() {
     }
 
     private fun moveCollapsedBall(deltaX: Float, deltaY: Float) {
-        if (expanded)
+        if (expandedState.value)
             return
         collapsedX += deltaX.roundToInt()
         collapsedY += deltaY.roundToInt()
@@ -132,24 +121,49 @@ class LkmdbgOverlayService : LifecycleService() {
     }
 
     private fun updateExpandedState(nextExpanded: Boolean) {
-        if (expanded == nextExpanded)
+        if (expandedState.value == nextExpanded)
             return
-        expanded = nextExpanded
+        expandedState.value = nextExpanded
         val params = layoutParams ?: return
         val view = rootView ?: return
         if (nextExpanded) {
             params.width = WindowManager.LayoutParams.MATCH_PARENT
             params.height = WindowManager.LayoutParams.MATCH_PARENT
+            params.flags = expandedWindowFlags()
             params.x = 0
             params.y = 0
         } else {
             params.width = collapsedDiameterPx
             params.height = collapsedDiameterPx
+            params.flags = collapsedWindowFlags()
             params.x = collapsedX
             params.y = collapsedY
         }
+        view.requestLayout()
+        view.invalidate()
         windowManager.updateViewLayout(view, params)
     }
+
+    private fun createLayoutParams(expanded: Boolean): WindowManager.LayoutParams =
+        WindowManager.LayoutParams(
+            if (expanded) WindowManager.LayoutParams.MATCH_PARENT else collapsedDiameterPx,
+            if (expanded) WindowManager.LayoutParams.MATCH_PARENT else collapsedDiameterPx,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            if (expanded) expandedWindowFlags() else collapsedWindowFlags(),
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = if (expanded) 0 else collapsedX
+            y = if (expanded) 0 else collapsedY
+        }
+
+    private fun collapsedWindowFlags(): Int =
+        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+
+    private fun expandedWindowFlags(): Int =
+        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
 
     private fun removeOverlay() {
         rootView?.let { view ->
