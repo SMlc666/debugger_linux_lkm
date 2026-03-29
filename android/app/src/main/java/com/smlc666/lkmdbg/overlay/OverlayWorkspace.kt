@@ -33,7 +33,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.consume
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
@@ -41,14 +40,14 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.collectAsState
 import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.ui.WorkspaceContent
-import com.smlc666.lkmdbg.ui.WorkspaceRail
 import com.smlc666.lkmdbg.ui.WorkspaceTab
 import com.smlc666.lkmdbg.ui.rememberWorkspaceActions
 import com.smlc666.lkmdbg.ui.sampleDashboardState
+import com.smlc666.lkmdbg.ui.components.WorkspaceRail
 import kotlin.math.hypot
 
 @Composable
@@ -62,7 +61,7 @@ internal fun OverlayWorkspace(
 ) {
     val context = LocalContext.current
     val dashboardState = remember(context) { sampleDashboardState(context) }
-    val sessionState by repository.state.collectAsStateWithLifecycle()
+    val sessionState by repository.state.collectAsState()
     var selectedTab by remember { mutableStateOf(WorkspaceTab.Session) }
     val actions = rememberWorkspaceActions(repository) {
         selectedTab = WorkspaceTab.Threads
@@ -183,7 +182,6 @@ private fun FloatingBall(
                             if (!dragged && hypot(totalDelta.x.toDouble(), totalDelta.y.toDouble()) > viewConfiguration.touchSlop)
                                 dragged = true
                             if (dragged) {
-                                change.consume()
                                 onMoveBy(delta.x, delta.y)
                             }
                         }
