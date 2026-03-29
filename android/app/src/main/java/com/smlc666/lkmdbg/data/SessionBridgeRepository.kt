@@ -31,6 +31,7 @@ private val MEMORY_SELECTION_SIZES = listOf(1, 2, 4, 8, 16)
 data class MemorySearchUiState(
     val query: String = "",
     val valueType: MemorySearchValueType = MemorySearchValueType.Int32,
+    val refineMode: MemorySearchRefineMode = MemorySearchRefineMode.Exact,
     val regionPreset: MemoryRegionPreset = MemoryRegionPreset.All,
     val summary: String = "",
     val results: List<MemorySearchResult> = emptyList(),
@@ -148,6 +149,14 @@ class SessionBridgeRepository(
         _state.update { current ->
             current.copy(
                 memorySearch = current.memorySearch.copy(valueType = valueType),
+            )
+        }
+    }
+
+    fun updateMemorySearchRefineMode(refineMode: MemorySearchRefineMode) {
+        _state.update { current ->
+            current.copy(
+                memorySearch = current.memorySearch.copy(refineMode = refineMode),
             )
         }
     }
@@ -320,6 +329,7 @@ class SessionBridgeRepository(
                 vmas = state.value.vmas,
                 sourceResults = currentResults,
                 valueType = search.valueType,
+                refineMode = search.refineMode,
                 query = search.query,
                 reader = { address, length ->
                     val reply = client.readMemory(address, length)

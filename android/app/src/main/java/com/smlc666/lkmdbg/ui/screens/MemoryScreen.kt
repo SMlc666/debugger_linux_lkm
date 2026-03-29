@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.data.MemoryPage
 import com.smlc666.lkmdbg.data.MemoryRegionPreset
+import com.smlc666.lkmdbg.data.MemorySearchRefineMode
 import com.smlc666.lkmdbg.data.MemorySearchResult
 import com.smlc666.lkmdbg.data.MemorySearchValueType
 import com.smlc666.lkmdbg.data.MemoryScalarValue
@@ -67,6 +68,7 @@ internal fun MemoryScreen(
     onWriteAsmChanged: (String) -> Unit,
     onSearchQueryChanged: (String) -> Unit,
     onSearchValueTypeChanged: (MemorySearchValueType) -> Unit,
+    onSearchRefineModeChanged: (MemorySearchRefineMode) -> Unit,
     onRegionPresetChanged: (MemoryRegionPreset) -> Unit,
 ) {
     var showRanges by remember { mutableStateOf(false) }
@@ -238,6 +240,16 @@ internal fun MemoryScreen(
                         selected = state.memorySearch.valueType == type,
                         onClick = { onSearchValueTypeChanged(type) },
                         label = { Text(stringResource(type.labelRes)) },
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            MemoryChipRow {
+                MemorySearchRefineMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = state.memorySearch.refineMode == mode,
+                        onClick = { onSearchRefineModeChanged(mode) },
+                        label = { Text(stringResource(mode.labelRes)) },
                     )
                 }
             }

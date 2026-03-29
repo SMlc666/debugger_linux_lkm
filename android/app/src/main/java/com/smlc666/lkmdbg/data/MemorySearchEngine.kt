@@ -4,7 +4,7 @@ import com.smlc666.lkmdbg.shared.BridgeMemorySearchReply
 import com.smlc666.lkmdbg.shared.BridgeVmaRecord
 import kotlin.math.min
 
-private const val SEARCH_MAX_RESULTS = 128
+private const val SEARCH_MAX_RESULTS = 512
 
 class MemorySearchEngine(
     private val backend: Backend,
@@ -44,14 +44,7 @@ class MemorySearchEngine(
         fun describe(preview: ByteArray): String {
             if (preview.size < bytes.size)
                 return query
-            return when (valueType) {
-                MemorySearchValueType.Int32 -> leInt(preview).toString()
-                MemorySearchValueType.Int64 -> leLong(preview).toString()
-                MemorySearchValueType.Float32 -> leFloat(preview).toString()
-                MemorySearchValueType.Float64 -> leDouble(preview).toString()
-                MemorySearchValueType.HexBytes -> bytes.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
-                MemorySearchValueType.Ascii -> preview.copyOf(bytes.size).decodeToString()
-            }
+            return describePreview(valueType, preview.copyOf(bytes.size))
         }
     }
 
@@ -78,7 +71,15 @@ class MemorySearchEngine(
         for (record in reply.results) {
             val previewSize = min(record.previewSize.toInt(), record.preview.size)
             val preview = record.preview.copyOf(previewSize)
-            results += buildSearchResult(vmas, record.address, record.regionStart, record.regionEnd, preview, pattern)
+            results += buildSearchResult(
+                vmas = vmas,
+                address = record.address,
+                regionStart = record.regionStart,
+                regionEnd = record.regionEnd,
+                preview = preview,
+                matchSize = pattern.bytes.size,
+                valueType = valueType,
+            )
         }
 
         return MemorySearchOutcome(
@@ -92,28 +93,44 @@ class MemorySearchEngine(
         vmas: List<BridgeVmaRecord>,
         sourceResults: List<MemorySearchResult>,
         valueType: MemorySearchValueType,
+        refineMode: MemorySearchRefineMode,
         query: String,
         reader: suspend (ULong, UInt) -> ByteArray,
         maxResults: Int = SEARCH_MAX_RESULTS,
     ): MemorySearchOutcome {
-        val pattern = preparePattern(valueType, query)
+        val width = comparisonWidth(valueType, refineMode, query, sourceResults)
+        val pattern = if (refineMode == MemorySearchRefineMode.Exact) {
+            preparePattern(valueType, query)
+        } else {
+            null
+        }
         val results = ArrayList<MemorySearchResult>(min(sourceResults.size, maxResults))
         var rereadBytes = 0uL
 
         sourceResults.take(min(sourceResults.size, maxResults)).forEach { result ->
-            val preview = reader(result.address, maxOf(pattern.bytes.size, 16).toUInt())
+            val preview = reader(result.address, maxOf(width, 16).toUInt())
             rereadBytes += preview.size.toULong()
-            if (preview.size < pattern.bytes.size)
+            if (preview.size < width)
                 return@forEach
-            if (!preview.copyOf(pattern.bytes.size).contentEquals(pattern.bytes))
+            if (!matchesRefineMode(
+                    mode = refineMode,
+                    valueType = valueType,
+                    previous = result.previewBytes,
+                    current = preview,
+                    width = width,
+                    exactPattern = pattern,
+                )
+            ) {
                 return@forEach
+            }
             results += buildSearchResult(
                 vmas = vmas,
                 address = result.address,
                 regionStart = result.regionStart,
                 regionEnd = result.regionEnd,
                 preview = preview,
-                pattern = pattern,
+                matchSize = width,
+                valueType = valueType,
             )
         }
 
@@ -146,7 +163,8 @@ class MemorySearchEngine(
         regionStart: ULong,
         regionEnd: ULong,
         preview: ByteArray,
-        pattern: PreparedSearchPattern,
+        matchSize: Int,
+        valueType: MemorySearchValueType,
     ): MemorySearchResult {
         val region = vmas.firstOrNull {
             address >= it.startAddr && address < it.endAddr
@@ -156,14 +174,110 @@ class MemorySearchEngine(
         } else {
             describeRange(regionStart, regionEnd)
         }
+        val effectiveSize = min(matchSize, preview.size)
+        val previewSlice = preview.copyOf(effectiveSize)
         return MemorySearchResult(
             address = address,
             regionName = regionName,
             regionStart = regionStart,
             regionEnd = regionEnd,
+            matchSize = matchSize,
+            previewBytes = preview.copyOf(),
             previewHex = preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
-            valueSummary = pattern.describe(preview),
+            valueSummary = describePreview(valueType, previewSlice),
         )
+    }
+
+    private fun comparisonWidth(
+        valueType: MemorySearchValueType,
+        refineMode: MemorySearchRefineMode,
+        query: String,
+        sourceResults: List<MemorySearchResult>,
+    ): Int {
+        if (refineMode == MemorySearchRefineMode.Exact)
+            return preparePattern(valueType, query).bytes.size
+
+        return when (valueType) {
+            MemorySearchValueType.Int32, MemorySearchValueType.Float32 -> 4
+            MemorySearchValueType.Int64, MemorySearchValueType.Float64 -> 8
+            MemorySearchValueType.HexBytes, MemorySearchValueType.Ascii -> {
+                if (query.isNotBlank()) {
+                    preparePattern(valueType, query).bytes.size
+                } else {
+                    sourceResults.firstOrNull()?.matchSize
+                        ?: throw IllegalArgumentException("run an exact search first for this refine mode")
+                }
+            }
+        }
+    }
+
+    private fun matchesRefineMode(
+        mode: MemorySearchRefineMode,
+        valueType: MemorySearchValueType,
+        previous: ByteArray,
+        current: ByteArray,
+        width: Int,
+        exactPattern: PreparedSearchPattern?,
+    ): Boolean {
+        if (previous.size < width || current.size < width)
+            return false
+
+        val previousSlice = previous.copyOf(width)
+        val currentSlice = current.copyOf(width)
+        return when (mode) {
+            MemorySearchRefineMode.Exact -> {
+                val pattern = requireNotNull(exactPattern)
+                currentSlice.contentEquals(pattern.bytes)
+            }
+
+            MemorySearchRefineMode.Changed -> !currentSlice.contentEquals(previousSlice)
+            MemorySearchRefineMode.Unchanged -> currentSlice.contentEquals(previousSlice)
+            MemorySearchRefineMode.Increased ->
+                compareNumeric(valueType, currentSlice, previousSlice) > 0
+
+            MemorySearchRefineMode.Decreased ->
+                compareNumeric(valueType, currentSlice, previousSlice) < 0
+        }
+    }
+
+    private fun compareNumeric(
+        valueType: MemorySearchValueType,
+        current: ByteArray,
+        previous: ByteArray,
+    ): Int = when (valueType) {
+        MemorySearchValueType.Int32 -> leInt(current).compareTo(leInt(previous))
+        MemorySearchValueType.Int64 -> leLong(current).compareTo(leLong(previous))
+        MemorySearchValueType.Float32 -> leFloat(current).compareTo(leFloat(previous))
+        MemorySearchValueType.Float64 -> leDouble(current).compareTo(leDouble(previous))
+        MemorySearchValueType.HexBytes, MemorySearchValueType.Ascii ->
+            throw IllegalArgumentException("increased/decreased only supported for numeric refine")
+    }
+
+    private fun describePreview(
+        valueType: MemorySearchValueType,
+        preview: ByteArray,
+    ): String {
+        if (preview.isEmpty())
+            return ""
+        return when (valueType) {
+            MemorySearchValueType.Int32 ->
+                if (preview.size >= 4) leInt(preview).toString() else preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+            MemorySearchValueType.Int64 ->
+                if (preview.size >= 8) leLong(preview).toString() else preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+            MemorySearchValueType.Float32 ->
+                if (preview.size >= 4) leFloat(preview).toString() else preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+            MemorySearchValueType.Float64 ->
+                if (preview.size >= 8) leDouble(preview).toString() else preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+            MemorySearchValueType.HexBytes ->
+                preview.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
+
+            MemorySearchValueType.Ascii ->
+                preview.decodeToString()
+        }
     }
 
     private class SearchPattern(
@@ -189,12 +303,14 @@ class MemorySearchEngine(
                             (value ushr 24).toByte(),
                         )
                     }
+
                     MemorySearchValueType.Int64 -> {
                         val value = trimmed.toLong()
                         ByteArray(Long.SIZE_BYTES) { shift ->
                             (value ushr (shift * 8)).toByte()
                         }
                     }
+
                     MemorySearchValueType.Float32 -> {
                         val bits = trimmed.toFloat().toBits()
                         byteArrayOf(
@@ -204,12 +320,14 @@ class MemorySearchEngine(
                             (bits ushr 24).toByte(),
                         )
                     }
+
                     MemorySearchValueType.Float64 -> {
                         val bits = trimmed.toDouble().toBits()
                         ByteArray(Long.SIZE_BYTES) { shift ->
                             (bits ushr (shift * 8)).toByte()
                         }
                     }
+
                     MemorySearchValueType.HexBytes -> parseHexBytes(trimmed)
                     MemorySearchValueType.Ascii -> trimmed.toByteArray(Charsets.UTF_8)
                 }

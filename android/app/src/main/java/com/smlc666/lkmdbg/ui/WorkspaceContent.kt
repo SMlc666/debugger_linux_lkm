@@ -92,6 +92,7 @@ internal fun WorkspaceContent(
                     onWriteAsmChanged = actions.onMemoryWriteAsmChanged,
                     onSearchQueryChanged = actions.onMemorySearchQueryChanged,
                     onSearchValueTypeChanged = actions.onMemorySearchValueTypeChanged,
+                    onSearchRefineModeChanged = actions.onMemorySearchRefineModeChanged,
                     onRegionPresetChanged = actions.onMemoryRegionPresetChanged,
                 )
 

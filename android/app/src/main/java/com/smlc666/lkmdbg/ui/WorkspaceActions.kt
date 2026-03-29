@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import com.smlc666.lkmdbg.data.MemoryRegionPreset
+import com.smlc666.lkmdbg.data.MemorySearchRefineMode
 import com.smlc666.lkmdbg.data.MemorySearchValueType
 import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
@@ -43,6 +44,7 @@ internal data class WorkspaceActions(
     val onProcessFilterChanged: (ProcessFilter) -> Unit,
     val onMemorySearchQueryChanged: (String) -> Unit,
     val onMemorySearchValueTypeChanged: (MemorySearchValueType) -> Unit,
+    val onMemorySearchRefineModeChanged: (MemorySearchRefineMode) -> Unit,
     val onMemoryRegionPresetChanged: (MemoryRegionPreset) -> Unit,
 )
 
@@ -108,6 +110,7 @@ internal fun rememberWorkspaceActions(
             onProcessFilterChanged = repository::updateProcessFilter,
             onMemorySearchQueryChanged = repository::updateMemorySearchQuery,
             onMemorySearchValueTypeChanged = repository::updateMemorySearchValueType,
+            onMemorySearchRefineModeChanged = repository::updateMemorySearchRefineMode,
             onMemoryRegionPresetChanged = repository::updateMemoryRegionPreset,
         )
     }

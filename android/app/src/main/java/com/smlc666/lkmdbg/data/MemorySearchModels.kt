@@ -22,6 +22,14 @@ enum class MemorySearchValueType(@StringRes val labelRes: Int) {
     Ascii(R.string.memory_search_type_ascii),
 }
 
+enum class MemorySearchRefineMode(@StringRes val labelRes: Int) {
+    Exact(R.string.memory_refine_mode_exact),
+    Changed(R.string.memory_refine_mode_changed),
+    Unchanged(R.string.memory_refine_mode_unchanged),
+    Increased(R.string.memory_refine_mode_increased),
+    Decreased(R.string.memory_refine_mode_decreased),
+}
+
 enum class MemoryRegionPreset(
     @StringRes val labelRes: Int,
     val wireValue: UInt,
@@ -63,6 +71,8 @@ data class MemorySearchResult(
     val regionName: String,
     val regionStart: ULong,
     val regionEnd: ULong,
+    val matchSize: Int,
+    val previewBytes: ByteArray,
     val previewHex: String,
     val valueSummary: String,
 )

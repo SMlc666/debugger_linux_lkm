@@ -112,6 +112,11 @@
     <string name="memory_search_type_float64">double</string>
     <string name="memory_search_type_hex">hex</string>
     <string name="memory_search_type_ascii">ascii</string>
+    <string name="memory_refine_mode_exact">exact</string>
+    <string name="memory_refine_mode_changed">changed</string>
+    <string name="memory_refine_mode_unchanged">unchanged</string>
+    <string name="memory_refine_mode_increased">increased</string>
+    <string name="memory_refine_mode_decreased">decreased</string>
     <string name="memory_region_all">All</string>
     <string name="memory_region_xa">Xa</string>
     <string name="memory_region_cd">Cd</string>
