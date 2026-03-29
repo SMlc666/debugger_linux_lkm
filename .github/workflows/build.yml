@@ -110,16 +110,16 @@ jobs:
         include:
           - label: 5.10
             kernel_ref: android12-5.10
-            kernel_config: defconfig
-            use_llvm: false
+            kernel_config: gki_defconfig
+            use_llvm: true
             artifact_name: qemu-arm64-boot-5.10
-            cache_suffix: v5.10
+            cache_suffix: v5.10-gki
           - label: 5.15
             kernel_ref: android13-5.15
-            kernel_config: defconfig
-            use_llvm: false
+            kernel_config: gki_defconfig
+            use_llvm: true
             artifact_name: qemu-arm64-boot-5.15
-            cache_suffix: v5.15
+            cache_suffix: v5.15-gki
           - label: 6.1
             kernel_ref: android14-6.1
             kernel_config: gki_defconfig
@@ -128,22 +128,22 @@ jobs:
             cache_suffix: v6.1-android14-gki
           - label: 6.6
             kernel_ref: android15-6.6
-            kernel_config: defconfig
-            use_llvm: false
+            kernel_config: gki_defconfig
+            use_llvm: true
             artifact_name: qemu-arm64-boot-6.6
-            cache_suffix: v6.6
+            cache_suffix: v6.6-gki
           - label: 6.12
             kernel_ref: android16-6.12
-            kernel_config: defconfig
-            use_llvm: false
+            kernel_config: gki_defconfig
+            use_llvm: true
             artifact_name: qemu-arm64-boot-6.12
-            cache_suffix: v6.12
+            cache_suffix: v6.12-gki
           - label: 6.18
             kernel_ref: android17-6.18
-            kernel_config: defconfig
-            use_llvm: false
+            kernel_config: gki_defconfig
+            use_llvm: true
             artifact_name: qemu-arm64-boot-6.18
-            cache_suffix: v6.18
+            cache_suffix: v6.18-gki
     env:
       KERNEL_REPO: https://android.googlesource.com/kernel/common
       KERNEL_REF: ${{ matrix.kernel_ref }}
