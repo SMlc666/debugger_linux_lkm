@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.IBinder
+import android.os.Bundle
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.runtime.getValue
@@ -12,6 +13,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.LifecycleService
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.ViewTreeLifecycleOwner
+import androidx.lifecycle.ViewTreeViewModelStoreOwner
+import androidx.savedstate.SavedStateRegistry
+import androidx.savedstate.SavedStateRegistryController
+import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.ViewTreeSavedStateRegistryOwner
 import com.smlc666.lkmdbg.CrashLogger
 import com.smlc666.lkmdbg.LkmdbgApplication
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
@@ -20,6 +29,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
 class LkmdbgOverlayService : LifecycleService() {
+    private val overlayViewTreeOwner = OverlayViewTreeOwner()
     private lateinit var windowManager: WindowManager
     private lateinit var repository: SessionBridgeRepository
     private var rootView: ComposeView? = null
@@ -35,6 +45,7 @@ class LkmdbgOverlayService : LifecycleService() {
         super.onCreate()
         running.set(true)
         try {
+            overlayViewTreeOwner.attach()
             repository = (application as LkmdbgApplication).sessionRepository
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             createOverlay()
@@ -56,6 +67,7 @@ class LkmdbgOverlayService : LifecycleService() {
 
     override fun onDestroy() {
         removeOverlay()
+        overlayViewTreeOwner.dispose()
         running.set(false)
         super.onDestroy()
     }
@@ -85,6 +97,9 @@ class LkmdbgOverlayService : LifecycleService() {
 
         val composeView = ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+            ViewTreeLifecycleOwner.set(this, this@LkmdbgOverlayService)
+            ViewTreeViewModelStoreOwner.set(this, overlayViewTreeOwner)
+            ViewTreeSavedStateRegistryOwner.set(this, overlayViewTreeOwner)
             setContent {
                 LkmdbgTheme {
                     OverlayWorkspace(
@@ -169,6 +184,37 @@ class LkmdbgOverlayService : LifecycleService() {
             }.onFailure { throwable ->
                 CrashLogger.logHandled(context, "overlay_stop", throwable)
             }
+        }
+    }
+
+    private inner class OverlayViewTreeOwner : SavedStateRegistryOwner, ViewModelStoreOwner {
+        private val store = ViewModelStore()
+        private val controller = SavedStateRegistryController.create(this)
+        private var attached = false
+
+        override val lifecycle
+            get() = this@LkmdbgOverlayService.lifecycle
+
+        override val savedStateRegistry: SavedStateRegistry
+            get() = controller.savedStateRegistry
+
+        override val viewModelStore: ViewModelStore
+            get() = store
+
+        fun attach() {
+            if (attached)
+                return
+            controller.performAttach()
+            controller.performRestore(Bundle.EMPTY)
+            attached = true
+        }
+
+        fun dispose() {
+            if (!attached)
+                return
+            controller.performSave(Bundle())
+            store.clear()
+            attached = false
         }
     }
 }
