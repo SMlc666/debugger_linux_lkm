@@ -78,6 +78,30 @@ static bool lkmdbg_input_channel_has_events(struct lkmdbg_input_channel *channel
 	return READ_ONCE(channel->event_count) > 0;
 }
 
+static bool lkmdbg_input_is_root_device(struct device *dev)
+{
+	const char *name;
+
+	if (!dev)
+		return false;
+
+	name = dev_name(dev);
+	if (!name || strncmp(name, "input", 5))
+		return false;
+
+	name += 5;
+	if (!*name)
+		return false;
+
+	while (*name) {
+		if (*name < '0' || *name > '9')
+			return false;
+		name++;
+	}
+
+	return true;
+}
+
 static struct lkmdbg_input_device *
 lkmdbg_find_input_device_locked(u64 device_id)
 {
@@ -882,12 +906,10 @@ static int lkmdbg_input_register_device(struct device *dev)
 	struct input_dev *input_dev;
 	struct lkmdbg_input_device *device;
 
-	if (!dev)
-		return -EINVAL;
+	if (!lkmdbg_input_is_root_device(dev))
+		return 0;
 
 	input_dev = to_input_dev(dev);
-	if (!input_dev)
-		return -ENODEV;
 
 	device = kzalloc(sizeof(*device), GFP_KERNEL);
 	if (!device)
@@ -936,12 +958,10 @@ static void lkmdbg_input_unregister_device(struct device *dev)
 	struct lkmdbg_input_channel *channel;
 	struct lkmdbg_input_channel *tmp;
 
-	if (!dev)
+	if (!lkmdbg_input_is_root_device(dev))
 		return;
 
 	input_dev = to_input_dev(dev);
-	if (!input_dev)
-		return;
 
 	mutex_lock(&lkmdbg_input_devices_lock);
 	device = lkmdbg_find_input_device_by_dev_locked(input_dev);
