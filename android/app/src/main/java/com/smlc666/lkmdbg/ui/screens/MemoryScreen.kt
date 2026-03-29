@@ -25,7 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -69,7 +69,7 @@ internal fun MemoryScreen(
     onSearchValueTypeChanged: (MemorySearchValueType) -> Unit,
     onRegionPresetChanged: (MemoryRegionPreset) -> Unit,
 ) {
-    var showRanges by rememberSaveable { mutableStateOf(false) }
+    var showRanges by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.snapshot.targetPid, state.images.isEmpty(), state.vmas.isEmpty()) {
         if (state.snapshot.targetPid > 0) {

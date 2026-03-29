@@ -31,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -187,7 +188,12 @@ internal fun MetricCard(title: String, value: String, modifier: Modifier = Modif
 }
 
 @Composable
-internal fun PanelCard(title: String, subtitle: String, content: @Composable () -> Unit) {
+internal fun PanelCard(
+    title: String,
+    subtitle: String,
+    titleIconRes: Int? = null,
+    content: @Composable () -> Unit,
+) {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
@@ -195,7 +201,19 @@ internal fun PanelCard(title: String, subtitle: String, content: @Composable () 
         shape = RoundedCornerShape(28.dp),
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
-            Text(title, style = MaterialTheme.typography.headlineSmall)
+            Row(
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (titleIconRes != null) {
+                    Icon(
+                        painter = painterResource(titleIconRes),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Text(title, style = MaterialTheme.typography.headlineSmall)
+            }
             Spacer(Modifier.height(6.dp))
             Text(
                 subtitle,

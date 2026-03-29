@@ -45,14 +45,21 @@
     <string name="session_attach_queue_title">附加队列</string>
     <string name="session_attach_queue_subtitle">Android 外壳只负责窄化 attach 意图，并转发 session-fd 操作。</string>
     <string name="session_attach_queue_detail">App 负责 bootstrap 和可视状态。复杂调试策略仍应放在内核 session fd API，而不是 overlay 或 `/proc/version` 通道里。</string>
+    <string name="launcher_panel_title">悬浮窗启动器</string>
+    <string name="launcher_panel_subtitle">主界面只负责管理悬浮调试工作区，不再承载具体调试功能。</string>
+    <string name="launcher_panel_body">先授予悬浮权限并启动悬浮工作区，随后所有调试操作都在悬浮窗内完成。</string>
+    <string name="launcher_status_title">桥接快照</string>
+    <string name="launcher_status_subtitle">展示当前 root bridge 与目标选择的最小状态镜像。</string>
     <string name="overlay_panel_title">悬浮窗</string>
-    <string name="overlay_panel_subtitle">启动一个可拖拽控制面板，与主界面共享同一份 repository 状态。</string>
+    <string name="overlay_panel_subtitle">启动一个可拖拽悬浮球，点击后展开成共享同一份 session repository 的全屏半透明工作区。</string>
     <string name="overlay_permission_status">悬浮权限：%1$s，悬浮窗运行中：%2$s</string>
     <string name="overlay_action_grant">授予权限</string>
     <string name="overlay_action_show">显示悬浮窗</string>
     <string name="overlay_action_hide">隐藏悬浮窗</string>
+    <string name="overlay_action_collapse">收起</string>
     <string name="overlay_action_close">关闭悬浮窗</string>
     <string name="overlay_drag_handle">拖动</string>
+    <string name="overlay_ball_label">调试</string>
     <string name="overlay_title">lkmdbg 悬浮窗</string>
     <string name="overlay_status_template">transport=%1$s  pid=%2$d  tid=%3$d  sid=%4$s</string>
     <string name="memory_panel_title">内存工作台</string>
