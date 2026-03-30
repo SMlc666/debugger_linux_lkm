@@ -41,12 +41,12 @@ class WorkspaceContentTest {
             )
         }
 
-        composeRule.onNodeWithTag("workspace-screen-session").assertExists()
-        composeRule.onNodeWithTag("workspace-screen-processes").assertDoesNotExist()
+        composeRule.onNodeWithTag("workspace-screen-Session").assertExists()
+        composeRule.onNodeWithTag("workspace-screen-Processes").assertDoesNotExist()
         composeRule.onNodeWithTag("workspace-tab-Processes").performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("workspace-screen-processes").assertExists()
-        composeRule.onNodeWithTag("workspace-screen-session").assertDoesNotExist()
+        composeRule.onNodeWithTag("workspace-screen-Processes").assertExists()
+        composeRule.onNodeWithTag("workspace-screen-Session").assertDoesNotExist()
     }
 }
 

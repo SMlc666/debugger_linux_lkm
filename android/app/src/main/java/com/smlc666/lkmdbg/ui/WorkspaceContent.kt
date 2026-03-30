@@ -1,6 +1,7 @@
 package com.smlc666.lkmdbg.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -58,68 +59,70 @@ internal fun WorkspaceContent(
         ) {
             WorkspaceSectionHeader(selectedTab = selectedTab)
             key(selectedTab) {
-                when (selectedTab) {
-                    WorkspaceTab.Session -> SessionScreen(
-                        state = sessionState,
-                        onConnect = actions.onConnect,
-                        onOpenSession = actions.onOpenSession,
-                        onRefreshStatus = actions.onRefreshStatus,
-                        onAttachTarget = actions.onAttachTarget,
-                        onTargetPidChanged = actions.onTargetPidChanged,
-                        onOpenProcessWorkspace = { onSelectTab(WorkspaceTab.Processes) },
-                        processFilter = processFilter,
-                        onRefreshProcesses = actions.onRefreshProcesses,
-                        onProcessFilterChanged = onProcessFilterChanged,
-                        onAttachProcess = actions.onAttachProcess,
-                    )
+                Box(modifier = Modifier.testTag("workspace-screen-${selectedTab.name}")) {
+                    when (selectedTab) {
+                        WorkspaceTab.Session -> SessionScreen(
+                            state = sessionState,
+                            onConnect = actions.onConnect,
+                            onOpenSession = actions.onOpenSession,
+                            onRefreshStatus = actions.onRefreshStatus,
+                            onAttachTarget = actions.onAttachTarget,
+                            onTargetPidChanged = actions.onTargetPidChanged,
+                            onOpenProcessWorkspace = { onSelectTab(WorkspaceTab.Processes) },
+                            processFilter = processFilter,
+                            onRefreshProcesses = actions.onRefreshProcesses,
+                            onProcessFilterChanged = onProcessFilterChanged,
+                            onAttachProcess = actions.onAttachProcess,
+                        )
 
-                    WorkspaceTab.Processes -> ProcessWorkspaceScreen(
-                        state = sessionState,
-                        processFilter = processFilter,
-                        onRefreshProcesses = actions.onRefreshProcesses,
-                        onProcessFilterChanged = onProcessFilterChanged,
-                        onAttachProcess = actions.onAttachProcess,
-                    )
+                        WorkspaceTab.Processes -> ProcessWorkspaceScreen(
+                            state = sessionState,
+                            processFilter = processFilter,
+                            onRefreshProcesses = actions.onRefreshProcesses,
+                            onProcessFilterChanged = onProcessFilterChanged,
+                            onAttachProcess = actions.onAttachProcess,
+                        )
 
-                    WorkspaceTab.Memory -> MemoryScreen(
-                        dashboardState = dashboardState,
-                        state = sessionState,
-                        onRefreshImages = actions.onRefreshImages,
-                        onRefreshVmas = actions.onRefreshVmas,
-                        onSearchMemory = actions.onSearchMemory,
-                        onRefineMemory = actions.onRefineMemory,
-                        onPreviewSelectedPc = actions.onPreviewSelectedPc,
-                        onJumpMemoryAddress = actions.onJumpMemoryAddress,
-                        onStepMemoryPage = actions.onStepMemoryPage,
-                        onLoadSelectionIntoHexSearch = actions.onLoadSelectionIntoHexSearch,
-                        onLoadSelectionIntoAsciiSearch = actions.onLoadSelectionIntoAsciiSearch,
-                        onLoadSelectionIntoEditors = actions.onLoadSelectionIntoEditors,
-                        onWriteHexAtFocus = actions.onWriteHexAtFocus,
-                        onWriteAsciiAtFocus = actions.onWriteAsciiAtFocus,
-                        onAssembleArm64ToEditors = actions.onAssembleArm64ToEditors,
-                        onAssembleArm64AndWrite = actions.onAssembleArm64AndWrite,
-                        onSelectMemoryAddress = actions.onSelectMemoryAddress,
-                        onMemoryAddressChanged = actions.onMemoryAddressChanged,
-                        onSelectionSizeChanged = actions.onMemorySelectionSizeChanged,
-                        onWriteHexChanged = actions.onMemoryWriteHexChanged,
-                        onWriteAsciiChanged = actions.onMemoryWriteAsciiChanged,
-                        onWriteAsmChanged = actions.onMemoryWriteAsmChanged,
-                        onSearchQueryChanged = actions.onMemorySearchQueryChanged,
-                        onSearchValueTypeChanged = actions.onMemorySearchValueTypeChanged,
-                        onSearchRefineModeChanged = actions.onMemorySearchRefineModeChanged,
-                        onRegionPresetChanged = actions.onMemoryRegionPresetChanged,
-                    )
+                        WorkspaceTab.Memory -> MemoryScreen(
+                            dashboardState = dashboardState,
+                            state = sessionState,
+                            onRefreshImages = actions.onRefreshImages,
+                            onRefreshVmas = actions.onRefreshVmas,
+                            onSearchMemory = actions.onSearchMemory,
+                            onRefineMemory = actions.onRefineMemory,
+                            onPreviewSelectedPc = actions.onPreviewSelectedPc,
+                            onJumpMemoryAddress = actions.onJumpMemoryAddress,
+                            onStepMemoryPage = actions.onStepMemoryPage,
+                            onLoadSelectionIntoHexSearch = actions.onLoadSelectionIntoHexSearch,
+                            onLoadSelectionIntoAsciiSearch = actions.onLoadSelectionIntoAsciiSearch,
+                            onLoadSelectionIntoEditors = actions.onLoadSelectionIntoEditors,
+                            onWriteHexAtFocus = actions.onWriteHexAtFocus,
+                            onWriteAsciiAtFocus = actions.onWriteAsciiAtFocus,
+                            onAssembleArm64ToEditors = actions.onAssembleArm64ToEditors,
+                            onAssembleArm64AndWrite = actions.onAssembleArm64AndWrite,
+                            onSelectMemoryAddress = actions.onSelectMemoryAddress,
+                            onMemoryAddressChanged = actions.onMemoryAddressChanged,
+                            onSelectionSizeChanged = actions.onMemorySelectionSizeChanged,
+                            onWriteHexChanged = actions.onMemoryWriteHexChanged,
+                            onWriteAsciiChanged = actions.onMemoryWriteAsciiChanged,
+                            onWriteAsmChanged = actions.onMemoryWriteAsmChanged,
+                            onSearchQueryChanged = actions.onMemorySearchQueryChanged,
+                            onSearchValueTypeChanged = actions.onMemorySearchValueTypeChanged,
+                            onSearchRefineModeChanged = actions.onMemorySearchRefineModeChanged,
+                            onRegionPresetChanged = actions.onMemoryRegionPresetChanged,
+                        )
 
-                    WorkspaceTab.Threads -> ThreadScreen(
-                        state = sessionState,
-                        onRefreshThreads = actions.onRefreshThreads,
-                        onSelectThread = actions.onSelectThread,
-                    )
+                        WorkspaceTab.Threads -> ThreadScreen(
+                            state = sessionState,
+                            onRefreshThreads = actions.onRefreshThreads,
+                            onSelectThread = actions.onSelectThread,
+                        )
 
-                    WorkspaceTab.Events -> EventScreen(
-                        state = sessionState,
-                        onRefreshEvents = actions.onRefreshEvents,
-                    )
+                        WorkspaceTab.Events -> EventScreen(
+                            state = sessionState,
+                            onRefreshEvents = actions.onRefreshEvents,
+                        )
+                    }
                 }
             }
         }

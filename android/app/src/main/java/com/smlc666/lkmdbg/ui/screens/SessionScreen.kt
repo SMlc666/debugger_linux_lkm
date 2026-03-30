@@ -219,51 +219,53 @@ private fun QuickAttachCard(
                     stringResource(R.string.process_filter_empty),
             )
         } else {
-            Column(
-                modifier = Modifier.testTag("quick-attach-list"),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                filteredProcesses.take(3).forEach { process ->
-                    key(process.pid) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp)
-                                .testTag("quick-attach-row-${process.pid}"),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            AppProcessIcon(
-                                packageName = process.iconPackageName,
-                                displayName = process.displayName,
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    process.displayName,
-                                    style = MaterialTheme.typography.titleMedium,
+            key(processFilter) {
+                Column(
+                    modifier = Modifier.testTag("quick-attach-list"),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    filteredProcesses.take(3).forEach { process ->
+                        key(process.pid) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp)
+                                    .testTag("quick-attach-row-${process.pid}"),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                AppProcessIcon(
+                                    packageName = process.iconPackageName,
+                                    displayName = process.displayName,
                                 )
-                                Text(
-                                    text = process.processName,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    LkmdbgTag(
-                                        text = stringResource(R.string.process_pid_uid, process.pid, process.uid),
-                                        tone = LkmdbgTagTone.Positive,
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        process.displayName,
+                                        style = MaterialTheme.typography.titleMedium,
                                     )
-                                    if (process.isAndroidApp) {
+                                    Text(
+                                        text = process.processName,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         LkmdbgTag(
-                                            text = stringResource(process.kindLabelRes()),
-                                            tone = LkmdbgTagTone.Accent,
+                                            text = stringResource(R.string.process_pid_uid, process.pid, process.uid),
+                                            tone = LkmdbgTagTone.Positive,
                                         )
+                                        if (process.isAndroidApp) {
+                                            LkmdbgTag(
+                                                text = stringResource(process.kindLabelRes()),
+                                                tone = LkmdbgTagTone.Accent,
+                                            )
+                                        }
                                     }
                                 }
+                                LkmdbgActionButton(
+                                    text = stringResource(R.string.process_action_attach),
+                                    onClick = { onAttachProcess(process.pid) },
+                                    enabled = !state.busy,
+                                )
                             }
-                            LkmdbgActionButton(
-                                text = stringResource(R.string.process_action_attach),
-                                onClick = { onAttachProcess(process.pid) },
-                                enabled = !state.busy,
-                            )
                         }
                     }
                 }

@@ -3,12 +3,6 @@ package com.smlc666.lkmdbg.ui.components
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -83,20 +77,22 @@ internal fun LkmdbgFilterPill(
         animationSpec = tween(durationMillis = 140),
         label = "filter_pill_border",
     )
-    val shape = RoundedCornerShape(16.dp)
-
-    Row(
-        modifier = modifier
-            .border(BorderStroke(1.dp, borderColor), shape)
-            .background(containerColor, shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.Center,
+    Button(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, borderColor),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = containerColor,
+            contentColor = contentColor,
+            disabledContainerColor = DeepTeal.copy(alpha = 0.22f),
+            disabledContentColor = Slate.copy(alpha = 0.7f),
+        ),
+        contentPadding = ButtonDefaults.ContentPadding,
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.labelLarge,
-            color = contentColor,
         )
     }
 }

@@ -5,8 +5,6 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
@@ -23,6 +21,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -113,31 +113,35 @@ private fun WorkspaceTabPill(
         animationSpec = tween(durationMillis = 180),
         label = "workspace_tab_border",
     )
-    val shape = RoundedCornerShape(18.dp)
-
-    Row(
+    Button(
+        onClick = { onSelect(tab) },
         modifier = Modifier
             .animateContentSize()
-            .border(BorderStroke(1.dp, borderColor), shape)
-            .background(containerColor, shape)
-            .clickable(onClick = { onSelect(tab) })
-            .testTag("workspace-tab-${tab.name}")
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .testTag("workspace-tab-${tab.name}"),
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, borderColor),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = containerColor,
+            contentColor = contentColor,
+            disabledContainerColor = DeepTeal.copy(alpha = 0.24f),
+            disabledContentColor = Slate.copy(alpha = 0.72f),
+        ),
     ) {
-        Icon(
-            imageVector = tab.icon,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-            tint = contentColor,
-        )
-        Text(
-            text = stringResource(tab.titleRes),
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            color = contentColor,
-        )
+        Row(
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = tab.icon,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = stringResource(tab.titleRes),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            )
+        }
     }
 }
 
