@@ -215,16 +215,16 @@ void lkmdbg_flush_icache_runtime(unsigned long start, unsigned long end);
 int lkmdbg_task_work_add_runtime(struct task_struct *task,
 				 struct callback_head *work,
 				 unsigned int notify);
-int lkmdbg_kern_path_runtime(const char *name, unsigned int flags,
-			     struct path *path);
-void lkmdbg_path_put_runtime(const struct path *path);
+int __nocfi lkmdbg_kern_path_runtime(const char *name, unsigned int flags,
+				     struct path *path);
+void __nocfi lkmdbg_path_put_runtime(const struct path *path);
 bool lkmdbg_hw_breakpoint_runtime_available(void);
-struct perf_event *lkmdbg_register_user_hw_breakpoint_runtime(
+struct perf_event *__nocfi lkmdbg_register_user_hw_breakpoint_runtime(
 	struct perf_event_attr *attr, void *triggered, void *context,
 	struct task_struct *task);
-int lkmdbg_modify_user_hw_breakpoint_runtime(struct perf_event *bp,
-					     struct perf_event_attr *attr);
-void lkmdbg_unregister_hw_breakpoint_runtime(struct perf_event *bp);
+int __nocfi lkmdbg_modify_user_hw_breakpoint_runtime(
+	struct perf_event *bp, struct perf_event_attr *attr);
+void __nocfi lkmdbg_unregister_hw_breakpoint_runtime(struct perf_event *bp);
 
 struct lkmdbg_session {
 	struct list_head node;

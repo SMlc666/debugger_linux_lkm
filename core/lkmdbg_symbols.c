@@ -253,8 +253,8 @@ int __nocfi lkmdbg_task_work_add_runtime(struct task_struct *task,
 	return fn(task, work, notify);
 }
 
-int lkmdbg_kern_path_runtime(const char *name, unsigned int flags,
-			     struct path *path)
+int __nocfi lkmdbg_kern_path_runtime(const char *name, unsigned int flags,
+				     struct path *path)
 {
 	lkmdbg_kern_path_runtime_fn fn;
 
@@ -265,7 +265,7 @@ int lkmdbg_kern_path_runtime(const char *name, unsigned int flags,
 	return fn(name, flags, path);
 }
 
-void lkmdbg_path_put_runtime(const struct path *path)
+void __nocfi lkmdbg_path_put_runtime(const struct path *path)
 {
 	lkmdbg_path_put_runtime_fn fn;
 
@@ -283,7 +283,7 @@ bool lkmdbg_hw_breakpoint_runtime_available(void)
 	       lkmdbg_symbols.unregister_hw_breakpoint_sym;
 }
 
-struct perf_event *lkmdbg_register_user_hw_breakpoint_runtime(
+struct perf_event *__nocfi lkmdbg_register_user_hw_breakpoint_runtime(
 	struct perf_event_attr *attr, void *triggered, void *context,
 	struct task_struct *task)
 {
@@ -297,8 +297,8 @@ struct perf_event *lkmdbg_register_user_hw_breakpoint_runtime(
 	return fn(attr, triggered, context, task);
 }
 
-int lkmdbg_modify_user_hw_breakpoint_runtime(struct perf_event *bp,
-					     struct perf_event_attr *attr)
+int __nocfi lkmdbg_modify_user_hw_breakpoint_runtime(
+	struct perf_event *bp, struct perf_event_attr *attr)
 {
 	lkmdbg_modify_user_hw_breakpoint_runtime_fn fn;
 
@@ -310,7 +310,7 @@ int lkmdbg_modify_user_hw_breakpoint_runtime(struct perf_event *bp,
 	return fn(bp, attr);
 }
 
-void lkmdbg_unregister_hw_breakpoint_runtime(struct perf_event *bp)
+void __nocfi lkmdbg_unregister_hw_breakpoint_runtime(struct perf_event *bp)
 {
 	lkmdbg_unregister_hw_breakpoint_runtime_fn fn;
 
