@@ -2042,9 +2042,10 @@ static void lkmdbg_trace_sched_process_fork(void *data,
 					      parent->pid);
 }
 
-static void lkmdbg_trace_sched_process_exec(void *data, struct task_struct *p,
-					    pid_t old_pid,
-					    struct linux_binprm *bprm)
+static void __nocfi lkmdbg_trace_sched_process_exec(void *data,
+						    struct task_struct *p,
+						    pid_t old_pid,
+						    struct linux_binprm *bprm)
 {
 	(void)data;
 	(void)bprm;
@@ -2056,7 +2057,8 @@ static void lkmdbg_trace_sched_process_exec(void *data, struct task_struct *p,
 					      0, p->pid, 0, old_pid, 0);
 }
 
-static void lkmdbg_trace_sched_process_exit(void *data, struct task_struct *p)
+static void __nocfi lkmdbg_trace_sched_process_exit(void *data,
+						    struct task_struct *p)
 {
 	(void)data;
 
@@ -2070,10 +2072,10 @@ static void lkmdbg_trace_sched_process_exit(void *data, struct task_struct *p)
 					      0);
 }
 
-static void lkmdbg_trace_signal_generate(void *data, int sig,
-					 struct kernel_siginfo *info,
-					 struct task_struct *task, int group,
-					 int result)
+static void __nocfi lkmdbg_trace_signal_generate(void *data, int sig,
+						 struct kernel_siginfo *info,
+						 struct task_struct *task,
+						 int group, int result)
 {
 	u64 siginfo_code = 0;
 

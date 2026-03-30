@@ -429,9 +429,10 @@ static void lkmdbg_input_deliver_event(struct lkmdbg_input_device *device,
 	spin_unlock_irqrestore(&device->lock, irqflags);
 }
 
-static void lkmdbg_input_event_replacement(struct input_dev *dev,
-					   unsigned int type,
-					   unsigned int code, int value)
+static void __nocfi lkmdbg_input_event_replacement(struct input_dev *dev,
+						   unsigned int type,
+						   unsigned int code,
+						   int value)
 {
 	struct lkmdbg_hook_registry_entry *registry;
 	void (*orig)(struct input_dev *dev, unsigned int type, unsigned int code,
