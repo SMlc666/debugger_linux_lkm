@@ -97,9 +97,11 @@ internal fun LkmdbgFilterPill(
         colors = FilterChipDefaults.filterChipColors(
             containerColor = containerColor,
             selectedContainerColor = containerColor,
-            contentColor = contentColor,
-            selectedLabelColor = contentColor,
             labelColor = contentColor,
+            iconColor = contentColor,
+            selectedLabelColor = contentColor,
+            selectedLeadingIconColor = contentColor,
+            selectedTrailingIconColor = contentColor,
             disabledContainerColor = DeepTeal.copy(alpha = 0.22f),
             disabledLabelColor = Slate.copy(alpha = 0.7f),
         ),
