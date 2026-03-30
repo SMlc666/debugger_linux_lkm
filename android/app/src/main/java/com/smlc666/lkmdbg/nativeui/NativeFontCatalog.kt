@@ -54,7 +54,7 @@ internal object NativeFontCatalog {
                     }
                 }.thenBy { it.name.lowercase(Locale.ROOT) },
             )
-            .map(File::absolutePath)
+            .map { file -> file.absolutePath }
             .toTypedArray()
     }
 }

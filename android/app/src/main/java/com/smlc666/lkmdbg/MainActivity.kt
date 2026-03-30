@@ -8,8 +8,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
-import androidx.activity.enableEdgeToEdge
 import androidx.core.view.setPadding
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import com.smlc666.lkmdbg.overlay.LkmdbgOverlayService
 import com.smlc666.lkmdbg.overlay.OverlayPermission
@@ -22,7 +22,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(buildContentView())
         refreshOverlayStatus()
 
