@@ -429,6 +429,11 @@ static void lkmdbg_input_deliver_event(struct lkmdbg_input_device *device,
 	spin_unlock_irqrestore(&device->lock, irqflags);
 }
 
+/*
+ * Newer Android/GKI builds enable KCFI on input_event() call chains. The
+ * replacement must stay __nocfi or the virtio keyboard smoke will fault as
+ * soon as the first host key reaches the hook.
+ */
 static void __nocfi lkmdbg_input_event_replacement(struct input_dev *dev,
 						   unsigned int type,
 						   unsigned int code,

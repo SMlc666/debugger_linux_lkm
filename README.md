@@ -434,12 +434,17 @@ The current `selftest` path exercises:
 
 ## Android GKI note
 
-The GitHub Actions workflow in this repository currently covers two generic CI checks:
+The GitHub Actions workflow in this repository now covers:
 
 - a host-side build against Ubuntu kernel headers
-- a generic arm64 QEMU smoke test that boots a temporary upstream kernel and runs a basic `insmod`/`rmmod` cycle
+- an Android common kernel arm64 QEMU matrix for `5.10`, `5.15`, `6.1`, `6.6`, `6.12`, and `6.18`
+- per-version smoke runs that exercise session bootstrap, memory/VMA/page/phys paths, runtime events, input injection, and userspace examples
+- per-version hook-soak runs that repeatedly load the module-local hook selftests
 
-That QEMU job is only meant to catch obvious runtime regressions in a plain arm64 Linux environment. It still does not validate Android 14 GKI 6.1 compatibility.
+Two CI compatibility notes are worth preserving:
+
+- the QEMU guest cache is intentionally strict; stale guest kernels can otherwise look reusable while missing `CONFIG_VIRTIO_INPUT` and make the keyboard smoke fail for the wrong reason
+- the arm64 syscall/trace fallback order is intentionally version-sensitive; `5.15+` prefers `do_el0_svc`, and `6.18` needs the updated `sched_process_exit(task, group_dead)` tracepoint callback signature
 
 For actual Android bring-up you should point `KDIR` at the exact `android14-6.1` kernel build tree or exported module build headers used by your target device.
 
