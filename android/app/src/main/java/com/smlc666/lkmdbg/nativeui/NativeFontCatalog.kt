@@ -5,6 +5,10 @@ import java.io.File
 import java.util.Locale
 
 internal object NativeFontCatalog {
+    private val bundledFontAssets = listOf(
+        "NotoSansSC-Regular.otf",
+    )
+
     private val cjkPreferredNameTokens = listOf(
         "notosanssc",
         "notosanscjk",
@@ -41,6 +45,7 @@ internal object NativeFontCatalog {
     }
 
     fun buildCandidatePaths(context: Context): Array<String> {
+        installBundledFonts(context)
         val candidates = mutableListOf<File>()
         val dirs = listOf(
             File(context.filesDir, "fonts"),
@@ -73,5 +78,24 @@ internal object NativeFontCatalog {
             )
             .map { file -> file.absolutePath }
             .toTypedArray()
+    }
+
+    fun installBundledFonts(context: Context) {
+        val targetDir = File(context.filesDir, "fonts")
+        if (!targetDir.exists())
+            targetDir.mkdirs()
+
+        for (assetName in bundledFontAssets) {
+            val target = File(targetDir, assetName)
+            if (target.isFile && target.length() > 0L)
+                continue
+            runCatching {
+                context.assets.open("fonts/$assetName").use { input ->
+                    target.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+        }
     }
 }
