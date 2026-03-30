@@ -2057,10 +2057,17 @@ static void __nocfi lkmdbg_trace_sched_process_exec(void *data,
 					      0, p->pid, 0, old_pid, 0);
 }
 
-static void __nocfi lkmdbg_trace_sched_process_exit(void *data,
-						    struct task_struct *p)
+static void __nocfi lkmdbg_trace_sched_process_exit(
+	void *data, struct task_struct *p
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	, bool group_dead
+#endif
+)
 {
 	(void)data;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	(void)group_dead;
+#endif
 
 	if (!p)
 		return;
@@ -2754,7 +2761,7 @@ static int lkmdbg_install_syscall_enter_backend(void)
 		name = "__invoke_syscall";
 		lkmdbg_syscall_enter_hook_kind =
 			LKMDBG_SYSCALL_ENTER_HOOK_INVOKE_INNER;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
 	} else if (lkmdbg_symbols.do_el0_svc_sym) {
 		target = (void *)lkmdbg_symbols.do_el0_svc_sym;
 		replacement = lkmdbg_do_el0_svc_replacement;
@@ -2774,7 +2781,7 @@ static int lkmdbg_install_syscall_enter_backend(void)
 		name = "__invoke_syscall";
 		lkmdbg_syscall_enter_hook_kind =
 			LKMDBG_SYSCALL_ENTER_HOOK_INVOKE_INNER;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
 	} else if (lkmdbg_symbols.do_el0_svc_sym) {
 		target = (void *)lkmdbg_symbols.do_el0_svc_sym;
 		replacement = lkmdbg_do_el0_svc_replacement;
