@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.collectAsState
 import com.smlc666.lkmdbg.R
+import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.ui.WorkspaceContent
 import com.smlc666.lkmdbg.ui.WorkspaceTab
@@ -61,9 +63,14 @@ internal fun OverlayWorkspace(
     val context = LocalContext.current
     val dashboardState = remember(context) { sampleDashboardState(context) }
     val sessionState by repository.state.collectAsState()
-    var selectedTab by remember { mutableStateOf(WorkspaceTab.Session) }
+    var selectedTab by rememberSaveable { mutableStateOf(WorkspaceTab.Session) }
+    var selectedProcessFilter by rememberSaveable { mutableStateOf(ProcessFilter.All) }
     val actions = rememberWorkspaceActions(repository) {
         selectedTab = WorkspaceTab.Threads
+    }
+    val updateProcessFilter: (ProcessFilter) -> Unit = { filter ->
+        selectedProcessFilter = filter
+        actions.onProcessFilterChanged(filter)
     }
 
     if (!expanded) {
@@ -133,6 +140,8 @@ internal fun OverlayWorkspace(
                                     sessionState = sessionState,
                                     selectedTab = selectedTab,
                                     onSelectTab = { selectedTab = it },
+                                    processFilter = selectedProcessFilter,
+                                    onProcessFilterChanged = updateProcessFilter,
                                     actions = actions,
                                     modifier = Modifier.weight(1f),
                                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
@@ -146,6 +155,8 @@ internal fun OverlayWorkspace(
                                 sessionState = sessionState,
                                 selectedTab = selectedTab,
                                 onSelectTab = { selectedTab = it },
+                                processFilter = selectedProcessFilter,
+                                onProcessFilterChanged = updateProcessFilter,
                                 actions = actions,
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),

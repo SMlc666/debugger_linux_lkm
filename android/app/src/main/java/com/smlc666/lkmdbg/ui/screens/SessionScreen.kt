@@ -37,11 +37,12 @@ internal fun SessionScreen(
     onRefreshStatus: () -> Unit,
     onAttachTarget: () -> Unit,
     onTargetPidChanged: (String) -> Unit,
+    processFilter: ProcessFilter,
     onRefreshProcesses: () -> Unit,
     onProcessFilterChanged: (ProcessFilter) -> Unit,
     onAttachProcess: (Int) -> Unit,
 ) {
-    val filteredProcesses = state.processes.filter { state.processFilter.matches(it) }
+    val filteredProcesses = state.processes.filter { processFilter.matches(it) }
 
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -59,6 +60,7 @@ internal fun SessionScreen(
         item {
             QuickAttachCard(
                 state = state,
+                processFilter = processFilter,
                 filteredProcesses = filteredProcesses,
                 onRefreshProcesses = onRefreshProcesses,
                 onProcessFilterChanged = onProcessFilterChanged,
@@ -155,6 +157,7 @@ private fun SessionControlCard(
 @Composable
 private fun QuickAttachCard(
     state: SessionBridgeState,
+    processFilter: ProcessFilter,
     filteredProcesses: List<ResolvedProcessRecord>,
     onRefreshProcesses: () -> Unit,
     onProcessFilterChanged: (ProcessFilter) -> Unit,
@@ -183,7 +186,7 @@ private fun QuickAttachCard(
             ProcessFilter.entries.forEach { filter ->
                 LkmdbgFilterPill(
                     text = stringResource(filter.labelRes()),
-                    selected = state.processFilter == filter,
+                    selected = processFilter == filter,
                     onClick = { onProcessFilterChanged(filter) },
                 )
             }

@@ -36,11 +36,12 @@ import com.smlc666.lkmdbg.ui.components.PanelCard
 @Composable
 internal fun ProcessWorkspaceScreen(
     state: SessionBridgeState,
+    processFilter: ProcessFilter,
     onRefreshProcesses: () -> Unit,
     onProcessFilterChanged: (ProcessFilter) -> Unit,
     onAttachProcess: (Int) -> Unit,
 ) {
-    val filteredProcesses = state.processes.filter { state.processFilter.matches(it) }
+    val filteredProcesses = state.processes.filter { processFilter.matches(it) }
 
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -48,6 +49,7 @@ internal fun ProcessWorkspaceScreen(
         item {
             ProcessControlPanel(
                 state = state,
+                processFilter = processFilter,
                 onRefreshProcesses = onRefreshProcesses,
                 onProcessFilterChanged = onProcessFilterChanged,
             )
@@ -74,6 +76,7 @@ internal fun ProcessWorkspaceScreen(
 @Composable
 internal fun ProcessControlPanel(
     state: SessionBridgeState,
+    processFilter: ProcessFilter,
     onRefreshProcesses: () -> Unit,
     onProcessFilterChanged: (ProcessFilter) -> Unit,
 ) {
@@ -120,7 +123,7 @@ internal fun ProcessControlPanel(
             ProcessFilter.entries.forEach { filter ->
                 LkmdbgFilterPill(
                     text = stringResource(filter.labelRes()),
-                    selected = state.processFilter == filter,
+                    selected = processFilter == filter,
                     onClick = { onProcessFilterChanged(filter) },
                 )
             }

@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.smlc666.lkmdbg.R
+import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.ui.components.StatusStrip
 import com.smlc666.lkmdbg.ui.components.WorkspaceBar
@@ -33,6 +34,8 @@ internal fun WorkspaceContent(
     sessionState: SessionBridgeState,
     selectedTab: WorkspaceTab,
     onSelectTab: (WorkspaceTab) -> Unit,
+    processFilter: ProcessFilter,
+    onProcessFilterChanged: (ProcessFilter) -> Unit,
     actions: WorkspaceActions,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
@@ -69,15 +72,17 @@ internal fun WorkspaceContent(
                         onRefreshStatus = actions.onRefreshStatus,
                         onAttachTarget = actions.onAttachTarget,
                         onTargetPidChanged = actions.onTargetPidChanged,
+                        processFilter = processFilter,
                         onRefreshProcesses = actions.onRefreshProcesses,
-                        onProcessFilterChanged = actions.onProcessFilterChanged,
+                        onProcessFilterChanged = onProcessFilterChanged,
                         onAttachProcess = actions.onAttachProcess,
                     )
 
                     WorkspaceTab.Processes -> ProcessWorkspaceScreen(
                         state = sessionState,
+                        processFilter = processFilter,
                         onRefreshProcesses = actions.onRefreshProcesses,
-                        onProcessFilterChanged = actions.onProcessFilterChanged,
+                        onProcessFilterChanged = onProcessFilterChanged,
                         onAttachProcess = actions.onAttachProcess,
                     )
 
