@@ -45,6 +45,8 @@
     <string name="session_attach_queue_title">Attach Queue</string>
     <string name="session_attach_queue_subtitle">The Android shell keeps attach intent narrow and forwards only session-fd operations.</string>
     <string name="session_attach_queue_detail">Use the app for bootstrap and visual status. Feature-heavy debugger policy still belongs to the kernel session fd API, not the overlay or `/proc/version` path.</string>
+    <string name="session_quick_attach_title">Quick Attach</string>
+    <string name="session_quick_attach_subtitle">Browse live processes here and attach directly, without typing a PID first.</string>
     <string name="launcher_panel_title">Overlay Launcher</string>
     <string name="launcher_panel_subtitle">The main activity is only a control surface for the floating debugger workspace.</string>
     <string name="launcher_panel_body">Grant overlay permission, launch the floating workspace, then do all debugger operations in the overlay.</string>

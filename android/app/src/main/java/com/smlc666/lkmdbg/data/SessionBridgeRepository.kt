@@ -211,8 +211,12 @@ class SessionBridgeRepository(
 
     suspend fun openSession() {
         runOperation {
+            if (state.value.hello == null)
+                connectUnsafe()
             openSessionUnsafe()
             refreshStatusUnsafe()
+            if (state.value.processes.isEmpty())
+                refreshProcessesUnsafe()
         }
     }
 
@@ -241,16 +245,7 @@ class SessionBridgeRepository(
 
     suspend fun refreshProcesses() {
         runOperation {
-            val reply = client.queryProcesses()
-            val resolved = processResolver.resolve(reply.processes)
-            _state.update { current ->
-                current.copy(
-                    processes = resolved,
-                    lastMessage = reply.message.ifBlank {
-                        appContext.getString(R.string.process_message_refreshed, resolved.size)
-                    },
-                )
-            }
+            refreshProcessesUnsafe()
         }
     }
 
@@ -702,6 +697,7 @@ class SessionBridgeRepository(
 
     private suspend fun connectUnsafe(): BridgeHelloReply {
         val reply = client.connect()
+        ensureBridgeStatusOk(reply.status, reply.message, "HELLO")
         _state.update { current ->
             current.copy(
                 hello = reply,
@@ -715,6 +711,9 @@ class SessionBridgeRepository(
 
     private suspend fun openSessionUnsafe(): BridgeOpenSessionReply {
         val reply = client.openSession()
+        ensureBridgeStatusOk(reply.status, reply.message, "OPEN_SESSION")
+        if (!reply.sessionOpen)
+            throw IllegalStateException(reply.message.ifBlank { "OPEN_SESSION did not open a session" })
         _state.update { current ->
             current.copy(
                 lastMessage = reply.message.ifBlank {
@@ -727,6 +726,7 @@ class SessionBridgeRepository(
 
     private suspend fun refreshStatusUnsafe(): BridgeStatusSnapshot {
         val snapshot = client.statusSnapshot()
+        ensureBridgeStatusOk(snapshot.status, snapshot.message, "STATUS_SNAPSHOT")
         _state.update { current ->
             current.copy(
                 snapshot = snapshot,
@@ -741,6 +741,7 @@ class SessionBridgeRepository(
     private suspend fun attachTargetUnsafe(targetPid: Int) {
         discardMemorySearchSnapshot()
         val reply = client.setTarget(targetPid)
+        ensureBridgeStatusOk(reply.status, reply.message, "SET_TARGET")
         _state.update { current ->
             current.copy(
                 memorySearch = current.memorySearch.copy(
@@ -758,9 +759,14 @@ class SessionBridgeRepository(
 
     private suspend fun refreshThreadsUnsafe(preferredTid: Int? = null) {
         val reply: BridgeThreadListReply = client.queryThreads()
+        ensureBridgeStatusOk(reply.status, reply.message, "QUERY_THREADS")
         val selectedTid = selectThreadId(reply.threads, preferredTid)
         val registers = selectedTid?.let {
-            runCatching { client.getRegisters(it) }.getOrNull()
+            runCatching {
+                client.getRegisters(it).also { registerReply ->
+                    ensureBridgeStatusOk(registerReply.status, registerReply.message, "GET_REGISTERS")
+                }
+            }.getOrNull()
         }
         _state.update { current ->
             current.copy(
@@ -776,6 +782,7 @@ class SessionBridgeRepository(
 
     private suspend fun refreshEventsUnsafe(timeoutMs: Int, maxEvents: Int) {
         val reply: BridgeEventBatchReply = client.pollEvents(timeoutMs, maxEvents)
+        ensureBridgeStatusOk(reply.status, reply.message, "POLL_EVENT")
         val now = System.currentTimeMillis()
         _state.update { current ->
             val merged = buildList {
@@ -796,6 +803,7 @@ class SessionBridgeRepository(
 
     private suspend fun refreshImagesUnsafe() {
         val reply: BridgeImageListReply = client.queryImages()
+        ensureBridgeStatusOk(reply.status, reply.message, "QUERY_IMAGES")
         _state.update { current ->
             current.copy(
                 images = reply.images,
@@ -808,6 +816,7 @@ class SessionBridgeRepository(
 
     private suspend fun refreshVmasUnsafe() {
         val reply: BridgeVmaListReply = client.queryVmas()
+        ensureBridgeStatusOk(reply.status, reply.message, "QUERY_VMAS")
         _state.update { current ->
             current.copy(
                 vmas = reply.vmas,
@@ -824,6 +833,7 @@ class SessionBridgeRepository(
     private suspend fun openMemoryPageUnsafe(remoteAddr: ULong) {
         val pageStart = alignDown(remoteAddr, MEMORY_BROWSER_PAGE_SIZE)
         val reply = client.readMemory(pageStart, MEMORY_BROWSER_PAGE_SIZE)
+        ensureBridgeStatusOk(reply.status, reply.message, "READ_MEMORY")
         val bytes = reply.data.copyOf(reply.bytesDone.toInt())
         _state.update { current ->
             current.copy(
@@ -1305,6 +1315,25 @@ class SessionBridgeRepository(
 
     private fun updateMessage(message: String) {
         _state.update { current -> current.copy(lastMessage = message) }
+    }
+
+    private suspend fun refreshProcessesUnsafe() {
+        val reply: BridgeProcessListReply = client.queryProcesses()
+        ensureBridgeStatusOk(reply.status, reply.message, "QUERY_PROCESSES")
+        val resolved = processResolver.resolve(reply.processes)
+        _state.update { current ->
+            current.copy(
+                processes = resolved,
+                lastMessage = reply.message.ifBlank {
+                    appContext.getString(R.string.process_message_refreshed, resolved.size)
+                },
+            )
+        }
+    }
+
+    private fun ensureBridgeStatusOk(status: Int, message: String, command: String) {
+        if (status < 0)
+            throw IllegalStateException(message.ifBlank { "$command failed with status=$status" })
     }
 
     private fun hex64(value: ULong): String = "0x${value.toString(16)}"

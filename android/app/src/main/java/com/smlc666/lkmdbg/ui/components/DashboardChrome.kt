@@ -19,14 +19,12 @@ import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -42,17 +40,27 @@ import com.smlc666.lkmdbg.ui.WorkspaceTab
 
 @Composable
 internal fun WorkspaceRail(selectedTab: WorkspaceTab, onSelect: (WorkspaceTab) -> Unit) {
-    NavigationRail(
-        containerColor = Color.Transparent,
+    Column(
         modifier = Modifier.padding(start = 10.dp, top = 24.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         WorkspaceTab.entries.forEach { tab ->
-            NavigationRailItem(
-                selected = selectedTab == tab,
-                onClick = { onSelect(tab) },
-                icon = { Icon(tab.icon, contentDescription = stringResource(tab.titleRes)) },
-                label = { Text(stringResource(tab.titleRes)) },
-            )
+            if (selectedTab == tab) {
+                FilledTonalButton(onClick = { onSelect(tab) }) {
+                    Icon(tab.icon, contentDescription = stringResource(tab.titleRes))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(tab.titleRes))
+                }
+            } else {
+                FilterChip(
+                    selected = false,
+                    onClick = { onSelect(tab) },
+                    label = { Text(stringResource(tab.titleRes)) },
+                    leadingIcon = {
+                        Icon(tab.icon, contentDescription = stringResource(tab.titleRes))
+                    },
+                )
+            }
         }
     }
 }
@@ -68,17 +76,30 @@ internal fun WorkspaceBar(
     onSelect: (WorkspaceTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    NavigationBar(
-        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-        modifier = modifier,
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         WorkspaceTab.entries.forEach { tab ->
-            NavigationBarItem(
-                selected = selectedTab == tab,
-                onClick = { onSelect(tab) },
-                icon = { Icon(tab.icon, contentDescription = stringResource(tab.titleRes)) },
-                label = { Text(stringResource(tab.titleRes)) },
-            )
+            if (selectedTab == tab) {
+                FilledTonalButton(onClick = { onSelect(tab) }) {
+                    Icon(tab.icon, contentDescription = stringResource(tab.titleRes))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(tab.titleRes))
+                }
+            } else {
+                FilterChip(
+                    selected = false,
+                    onClick = { onSelect(tab) },
+                    label = { Text(stringResource(tab.titleRes)) },
+                    leadingIcon = {
+                        Icon(tab.icon, contentDescription = stringResource(tab.titleRes))
+                    },
+                )
+            }
         }
     }
 }

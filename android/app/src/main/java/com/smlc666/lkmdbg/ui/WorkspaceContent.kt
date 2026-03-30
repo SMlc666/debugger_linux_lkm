@@ -59,6 +59,9 @@ internal fun WorkspaceContent(
                     onRefreshStatus = actions.onRefreshStatus,
                     onAttachTarget = actions.onAttachTarget,
                     onTargetPidChanged = actions.onTargetPidChanged,
+                    onRefreshProcesses = actions.onRefreshProcesses,
+                    onProcessFilterChanged = actions.onProcessFilterChanged,
+                    onAttachProcess = actions.onAttachProcess,
                 )
 
                 WorkspaceTab.Processes -> ProcessControlPanel(

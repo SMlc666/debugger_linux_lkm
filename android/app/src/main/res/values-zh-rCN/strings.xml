@@ -45,6 +45,8 @@
     <string name="session_attach_queue_title">附加队列</string>
     <string name="session_attach_queue_subtitle">Android 外壳只负责窄化 attach 意图，并转发 session-fd 操作。</string>
     <string name="session_attach_queue_detail">App 负责 bootstrap 和可视状态。复杂调试策略仍应放在内核 session fd API，而不是 overlay 或 `/proc/version` 通道里。</string>
+    <string name="session_quick_attach_title">快速附加</string>
+    <string name="session_quick_attach_subtitle">直接浏览当前进程并附加，不必先手动输入 PID。</string>
     <string name="launcher_panel_title">悬浮窗启动器</string>
     <string name="launcher_panel_subtitle">主界面只负责管理悬浮调试工作区，不再承载具体调试功能。</string>
     <string name="launcher_panel_body">先授予悬浮权限并启动悬浮工作区，随后所有调试操作都在悬浮窗内完成。</string>
