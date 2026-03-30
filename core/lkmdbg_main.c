@@ -366,7 +366,7 @@ static void __exit lkmdbg_exit(void)
 	lkmdbg_pr_info("lkmdbg: unloaded\n");
 }
 
-MODULE_AUTHOR("OpenAI Codex");
+MODULE_AUTHOR("smlc666");
 MODULE_DESCRIPTION("Minimal Linux kernel module scaffold for arm64 Android GKI debugger work");
 MODULE_LICENSE("GPL");
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
