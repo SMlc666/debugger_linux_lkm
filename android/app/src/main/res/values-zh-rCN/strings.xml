@@ -52,6 +52,9 @@
     <string name="session_attach_queue_detail">App 负责 bootstrap 和可视状态。复杂调试策略仍应放在内核 session fd API，而不是 overlay 或 `/proc/version` 通道里。</string>
     <string name="session_quick_attach_title">快速附加</string>
     <string name="session_quick_attach_subtitle">直接浏览当前进程并附加，不必先手动输入 PID。</string>
+    <string name="session_quick_attach_open_processes">打开进程页</string>
+    <string name="session_quick_attach_summary">已加载 %1$d 个进程，当前筛选命中 %2$d 个。</string>
+    <string name="session_quick_attach_more">还有 %1$d 个命中项，请到进程页查看。</string>
     <string name="launcher_panel_title">悬浮窗启动器</string>
     <string name="launcher_panel_subtitle">主界面只负责管理悬浮调试工作区，不再承载具体调试功能。</string>
     <string name="launcher_panel_body">先授予悬浮权限并启动悬浮工作区，随后所有调试操作都在悬浮窗内完成。</string>
@@ -207,6 +210,7 @@
     <string name="process_summary_system">系统 %1$d</string>
     <string name="process_summary_user">用户 %1$d</string>
     <string name="process_empty">还没有进程列表。等待 root agent 就绪后刷新。</string>
+    <string name="process_filter_empty">当前筛选条件下没有命中进程。</string>
     <string name="process_pid_uid">pid=%1$d  uid=%2$d</string>
     <string name="process_kind_label">类型：%1$s</string>
     <string name="process_kind_command_line">命令行</string>

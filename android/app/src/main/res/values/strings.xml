@@ -52,6 +52,9 @@
     <string name="session_attach_queue_detail">Use the app for bootstrap and visual status. Feature-heavy debugger policy still belongs to the kernel session fd API, not the overlay or `/proc/version` path.</string>
     <string name="session_quick_attach_title">Quick Attach</string>
     <string name="session_quick_attach_subtitle">Browse live processes here and attach directly, without typing a PID first.</string>
+    <string name="session_quick_attach_open_processes">Open process workspace</string>
+    <string name="session_quick_attach_summary">%1$d processes loaded, %2$d match the current filter.</string>
+    <string name="session_quick_attach_more">%1$d more matches are available in the Processes page.</string>
     <string name="launcher_panel_title">Overlay Launcher</string>
     <string name="launcher_panel_subtitle">The main activity is only a control surface for the floating debugger workspace.</string>
     <string name="launcher_panel_body">Grant overlay permission, launch the floating workspace, then do all debugger operations in the overlay.</string>
@@ -207,6 +210,7 @@
     <string name="process_summary_system">system %1$d</string>
     <string name="process_summary_user">user %1$d</string>
     <string name="process_empty">No process list yet. Refresh after the root agent comes up.</string>
+    <string name="process_filter_empty">No processes match the current filter.</string>
     <string name="process_pid_uid">pid=%1$d  uid=%2$d</string>
     <string name="process_kind_label">class: %1$s</string>
     <string name="process_kind_command_line">command line</string>

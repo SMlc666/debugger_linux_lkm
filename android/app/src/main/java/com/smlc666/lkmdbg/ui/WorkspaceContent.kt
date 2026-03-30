@@ -72,6 +72,7 @@ internal fun WorkspaceContent(
                         onRefreshStatus = actions.onRefreshStatus,
                         onAttachTarget = actions.onAttachTarget,
                         onTargetPidChanged = actions.onTargetPidChanged,
+                        onOpenProcessWorkspace = { onSelectTab(WorkspaceTab.Processes) },
                         processFilter = processFilter,
                         onRefreshProcesses = actions.onRefreshProcesses,
                         onProcessFilterChanged = onProcessFilterChanged,

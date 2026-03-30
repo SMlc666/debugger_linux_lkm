@@ -41,6 +41,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
@@ -63,10 +64,16 @@ internal fun OverlayWorkspace(
     val context = LocalContext.current
     val dashboardState = remember(context) { sampleDashboardState(context) }
     val sessionState by repository.state.collectAsState()
-    var selectedTab by rememberSaveable { mutableStateOf(WorkspaceTab.Session) }
-    var selectedProcessFilter by rememberSaveable { mutableStateOf(ProcessFilter.All) }
+    var selectedTab by rememberSaveable(sessionState.snapshot.sessionId) { mutableStateOf(WorkspaceTab.Session) }
+    var selectedProcessFilter by rememberSaveable(sessionState.snapshot.sessionId) {
+        mutableStateOf(sessionState.processFilter)
+    }
     val actions = rememberWorkspaceActions(repository) {
         selectedTab = WorkspaceTab.Threads
+    }
+    LaunchedEffect(sessionState.processFilter, sessionState.snapshot.sessionId) {
+        if (selectedProcessFilter != sessionState.processFilter)
+            selectedProcessFilter = sessionState.processFilter
     }
     val updateProcessFilter: (ProcessFilter) -> Unit = { filter ->
         selectedProcessFilter = filter

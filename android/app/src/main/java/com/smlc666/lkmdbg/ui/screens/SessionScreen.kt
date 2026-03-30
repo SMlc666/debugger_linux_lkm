@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.smlc666.lkmdbg.R
@@ -37,6 +38,7 @@ internal fun SessionScreen(
     onRefreshStatus: () -> Unit,
     onAttachTarget: () -> Unit,
     onTargetPidChanged: (String) -> Unit,
+    onOpenProcessWorkspace: () -> Unit,
     processFilter: ProcessFilter,
     onRefreshProcesses: () -> Unit,
     onProcessFilterChanged: (ProcessFilter) -> Unit,
@@ -60,6 +62,7 @@ internal fun SessionScreen(
         item {
             QuickAttachCard(
                 state = state,
+                onOpenProcessWorkspace = onOpenProcessWorkspace,
                 processFilter = processFilter,
                 filteredProcesses = filteredProcesses,
                 onRefreshProcesses = onRefreshProcesses,
@@ -157,6 +160,7 @@ private fun SessionControlCard(
 @Composable
 private fun QuickAttachCard(
     state: SessionBridgeState,
+    onOpenProcessWorkspace: () -> Unit,
     processFilter: ProcessFilter,
     filteredProcesses: List<ResolvedProcessRecord>,
     onRefreshProcesses: () -> Unit,
@@ -179,6 +183,12 @@ private fun QuickAttachCard(
             prominent = true,
         )
         Spacer(Modifier.height(12.dp))
+        LkmdbgActionButton(
+            text = stringResource(R.string.session_quick_attach_open_processes),
+            onClick = onOpenProcessWorkspace,
+            enabled = !state.busy,
+        )
+        Spacer(Modifier.height(12.dp))
         Row(
             modifier = Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -187,18 +197,32 @@ private fun QuickAttachCard(
                 LkmdbgFilterPill(
                     text = stringResource(filter.labelRes()),
                     selected = processFilter == filter,
+                    modifier = Modifier.testTag("process-filter-${filter.name}"),
                     onClick = { onProcessFilterChanged(filter) },
                 )
             }
         }
         Spacer(Modifier.height(12.dp))
+        Text(
+            text = stringResource(
+                R.string.session_quick_attach_summary,
+                state.processes.size,
+                filteredProcesses.size,
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(12.dp))
         if (filteredProcesses.isEmpty()) {
             Text(
-                text = stringResource(R.string.process_empty),
+                text = if (state.processes.isEmpty())
+                    stringResource(R.string.process_empty)
+                else
+                    stringResource(R.string.process_filter_empty),
             )
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                filteredProcesses.take(8).forEach { process ->
+                filteredProcesses.take(3).forEach { process ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -239,6 +263,14 @@ private fun QuickAttachCard(
                         )
                     }
                 }
+            }
+            if (filteredProcesses.size > 3) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = stringResource(R.string.session_quick_attach_more, filteredProcesses.size - 3),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.smlc666.lkmdbg.R
@@ -124,6 +125,7 @@ internal fun ProcessControlPanel(
                 LkmdbgFilterPill(
                     text = stringResource(filter.labelRes()),
                     selected = processFilter == filter,
+                    modifier = Modifier.testTag("process-filter-${filter.name}"),
                     onClick = { onProcessFilterChanged(filter) },
                 )
             }
