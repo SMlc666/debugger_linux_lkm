@@ -2,10 +2,10 @@ package com.smlc666.lkmdbg.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.horizontalScroll
@@ -113,40 +113,31 @@ private fun WorkspaceTabPill(
         animationSpec = tween(durationMillis = 180),
         label = "workspace_tab_border",
     )
-    val elevation by animateDpAsState(
-        targetValue = if (selected) 8.dp else 0.dp,
-        animationSpec = tween(durationMillis = 180),
-        label = "workspace_tab_elevation",
-    )
+    val shape = RoundedCornerShape(18.dp)
 
-    Surface(
+    Row(
         modifier = Modifier
             .animateContentSize()
+            .border(BorderStroke(1.dp, borderColor), shape)
+            .background(containerColor, shape)
             .clickable(onClick = { onSelect(tab) })
-            .testTag("workspace-tab-${tab.name}"),
-        shape = RoundedCornerShape(18.dp),
-        color = containerColor,
-        contentColor = contentColor,
-        tonalElevation = elevation,
-        shadowElevation = elevation,
-        border = BorderStroke(1.dp, borderColor),
+            .testTag("workspace-tab-${tab.name}")
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(
-                imageVector = tab.icon,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-            )
-            Text(
-                text = stringResource(tab.titleRes),
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            )
-        }
+        Icon(
+            imageVector = tab.icon,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = contentColor,
+        )
+        Text(
+            text = stringResource(tab.titleRes),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            color = contentColor,
+        )
     }
 }
 

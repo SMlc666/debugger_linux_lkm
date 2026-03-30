@@ -8,8 +8,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,40 +47,36 @@ internal fun SessionScreen(
 ) {
     val filteredProcesses = state.processes.filter { processFilter.matches(it) }
 
-    LazyColumn(
-        modifier = Modifier.testTag("workspace-screen-session"),
+    Column(
+        modifier = Modifier
+            .testTag("workspace-screen-session")
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item {
-            SessionControlCard(
-                state = state,
-                onConnect = onConnect,
-                onOpenSession = onOpenSession,
-                onRefreshStatus = onRefreshStatus,
-                onAttachTarget = onAttachTarget,
-                onTargetPidChanged = onTargetPidChanged,
+        SessionControlCard(
+            state = state,
+            onConnect = onConnect,
+            onOpenSession = onOpenSession,
+            onRefreshStatus = onRefreshStatus,
+            onAttachTarget = onAttachTarget,
+            onTargetPidChanged = onTargetPidChanged,
+        )
+        QuickAttachCard(
+            state = state,
+            onOpenProcessWorkspace = onOpenProcessWorkspace,
+            processFilter = processFilter,
+            filteredProcesses = filteredProcesses,
+            onRefreshProcesses = onRefreshProcesses,
+            onProcessFilterChanged = onProcessFilterChanged,
+            onAttachProcess = onAttachProcess,
+        )
+        PanelCard(
+            title = stringResource(R.string.session_attach_queue_title),
+            subtitle = stringResource(R.string.session_attach_queue_subtitle),
+        ) {
+            Text(
+                text = stringResource(R.string.session_attach_queue_detail),
             )
-        }
-        item {
-            QuickAttachCard(
-                state = state,
-                onOpenProcessWorkspace = onOpenProcessWorkspace,
-                processFilter = processFilter,
-                filteredProcesses = filteredProcesses,
-                onRefreshProcesses = onRefreshProcesses,
-                onProcessFilterChanged = onProcessFilterChanged,
-                onAttachProcess = onAttachProcess,
-            )
-        }
-        item {
-            PanelCard(
-                title = stringResource(R.string.session_attach_queue_title),
-                subtitle = stringResource(R.string.session_attach_queue_subtitle),
-            ) {
-                Text(
-                    text = stringResource(R.string.session_attach_queue_detail),
-                )
-            }
         }
     }
 }

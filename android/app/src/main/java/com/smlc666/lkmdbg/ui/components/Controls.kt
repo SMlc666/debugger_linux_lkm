@@ -3,6 +3,8 @@ package com.smlc666.lkmdbg.ui.components
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -13,7 +15,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -81,27 +82,21 @@ internal fun LkmdbgFilterPill(
         animationSpec = tween(durationMillis = 140),
         label = "filter_pill_border",
     )
+    val shape = RoundedCornerShape(16.dp)
 
-    Surface(
-        modifier = modifier.clickable(onClick = onClick),
-        color = containerColor,
-        contentColor = contentColor,
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(
-            width = 1.dp,
-            color = borderColor,
-        ),
+    Row(
+        modifier = modifier
+            .border(BorderStroke(1.dp, borderColor), shape)
+            .background(containerColor, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.Center,
     ) {
-        Row(
-            modifier = Modifier
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.Center,
-        ) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.labelLarge,
-            )
-        }
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            color = contentColor,
+        )
     }
 }
 
