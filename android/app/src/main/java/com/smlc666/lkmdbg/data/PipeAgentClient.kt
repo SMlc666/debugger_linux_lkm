@@ -1,6 +1,7 @@
 package com.smlc666.lkmdbg.data
 
 import android.content.Context
+import android.os.Process
 import com.smlc666.lkmdbg.shared.BridgeCommand
 import com.smlc666.lkmdbg.shared.BridgeEventBatchReply
 import com.smlc666.lkmdbg.shared.BridgeHelloReply
@@ -361,9 +362,20 @@ class PipeAgentClient(
     }
 
     private fun startRootBridge(agentPath: String): Process {
-        val command = "$agentPath --stdio"
         val attempts = ArrayList<String>()
         var lastError: IOException? = null
+        val directArgv = listOf(agentPath, "--stdio")
+
+        if (Process.myUid() == 0) {
+            attempts += directArgv.joinToString(" ")
+            try {
+                return ProcessBuilder(directArgv).start()
+            } catch (e: IOException) {
+                lastError = e
+            }
+        }
+
+        val command = "$agentPath --stdio"
 
         rootBinaryCandidates().forEach { suBinary ->
             val argv = listOf(suBinary, "-c", command)
