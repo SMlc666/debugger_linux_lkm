@@ -1,6 +1,8 @@
 package com.smlc666.lkmdbg.ui.screens
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -156,6 +158,7 @@ private fun SessionControlCard(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun QuickAttachCard(
     state: SessionBridgeState,
     onOpenProcessWorkspace: () -> Unit,
@@ -187,9 +190,9 @@ private fun QuickAttachCard(
             enabled = !state.busy,
         )
         Spacer(Modifier.height(12.dp))
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
+        FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             ProcessFilter.entries.forEach { filter ->
                 LkmdbgFilterPill(

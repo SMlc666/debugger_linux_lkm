@@ -1,6 +1,8 @@
 package com.smlc666.lkmdbg.ui.screens
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,8 +12,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -76,6 +76,7 @@ internal fun ProcessWorkspaceScreen(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 internal fun ProcessControlPanel(
     state: SessionBridgeState,
     processFilter: ProcessFilter,
@@ -93,11 +94,10 @@ internal fun ProcessControlPanel(
         title = stringResource(R.string.process_panel_title),
         subtitle = stringResource(R.string.process_panel_subtitle),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             LkmdbgTag(
                 text = stringResource(R.string.process_summary_total, counts.total),
@@ -116,11 +116,10 @@ internal fun ProcessControlPanel(
             prominent = true,
         )
         Spacer(Modifier.height(14.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             ProcessFilter.entries.forEach { filter ->
                 LkmdbgFilterPill(
