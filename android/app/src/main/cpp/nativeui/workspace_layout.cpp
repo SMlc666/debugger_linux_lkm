@@ -24,7 +24,7 @@ void WorkspaceLayoutManager::Render(const WorkspaceLabels &labels,
 void WorkspaceLayoutManager::RenderCollapsedBall(float density, float time_seconds)
 {
 	ImGuiViewport *viewport = ImGui::GetMainViewport();
-	ImDrawList *draw_list = ImGui::GetBackgroundDrawList(viewport);
+	ImDrawList *draw_list = ImGui::GetBackgroundDrawList();
 	const ImVec2 center(viewport->Pos.x + viewport->Size.x * 0.5f,
 			    viewport->Pos.y + viewport->Size.y * 0.5f);
 	const float pulse = 0.5f + 0.5f * sinf(time_seconds * 2.2f);
