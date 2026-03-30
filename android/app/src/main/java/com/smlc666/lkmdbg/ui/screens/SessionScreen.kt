@@ -224,7 +224,7 @@ private fun QuickAttachCard(
         } else {
             key(processFilter) {
                 Column(
-                    modifier = Modifier.testTag("quick-attach-list"),
+                    modifier = Modifier.testTag("quick-attach-list-${processFilter.name}"),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     filteredProcesses.take(3).forEach { process ->
@@ -233,7 +233,7 @@ private fun QuickAttachCard(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 2.dp)
-                                    .testTag("quick-attach-row-${process.pid}"),
+                                    .testTag("quick-attach-row-${process.pid}-${processFilter.name}"),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
                                 AppProcessIcon(

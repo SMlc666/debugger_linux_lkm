@@ -39,17 +39,20 @@ class SessionScreenTest {
             )
         }
 
-        composeRule.onNodeWithTag("quick-attach-row-100").assertExists()
-        composeRule.onNodeWithTag("quick-attach-row-200").assertExists()
+        composeRule.onNodeWithTag("quick-attach-list-All").assertExists()
+        composeRule.onNodeWithTag("quick-attach-row-100-All").assertExists()
+        composeRule.onNodeWithTag("quick-attach-row-200-All").assertExists()
 
         composeRule.onNodeWithTag("process-filter-AndroidApps").performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("quick-attach-row-100").assertExists()
-        composeRule.onNodeWithTag("quick-attach-row-200").assertDoesNotExist()
+        composeRule.onNodeWithTag("quick-attach-list-AndroidApps").assertExists()
+        composeRule.onNodeWithTag("quick-attach-row-100-AndroidApps").assertExists()
+        composeRule.onNodeWithTag("quick-attach-row-200-AndroidApps").assertDoesNotExist()
 
         composeRule.onNodeWithTag("process-filter-CommandLine").performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("quick-attach-row-200").assertExists()
-        composeRule.onNodeWithTag("quick-attach-row-100").assertDoesNotExist()
+        composeRule.onNodeWithTag("quick-attach-list-CommandLine").assertExists()
+        composeRule.onNodeWithTag("quick-attach-row-200-CommandLine").assertExists()
+        composeRule.onNodeWithTag("quick-attach-row-100-CommandLine").assertDoesNotExist()
     }
 }
