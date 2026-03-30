@@ -11,14 +11,19 @@ import androidx.activity.ComponentActivity
 import androidx.core.view.setPadding
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
+import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.overlay.LkmdbgOverlayService
 import com.smlc666.lkmdbg.overlay.OverlayPermission
+import com.smlc666.lkmdbg.shell.BridgeStatusFormatter
+import com.smlc666.lkmdbg.shell.SessionAutomationController
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var statusView: TextView
     private lateinit var overlayView: TextView
+    private lateinit var repository: SessionBridgeRepository
+    private lateinit var automation: SessionAutomationController
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -26,31 +31,12 @@ class MainActivity : ComponentActivity() {
         setContentView(buildContentView())
         refreshOverlayStatus()
 
-        val repository = (application as LkmdbgApplication).sessionRepository
+        repository = (application as LkmdbgApplication).sessionRepository
+        automation = SessionAutomationController(repository)
+        automation.requestWarmStart(lifecycleScope)
         lifecycleScope.launch {
             repository.state.collect { state ->
-                statusView.text = buildString {
-                    append("transport=")
-                    append(state.snapshot.transport)
-                    append('\n')
-                    append("pid=")
-                    append(state.snapshot.targetPid)
-                    append(" tid=")
-                    append(state.snapshot.targetTid)
-                    append(" sid=0x")
-                    append(state.snapshot.sessionId.toString(16))
-                    append('\n')
-                    append("proc=")
-                    append(state.processes.size)
-                    append(" thr=")
-                    append(state.threads.size)
-                    append(" evt=")
-                    append(state.recentEvents.size)
-                    append(" hook=")
-                    append(state.snapshot.hookActive)
-                    append('\n')
-                    append(state.lastMessage)
-                }
+                statusView.text = BridgeStatusFormatter.formatCompact(this@MainActivity, state)
                 refreshOverlayStatus()
             }
         }
@@ -59,6 +45,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshOverlayStatus()
+        automation.requestWarmStart(lifecycleScope)
     }
 
     private fun buildContentView(): ScrollView {

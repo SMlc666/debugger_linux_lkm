@@ -20,6 +20,8 @@ import com.smlc666.lkmdbg.LkmdbgApplication
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.nativeui.NativeWorkspaceTextureView
 import com.smlc666.lkmdbg.nativeui.toNativeWorkspaceSnapshot
+import com.smlc666.lkmdbg.shell.BridgeStatusFormatter
+import com.smlc666.lkmdbg.shell.SessionAutomationController
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -29,6 +31,7 @@ import kotlin.math.roundToInt
 class LkmdbgOverlayService : LifecycleService() {
     private lateinit var windowManager: WindowManager
     private lateinit var repository: SessionBridgeRepository
+    private lateinit var automation: SessionAutomationController
     private var rootView: FrameLayout? = null
     private var workspaceView: NativeWorkspaceTextureView? = null
     private var statusView: TextView? = null
@@ -46,7 +49,10 @@ class LkmdbgOverlayService : LifecycleService() {
         running.set(true)
         try {
             repository = (application as LkmdbgApplication).sessionRepository
+            automation = SessionAutomationController(repository)
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+            automation.requestWarmStart(lifecycleScope)
+            automation.startStatusLoop(lifecycleScope)
             createOverlay()
         } catch (t: Throwable) {
             CrashLogger.logHandled(this, "overlay_on_create", t)
@@ -66,6 +72,8 @@ class LkmdbgOverlayService : LifecycleService() {
 
     override fun onDestroy() {
         overlayJob?.cancel()
+        if (::automation.isInitialized)
+            automation.stopStatusLoop()
         removeOverlay()
         running.set(false)
         super.onDestroy()
@@ -137,13 +145,20 @@ class LkmdbgOverlayService : LifecycleService() {
         var overlayStatusView: TextView? = null
         if (expanded) {
             val header = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
+                orientation = LinearLayout.VERTICAL
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     Gravity.TOP,
                 )
                 setPadding((14f * density).toInt(), (14f * density).toInt(), (14f * density).toInt(), (14f * density).toInt())
+            }
+            val statusRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
             }
             overlayStatusView = TextView(this).apply {
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -157,9 +172,43 @@ class LkmdbgOverlayService : LifecycleService() {
                 text = getString(com.smlc666.lkmdbg.R.string.overlay_action_close)
                 setOnClickListener { stopSelf() }
             }
-            header.addView(overlayStatusView)
-            header.addView(collapseButton)
-            header.addView(closeButton)
+            statusRow.addView(overlayStatusView)
+            statusRow.addView(collapseButton)
+            statusRow.addView(closeButton)
+            val actionRowTop = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+                setPadding(0, (8f * density).toInt(), 0, 0)
+            }
+            val actionRowBottom = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+                setPadding(0, (6f * density).toInt(), 0, 0)
+            }
+            actionRowTop.addView(makeActionButton(com.smlc666.lkmdbg.R.string.session_action_connect) {
+                repository.connect()
+            })
+            actionRowTop.addView(makeActionButton(com.smlc666.lkmdbg.R.string.session_action_open_session) {
+                repository.openSession()
+            })
+            actionRowTop.addView(makeActionButton(com.smlc666.lkmdbg.R.string.session_action_refresh) {
+                repository.refreshStatus()
+            })
+            actionRowBottom.addView(makeActionButton(com.smlc666.lkmdbg.R.string.process_action_refresh) {
+                repository.refreshProcesses()
+            })
+            actionRowBottom.addView(makeActionButton(com.smlc666.lkmdbg.R.string.event_action_refresh) {
+                repository.refreshEvents(timeoutMs = 0, maxEvents = 16)
+            })
+            header.addView(statusRow)
+            header.addView(actionRowTop)
+            header.addView(actionRowBottom)
             root.addView(header)
         }
 
@@ -172,25 +221,28 @@ class LkmdbgOverlayService : LifecycleService() {
         overlayJob = lifecycleScope.launch {
             repository.state.collect { state ->
                 workspaceView?.updateSnapshot(state.toNativeWorkspaceSnapshot(expanded))
-                statusView?.text = buildString {
-                    append("transport=")
-                    append(state.snapshot.transport)
-                    append(" pid=")
-                    append(state.snapshot.targetPid)
-                    append(" tid=")
-                    append(state.snapshot.targetTid)
-                    append(" sid=0x")
-                    append(state.snapshot.sessionId.toString(16))
-                    append(" proc=")
-                    append(state.processes.size)
-                    append(" thr=")
-                    append(state.threads.size)
-                    append(" evt=")
-                    append(state.recentEvents.size)
-                }
+                statusView?.text = BridgeStatusFormatter.formatOverlayStatus(this@LkmdbgOverlayService, state)
             }
         }
     }
+
+    private fun makeActionButton(textRes: Int, action: suspend () -> Unit): Button =
+        Button(this).apply {
+            text = getString(textRes)
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f,
+            ).apply {
+                marginEnd = (6f * resources.displayMetrics.density).roundToInt()
+            }
+            setOnClickListener {
+                lifecycleScope.launch {
+                    action()
+                }
+            }
+        }
 
     private var lastTouchRawX = 0f
     private var lastTouchRawY = 0f
