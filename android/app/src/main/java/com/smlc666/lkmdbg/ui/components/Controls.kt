@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -80,18 +82,23 @@ internal fun LkmdbgFilterPill(
         animationSpec = tween(durationMillis = 140),
         label = "filter_pill_border",
     )
-    Button(
+    FilterChip(
+        selected = selected,
         onClick = onClick,
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, borderColor),
-        colors = ButtonDefaults.buttonColors(
+        colors = FilterChipDefaults.filterChipColors(
             containerColor = containerColor,
+            selectedContainerColor = containerColor,
             contentColor = contentColor,
+            selectedLabelColor = contentColor,
+            labelColor = contentColor,
             disabledContainerColor = DeepTeal.copy(alpha = 0.22f),
-            disabledContentColor = Slate.copy(alpha = 0.7f),
+            disabledLabelColor = Slate.copy(alpha = 0.7f),
         ),
-        contentPadding = ButtonDefaults.ContentPadding,
+        leadingIcon = null,
+        trailingIcon = null,
     ) {
         Text(
             text = text,
