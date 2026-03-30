@@ -2,6 +2,7 @@ package com.smlc666.lkmdbg.overlay
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.IBinder
 import android.view.Gravity
@@ -12,11 +13,14 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.smlc666.lkmdbg.CrashLogger
 import com.smlc666.lkmdbg.LkmdbgApplication
+import com.smlc666.lkmdbg.data.ProcessFilter
+import com.smlc666.lkmdbg.data.ResolvedProcessRecord
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.nativeui.NativeWorkspaceTextureView
 import com.smlc666.lkmdbg.nativeui.toNativeWorkspaceSnapshot
@@ -35,6 +39,9 @@ class LkmdbgOverlayService : LifecycleService() {
     private var rootView: FrameLayout? = null
     private var workspaceView: NativeWorkspaceTextureView? = null
     private var statusView: TextView? = null
+    private var processPickerView: FrameLayout? = null
+    private var processPickerSummaryView: TextView? = null
+    private var processPickerListView: LinearLayout? = null
     private var overlayJob: Job? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var collapsedDiameterPx = 0
@@ -143,6 +150,7 @@ class LkmdbgOverlayService : LifecycleService() {
         root.addView(nativeView)
 
         var overlayStatusView: TextView? = null
+        var overlayProcessPicker: FrameLayout? = null
         if (expanded) {
             val header = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -203,6 +211,9 @@ class LkmdbgOverlayService : LifecycleService() {
             actionRowBottom.addView(makeActionButton(com.smlc666.lkmdbg.R.string.process_action_refresh) {
                 repository.refreshProcesses()
             })
+            actionRowBottom.addView(makeActionButton(com.smlc666.lkmdbg.R.string.process_action_attach) {
+                toggleProcessPicker()
+            })
             actionRowBottom.addView(makeActionButton(com.smlc666.lkmdbg.R.string.event_action_refresh) {
                 repository.refreshEvents(timeoutMs = 0, maxEvents = 16)
             })
@@ -210,10 +221,13 @@ class LkmdbgOverlayService : LifecycleService() {
             header.addView(actionRowTop)
             header.addView(actionRowBottom)
             root.addView(header)
+            overlayProcessPicker = buildProcessPicker(density)
+            root.addView(overlayProcessPicker)
         }
 
         workspaceView = nativeView
         statusView = overlayStatusView
+        processPickerView = overlayProcessPicker
         rootView = root
         layoutParams = params
         windowManager.addView(root, params)
@@ -222,8 +236,76 @@ class LkmdbgOverlayService : LifecycleService() {
             repository.state.collect { state ->
                 workspaceView?.updateSnapshot(state.toNativeWorkspaceSnapshot(expanded))
                 statusView?.text = BridgeStatusFormatter.formatOverlayStatus(this@LkmdbgOverlayService, state)
+                renderProcessPicker(state)
             }
         }
+    }
+
+    private fun buildProcessPicker(density: Float): FrameLayout {
+        val container = FrameLayout(this).apply {
+            visibility = View.GONE
+            setBackgroundColor(0x88050B12.toInt())
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            setOnClickListener { hideProcessPicker() }
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.argb(238, 12, 21, 29))
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+            ).apply {
+                topMargin = (92f * density).roundToInt()
+                marginStart = (14f * density).roundToInt()
+                marginEnd = (14f * density).roundToInt()
+            }
+            setPadding((14f * density).roundToInt(), (14f * density).roundToInt(), (14f * density).roundToInt(), (14f * density).roundToInt())
+            isClickable = true
+        }
+        card.setOnClickListener { }
+
+        val title = TextView(this).apply {
+            text = getString(com.smlc666.lkmdbg.R.string.process_panel_title)
+            textSize = 16f
+            setTextColor(Color.WHITE)
+        }
+        val filterRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, (10f * density).roundToInt(), 0, 0)
+        }
+        filterRow.addView(makeFilterButton(com.smlc666.lkmdbg.R.string.process_filter_all, ProcessFilter.All))
+        filterRow.addView(makeFilterButton(com.smlc666.lkmdbg.R.string.process_filter_android, ProcessFilter.AndroidApps))
+        filterRow.addView(makeFilterButton(com.smlc666.lkmdbg.R.string.process_filter_cmdline, ProcessFilter.CommandLine))
+        filterRow.addView(makeFilterButton(com.smlc666.lkmdbg.R.string.process_filter_user, ProcessFilter.UserApps))
+
+        val summary = TextView(this).apply {
+            setPadding(0, (10f * density).roundToInt(), 0, (8f * density).roundToInt())
+            textSize = 12f
+            setTextColor(Color.argb(230, 205, 226, 240))
+        }
+        val scrollView = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                (320f * density).roundToInt(),
+            )
+        }
+        val processList = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        scrollView.addView(processList)
+
+        card.addView(title)
+        card.addView(filterRow)
+        card.addView(summary)
+        card.addView(scrollView)
+        container.addView(card)
+        processPickerSummaryView = summary
+        processPickerListView = processList
+        return container
     }
 
     private fun makeActionButton(textRes: Int, action: suspend () -> Unit): Button =
@@ -240,6 +322,80 @@ class LkmdbgOverlayService : LifecycleService() {
             setOnClickListener {
                 lifecycleScope.launch {
                     action()
+                }
+            }
+        }
+
+    private fun makeFilterButton(textRes: Int, filter: ProcessFilter): Button =
+        Button(this).apply {
+            text = getString(textRes)
+            textSize = 11f
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f,
+            ).apply {
+                marginEnd = (6f * resources.displayMetrics.density).roundToInt()
+            }
+            setOnClickListener {
+                repository.updateProcessFilter(filter)
+                renderProcessPicker(repository.state.value)
+            }
+        }
+
+    private fun toggleProcessPicker() {
+        val picker = processPickerView ?: return
+        picker.visibility = if (picker.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        if (picker.visibility == View.VISIBLE)
+            renderProcessPicker(repository.state.value)
+    }
+
+    private fun hideProcessPicker() {
+        processPickerView?.visibility = View.GONE
+    }
+
+    private fun renderProcessPicker(state: com.smlc666.lkmdbg.data.SessionBridgeState) {
+        val summaryView = processPickerSummaryView ?: return
+        val listView = processPickerListView ?: return
+        val filtered = state.processes.filter { state.processFilter.matches(it) }
+        summaryView.text = getString(
+            com.smlc666.lkmdbg.R.string.process_summary_counts,
+            state.processes.size,
+            state.processes.count { it.isAndroidApp },
+            state.processes.count { !it.isAndroidApp },
+            state.processes.count { it.isAndroidApp && it.isSystemApp },
+            state.processes.count { it.isAndroidApp && !it.isSystemApp },
+        )
+        listView.removeAllViews()
+        if (filtered.isEmpty()) {
+            listView.addView(
+                TextView(this).apply {
+                    text = getString(com.smlc666.lkmdbg.R.string.process_filter_empty)
+                    setTextColor(Color.WHITE)
+                    textSize = 13f
+                },
+            )
+            return
+        }
+        filtered.take(24).forEach { process ->
+            listView.addView(makeProcessButton(process))
+        }
+    }
+
+    private fun makeProcessButton(process: ResolvedProcessRecord): Button =
+        Button(this).apply {
+            text = "${process.displayName} - pid=${process.pid}"
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                bottomMargin = (6f * resources.displayMetrics.density).roundToInt()
+            }
+            setOnClickListener {
+                lifecycleScope.launch {
+                    repository.attachProcess(process.pid)
+                    hideProcessPicker()
                 }
             }
         }
@@ -304,6 +460,9 @@ class LkmdbgOverlayService : LifecycleService() {
         rootView = null
         workspaceView = null
         statusView = null
+        processPickerView = null
+        processPickerSummaryView = null
+        processPickerListView = null
         layoutParams = null
     }
 
