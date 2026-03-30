@@ -2,6 +2,7 @@ package com.smlc666.lkmdbg.ui.screens
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -22,7 +23,7 @@ class SessionScreenTest {
     fun quickAttachFiltersChangeVisibleRows() {
         val state = sampleSessionState()
         composeRule.setContent {
-            var processFilter by mutableStateOf(ProcessFilter.All)
+            var processFilter by remember { mutableStateOf(ProcessFilter.All) }
             SessionScreen(
                 state = state,
                 onConnect = {},
