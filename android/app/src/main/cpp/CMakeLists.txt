@@ -27,7 +27,9 @@ set(LLVM_TARGETS_TO_BUILD "AArch64" CACHE STRING "" FORCE)
 set(KEYSTONE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/keystone)
 add_subdirectory(${KEYSTONE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/keystone)
 
-add_library(lkmdbg_native SHARED native_disassembler.cpp)
+add_library(lkmdbg_native SHARED
+	native_disassembler.cpp
+	native_workspace_renderer.cpp)
 target_compile_definitions(lkmdbg_native PRIVATE CAPSTONE_STATIC)
 target_include_directories(lkmdbg_native PRIVATE ${KEYSTONE_DIR}/include)
-target_link_libraries(lkmdbg_native PRIVATE capstone_static keystone log)
+target_link_libraries(lkmdbg_native PRIVATE capstone_static keystone android jnigraphics log)

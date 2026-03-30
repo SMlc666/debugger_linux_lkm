@@ -4,32 +4,35 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.IBinder
-import android.os.Bundle
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
+import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.lifecycle.LifecycleService
-import androidx.lifecycle.ViewModelStore
-import androidx.lifecycle.ViewModelStoreOwner
-import androidx.lifecycle.setViewTreeLifecycleOwner
-import androidx.lifecycle.setViewTreeViewModelStoreOwner
-import androidx.savedstate.SavedStateRegistry
-import androidx.savedstate.SavedStateRegistryController
-import androidx.savedstate.SavedStateRegistryOwner
-import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import androidx.lifecycle.lifecycleScope
 import com.smlc666.lkmdbg.CrashLogger
 import com.smlc666.lkmdbg.LkmdbgApplication
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
-import com.smlc666.lkmdbg.ui.theme.LkmdbgTheme
+import com.smlc666.lkmdbg.nativeui.NativeWorkspaceTextureView
+import com.smlc666.lkmdbg.nativeui.toNativeWorkspaceSnapshot
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
 class LkmdbgOverlayService : LifecycleService() {
-    private val overlayViewTreeOwner = OverlayViewTreeOwner()
     private lateinit var windowManager: WindowManager
     private lateinit var repository: SessionBridgeRepository
-    private var rootView: ComposeView? = null
+    private var rootView: FrameLayout? = null
+    private var workspaceView: NativeWorkspaceTextureView? = null
+    private var statusView: TextView? = null
+    private var overlayJob: Job? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var collapsedDiameterPx = 0
     private var collapsedX = 0
@@ -42,7 +45,6 @@ class LkmdbgOverlayService : LifecycleService() {
         super.onCreate()
         running.set(true)
         try {
-            overlayViewTreeOwner.attach()
             repository = (application as LkmdbgApplication).sessionRepository
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             createOverlay()
@@ -63,8 +65,8 @@ class LkmdbgOverlayService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        overlayJob?.cancel()
         removeOverlay()
-        overlayViewTreeOwner.dispose()
         running.set(false)
         super.onDestroy()
     }
@@ -82,28 +84,112 @@ class LkmdbgOverlayService : LifecycleService() {
 
     private fun mountOverlay(expanded: Boolean) {
         val params = createLayoutParams(expanded)
-        val composeView = ComposeView(this).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
-            setViewTreeLifecycleOwner(this@LkmdbgOverlayService)
-            setViewTreeViewModelStoreOwner(overlayViewTreeOwner)
-            setViewTreeSavedStateRegistryOwner(overlayViewTreeOwner)
-            setContent {
-                LkmdbgTheme {
-                    OverlayWorkspace(
-                        repository = repository,
-                        expanded = expanded,
-                        onExpand = { updateExpandedState(true) },
-                        onCollapse = { updateExpandedState(false) },
-                        onMoveBallBy = { dx, dy -> moveCollapsedBall(dx, dy) },
-                        onClose = { stopSelf() },
-                    )
+        val density = resources.displayMetrics.density
+        val root = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
+        val nativeView = NativeWorkspaceTextureView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            setOnTouchListener { _: View, event: MotionEvent ->
+                if (expanded)
+                    return@setOnTouchListener false
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        lastTouchRawX = event.rawX
+                        lastTouchRawY = event.rawY
+                        dragDistancePx = 0f
+                        false
+                    }
+
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = event.rawX - lastTouchRawX
+                        val dy = event.rawY - lastTouchRawY
+                        lastTouchRawX = event.rawX
+                        lastTouchRawY = event.rawY
+                        dragDistancePx += kotlin.math.abs(dx) + kotlin.math.abs(dy)
+                        moveCollapsedBall(dx, dy)
+                        true
+                    }
+
+                    MotionEvent.ACTION_UP -> {
+                        if (dragDistancePx <= 12f * density)
+                            updateExpandedState(true)
+                        true
+                    }
+
+                    else -> false
                 }
             }
         }
-        rootView = composeView
+        root.addView(nativeView)
+
+        var overlayStatusView: TextView? = null
+        if (expanded) {
+            val header = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP,
+                )
+                setPadding((14f * density).toInt(), (14f * density).toInt(), (14f * density).toInt(), (14f * density).toInt())
+            }
+            overlayStatusView = TextView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                textSize = 13f
+            }
+            val collapseButton = Button(this).apply {
+                text = getString(com.smlc666.lkmdbg.R.string.overlay_action_collapse)
+                setOnClickListener { updateExpandedState(false) }
+            }
+            val closeButton = Button(this).apply {
+                text = getString(com.smlc666.lkmdbg.R.string.overlay_action_close)
+                setOnClickListener { stopSelf() }
+            }
+            header.addView(overlayStatusView)
+            header.addView(collapseButton)
+            header.addView(closeButton)
+            root.addView(header)
+        }
+
+        workspaceView = nativeView
+        statusView = overlayStatusView
+        rootView = root
         layoutParams = params
-        windowManager.addView(composeView, params)
+        windowManager.addView(root, params)
+        overlayJob?.cancel()
+        overlayJob = lifecycleScope.launch {
+            repository.state.collect { state ->
+                workspaceView?.updateSnapshot(state.toNativeWorkspaceSnapshot(expanded))
+                statusView?.text = buildString {
+                    append("transport=")
+                    append(state.snapshot.transport)
+                    append(" pid=")
+                    append(state.snapshot.targetPid)
+                    append(" tid=")
+                    append(state.snapshot.targetTid)
+                    append(" sid=0x")
+                    append(state.snapshot.sessionId.toString(16))
+                    append(" proc=")
+                    append(state.processes.size)
+                    append(" thr=")
+                    append(state.threads.size)
+                    append(" evt=")
+                    append(state.recentEvents.size)
+                }
+            }
+        }
     }
+
+    private var lastTouchRawX = 0f
+    private var lastTouchRawY = 0f
+    private var dragDistancePx = 0f
 
     private fun moveCollapsedBall(deltaX: Float, deltaY: Float) {
         if (expanded)
@@ -121,10 +207,13 @@ class LkmdbgOverlayService : LifecycleService() {
         if (expanded == nextExpanded)
             return
         expanded = nextExpanded
+        overlayJob?.cancel()
         rootView?.let { view ->
             runCatching { windowManager.removeViewImmediate(view) }
         }
         rootView = null
+        workspaceView = null
+        statusView = null
         layoutParams = null
         mountOverlay(expanded)
     }
@@ -151,10 +240,13 @@ class LkmdbgOverlayService : LifecycleService() {
         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
 
     private fun removeOverlay() {
+        overlayJob?.cancel()
         rootView?.let { view ->
             runCatching { windowManager.removeView(view) }
         }
         rootView = null
+        workspaceView = null
+        statusView = null
         layoutParams = null
     }
 
@@ -186,34 +278,4 @@ class LkmdbgOverlayService : LifecycleService() {
         }
     }
 
-    private inner class OverlayViewTreeOwner : SavedStateRegistryOwner, ViewModelStoreOwner {
-        private val store = ViewModelStore()
-        private val controller = SavedStateRegistryController.create(this)
-        private var attached = false
-
-        override val lifecycle
-            get() = this@LkmdbgOverlayService.lifecycle
-
-        override val savedStateRegistry: SavedStateRegistry
-            get() = controller.savedStateRegistry
-
-        override val viewModelStore: ViewModelStore
-            get() = store
-
-        fun attach() {
-            if (attached)
-                return
-            controller.performAttach()
-            controller.performRestore(Bundle.EMPTY)
-            attached = true
-        }
-
-        fun dispose() {
-            if (!attached)
-                return
-            controller.performSave(Bundle())
-            store.clear()
-            attached = false
-        }
-    }
 }
