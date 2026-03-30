@@ -1,7 +1,7 @@
 package com.smlc666.lkmdbg.data
 
 import android.content.Context
-import android.os.Process
+import android.os.Process as AndroidProcess
 import com.smlc666.lkmdbg.shared.BridgeCommand
 import com.smlc666.lkmdbg.shared.BridgeEventBatchReply
 import com.smlc666.lkmdbg.shared.BridgeHelloReply
@@ -31,7 +31,7 @@ class PipeAgentClient(
     private val context: Context,
 ) {
     private val lock = Any()
-    private var process: Process? = null
+    private var process: java.lang.Process? = null
     private var input: InputStream? = null
     private var output: OutputStream? = null
 
@@ -366,7 +366,7 @@ class PipeAgentClient(
         var lastError: IOException? = null
         val directArgv = listOf(agentPath, "--stdio")
 
-        if (Process.myUid() == 0) {
+        if (AndroidProcess.myUid() == 0) {
             attempts += directArgv.joinToString(" ")
             try {
                 return ProcessBuilder(directArgv).start()
