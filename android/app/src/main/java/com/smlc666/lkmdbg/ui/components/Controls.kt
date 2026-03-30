@@ -85,6 +85,12 @@ internal fun LkmdbgFilterPill(
     FilterChip(
         selected = selected,
         onClick = onClick,
+        label = {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelLarge,
+            )
+        },
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, borderColor),
@@ -99,12 +105,7 @@ internal fun LkmdbgFilterPill(
         ),
         leadingIcon = null,
         trailingIcon = null,
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelLarge,
-        )
-    }
+    )
 }
 
 @Composable
