@@ -501,15 +501,24 @@ static bool handle_open_session(agent_state *state)
 	proc_fd = open(k_bootstrap_path, O_RDONLY | O_CLOEXEC);
 	if (proc_fd < 0) {
 		reply.status = -errno;
-		strncpy(reply.message, "open bootstrap failed", sizeof(reply.message) - 1);
+		snprintf(reply.message, sizeof(reply.message),
+			 "open bootstrap failed: %s", strerror(errno));
 		return write_frame(LKMDBG_AGENT_CMD_OPEN_SESSION, &reply, sizeof(reply));
 	}
 
 	session_fd = ioctl(proc_fd, LKMDBG_IOC_OPEN_SESSION, &req);
 	close(proc_fd);
 	if (session_fd < 0) {
+		int saved_errno = errno;
 		reply.status = -errno;
-		strncpy(reply.message, "OPEN_SESSION failed", sizeof(reply.message) - 1);
+		if (saved_errno == ENOTTY) {
+			snprintf(reply.message, sizeof(reply.message),
+				 "OPEN_SESSION failed: %s; load lkmdbg.ko with hook_proc_version=1",
+				 strerror(saved_errno));
+		} else {
+			snprintf(reply.message, sizeof(reply.message),
+				 "OPEN_SESSION failed: %s", strerror(saved_errno));
+		}
 		return write_frame(LKMDBG_AGENT_CMD_OPEN_SESSION, &reply, sizeof(reply));
 	}
 

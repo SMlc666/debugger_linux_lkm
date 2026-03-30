@@ -20,8 +20,11 @@ import com.smlc666.lkmdbg.shared.BridgeVmaListReply
 import com.smlc666.lkmdbg.shared.BridgeWireCodec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.LinkedHashSet
 
 class PipeAgentClient(
     private val context: Context,
@@ -30,6 +33,18 @@ class PipeAgentClient(
     private var process: Process? = null
     private var input: InputStream? = null
     private var output: OutputStream? = null
+
+    companion object {
+        private val commonSuPaths = listOf(
+            "/system/bin/su",
+            "/system/xbin/su",
+            "/sbin/su",
+            "/vendor/bin/su",
+            "/su/bin/su",
+            "/data/adb/ksu/bin/su",
+            "/debug_ramdisk/su",
+        )
+    }
 
     val agentPathHint: String
         get() = BundledAgentInstaller.installedAgentPath(context)
@@ -339,10 +354,53 @@ class PipeAgentClient(
             return
 
         val agentPath = BundledAgentInstaller.install(context)
-        val started = ProcessBuilder("su", "-c", "$agentPath --stdio").start()
+        val started = startRootBridge(agentPath)
         process = started
         input = started.inputStream
         output = started.outputStream
+    }
+
+    private fun startRootBridge(agentPath: String): Process {
+        val command = "$agentPath --stdio"
+        val attempts = ArrayList<String>()
+        var lastError: IOException? = null
+
+        rootBinaryCandidates().forEach { suBinary ->
+            val argv = listOf(suBinary, "-c", command)
+            attempts += argv.joinToString(" ")
+            try {
+                return ProcessBuilder(argv).start()
+            } catch (e: IOException) {
+                lastError = e
+            }
+        }
+
+        val suffix = lastError?.message?.takeIf { it.isNotBlank() } ?: "no working su binary"
+        throw IOException(
+            "unable to start root bridge via su; tried ${attempts.joinToString(" | ")}; last error: $suffix",
+            lastError,
+        )
+    }
+
+    private fun rootBinaryCandidates(): List<String> {
+        val candidates = LinkedHashSet<String>()
+        candidates += "su"
+
+        val pathValue = System.getenv("PATH").orEmpty()
+        pathValue.split(':')
+            .filter { it.isNotBlank() }
+            .forEach { directory ->
+                candidates += "$directory/su"
+            }
+
+        commonSuPaths.forEach { candidates += it }
+
+        return candidates.filter { candidate ->
+            if (!candidate.contains('/'))
+                true
+            else
+                File(candidate).canExecute()
+        }
     }
 
     private fun requireInputLocked(): InputStream =
