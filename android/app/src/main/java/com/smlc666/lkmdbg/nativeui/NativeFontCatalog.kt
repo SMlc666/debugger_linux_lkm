@@ -5,15 +5,40 @@ import java.io.File
 import java.util.Locale
 
 internal object NativeFontCatalog {
-    private val preferredNameTokens = listOf(
+    private val cjkPreferredNameTokens = listOf(
         "notosanssc",
         "notosanscjk",
+        "notosanscjksc",
         "sourcehansans",
-        "sourcesans",
+        "sourcehansanscn",
         "droidsansfallback",
+        "fallback",
+        "pingfang",
+        "harmonyossanssc",
+        "lantinghei",
         "misans",
+    )
+
+    private val secondaryNameTokens = listOf(
+        "notosans",
+        "sourcesans",
         "sans",
     )
+
+    private fun scoreFont(file: File): Int {
+        val name = file.name.lowercase(Locale.ROOT)
+        return when {
+            cjkPreferredNameTokens.any(name::contains) && name.endsWith(".ttf") -> 0
+            cjkPreferredNameTokens.any(name::contains) && name.endsWith(".otf") -> 1
+            cjkPreferredNameTokens.any(name::contains) -> 2
+            secondaryNameTokens.any(name::contains) && name.endsWith(".ttf") -> 3
+            secondaryNameTokens.any(name::contains) && name.endsWith(".otf") -> 4
+            secondaryNameTokens.any(name::contains) -> 5
+            name.endsWith(".ttf") -> 6
+            name.endsWith(".otf") -> 7
+            else -> 8
+        }
+    }
 
     fun buildCandidatePaths(context: Context): Array<String> {
         val candidates = mutableListOf<File>()
@@ -43,16 +68,8 @@ internal object NativeFontCatalog {
         return candidates
             .distinctBy { it.absolutePath }
             .sortedWith(
-                compareByDescending<File> { file ->
-                    val name = file.name.lowercase(Locale.ROOT)
-                    preferredNameTokens.any(name::contains)
-                }.thenBy<File> { file ->
-                    when {
-                        file.name.endsWith(".ttf", ignoreCase = true) -> 0
-                        file.name.endsWith(".otf", ignoreCase = true) -> 1
-                        else -> 2
-                    }
-                }.thenBy { it.name.lowercase(Locale.ROOT) },
+                compareBy<File> { file -> scoreFont(file) }
+                    .thenBy { it.name.lowercase(Locale.ROOT) },
             )
             .map { file -> file.absolutePath }
             .toTypedArray()

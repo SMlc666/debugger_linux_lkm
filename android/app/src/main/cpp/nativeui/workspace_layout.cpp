@@ -109,8 +109,10 @@ void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labe
 	ImGui::Spacing();
 	for (int i = 0; i < static_cast<int>(lane_highlights_.size()); ++i) {
 		const bool hot = i < state.process_count;
+		ImGui::PushID(i);
 		controls::FillLaneButton(hot ? "process lane" : "empty lane",
 					 hot, density, lane_highlights_[i].value());
+		ImGui::PopID();
 	}
 	ImGui::EndChild();
 	ImGui::EndChild();

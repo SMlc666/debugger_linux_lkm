@@ -183,7 +183,7 @@ void ImGuiWorkspaceRenderer::RebuildFontsLocked()
 		if (path.empty())
 			continue;
 		if (io.Fonts->AddFontFromFileTTF(path.c_str(), 18.0f * density_, &config,
-						 io.Fonts->GetGlyphRangesChineseSimplifiedCommon()) != nullptr) {
+						 io.Fonts->GetGlyphRangesChineseFull()) != nullptr) {
 			loaded = true;
 			break;
 		}
