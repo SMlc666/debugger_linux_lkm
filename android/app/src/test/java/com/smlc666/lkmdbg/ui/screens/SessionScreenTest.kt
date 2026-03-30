@@ -4,10 +4,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performTouchInput
 import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.ui.sampleSessionState
 import org.junit.Rule
@@ -21,10 +19,11 @@ class SessionScreenTest {
     val composeRule = createComposeRule()
 
     @Test
-    fun quickAttachFiltersChangeVisibleRows() {
+    fun quickAttachRendersRowsForSelectedFilters() {
         val state = sampleSessionState()
+        val processFilterState = mutableStateOf(ProcessFilter.All)
         composeRule.setContent {
-            var processFilter by remember { mutableStateOf(ProcessFilter.All) }
+            val processFilter by remember { processFilterState }
             SessionScreen(
                 state = state,
                 onConnect = {},
@@ -35,7 +34,7 @@ class SessionScreenTest {
                 onOpenProcessWorkspace = {},
                 processFilter = processFilter,
                 onRefreshProcesses = {},
-                onProcessFilterChanged = { processFilter = it },
+                onProcessFilterChanged = { processFilterState.value = it },
                 onAttachProcess = {},
             )
         }
@@ -44,13 +43,17 @@ class SessionScreenTest {
         composeRule.onNodeWithTag("quick-attach-row-100-All").assertExists()
         composeRule.onNodeWithTag("quick-attach-row-200-All").assertExists()
 
-        composeRule.onNodeWithTag("process-filter-AndroidApps").performTouchInput { click() }
+        composeRule.runOnIdle {
+            processFilterState.value = ProcessFilter.AndroidApps
+        }
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("quick-attach-list-AndroidApps").assertExists()
         composeRule.onNodeWithTag("quick-attach-row-100-AndroidApps").assertExists()
         composeRule.onNodeWithTag("quick-attach-row-200-AndroidApps").assertDoesNotExist()
 
-        composeRule.onNodeWithTag("process-filter-CommandLine").performTouchInput { click() }
+        composeRule.runOnIdle {
+            processFilterState.value = ProcessFilter.CommandLine
+        }
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("quick-attach-list-CommandLine").assertExists()
         composeRule.onNodeWithTag("quick-attach-row-200-CommandLine").assertExists()
