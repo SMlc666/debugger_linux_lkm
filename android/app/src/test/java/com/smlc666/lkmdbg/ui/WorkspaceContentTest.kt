@@ -3,8 +3,9 @@ package com.smlc666.lkmdbg.ui
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertDoesNotExist
+import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import com.smlc666.lkmdbg.data.MemoryRegionPreset
@@ -14,7 +15,6 @@ import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.data.ResolvedProcessRecord
 import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.shared.BridgeStatusSnapshot
-import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -43,16 +43,12 @@ class WorkspaceContentTest {
             )
         }
 
-        assertNodeCount("Session Bridge", 1)
-        assertNodeCount("Process Lanes", 0)
+        composeRule.onNodeWithTag("workspace-screen-session").assertExists()
+        composeRule.onNodeWithTag("workspace-screen-processes").assertDoesNotExist()
         composeRule.onNodeWithTag("workspace-tab-Processes").performClick()
-        assertNodeCount("Process Lanes", 1)
-        assertNodeCount("Session Bridge", 0)
-    }
-
-    private fun assertNodeCount(text: String, expected: Int) {
-        val count = composeRule.onAllNodesWithText(text).fetchSemanticsNodes().size
-        assertEquals("unexpected node count for '$text'", expected, count)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("workspace-screen-processes").assertExists()
+        composeRule.onNodeWithTag("workspace-screen-session").assertDoesNotExist()
     }
 }
 

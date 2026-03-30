@@ -1,10 +1,5 @@
 package com.smlc666.lkmdbg.ui
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,7 +9,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.smlc666.lkmdbg.R
@@ -54,17 +51,14 @@ internal fun WorkspaceContent(
         if (showWorkspaceBar) {
             WorkspaceBar(selectedTab = selectedTab, onSelect = onSelectTab)
         }
-        Column(modifier = Modifier.weight(1f)) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .testTag("workspace-content-root"),
+        ) {
             WorkspaceSectionHeader(selectedTab = selectedTab)
-            AnimatedContent(
-                targetState = selectedTab,
-                transitionSpec = {
-                    fadeIn(animationSpec = tween(160)) togetherWith
-                        fadeOut(animationSpec = tween(120))
-                },
-                label = "workspace_tab_content",
-            ) { tab ->
-                when (tab) {
+            key(selectedTab) {
+                when (selectedTab) {
                     WorkspaceTab.Session -> SessionScreen(
                         state = sessionState,
                         onConnect = actions.onConnect,

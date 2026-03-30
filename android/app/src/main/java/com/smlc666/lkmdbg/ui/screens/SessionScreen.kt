@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -47,6 +48,7 @@ internal fun SessionScreen(
     val filteredProcesses = state.processes.filter { processFilter.matches(it) }
 
     LazyColumn(
+        modifier = Modifier.testTag("workspace-screen-session"),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
@@ -221,46 +223,52 @@ private fun QuickAttachCard(
                     stringResource(R.string.process_filter_empty),
             )
         } else {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.testTag("quick-attach-list"),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 filteredProcesses.take(3).forEach { process ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 2.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        AppProcessIcon(
-                            packageName = process.iconPackageName,
-                            displayName = process.displayName,
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                process.displayName,
-                                style = MaterialTheme.typography.titleMedium,
+                    key(process.pid) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp)
+                                .testTag("quick-attach-row-${process.pid}"),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            AppProcessIcon(
+                                packageName = process.iconPackageName,
+                                displayName = process.displayName,
                             )
-                            Text(
-                                text = process.processName,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                LkmdbgTag(
-                                    text = stringResource(R.string.process_pid_uid, process.pid, process.uid),
-                                    tone = LkmdbgTagTone.Positive,
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    process.displayName,
+                                    style = MaterialTheme.typography.titleMedium,
                                 )
-                                if (process.isAndroidApp) {
+                                Text(
+                                    text = process.processName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     LkmdbgTag(
-                                        text = stringResource(process.kindLabelRes()),
-                                        tone = LkmdbgTagTone.Accent,
+                                        text = stringResource(R.string.process_pid_uid, process.pid, process.uid),
+                                        tone = LkmdbgTagTone.Positive,
                                     )
+                                    if (process.isAndroidApp) {
+                                        LkmdbgTag(
+                                            text = stringResource(process.kindLabelRes()),
+                                            tone = LkmdbgTagTone.Accent,
+                                        )
+                                    }
                                 }
                             }
+                            LkmdbgActionButton(
+                                text = stringResource(R.string.process_action_attach),
+                                onClick = { onAttachProcess(process.pid) },
+                                enabled = !state.busy,
+                            )
                         }
-                        LkmdbgActionButton(
-                            text = stringResource(R.string.process_action_attach),
-                            onClick = { onAttachProcess(process.pid) },
-                            enabled = !state.busy,
-                        )
                     }
                 }
             }

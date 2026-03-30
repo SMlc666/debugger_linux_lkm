@@ -45,6 +45,7 @@ internal fun ProcessWorkspaceScreen(
     val filteredProcesses = state.processes.filter { processFilter.matches(it) }
 
     LazyColumn(
+        modifier = Modifier.testTag("workspace-screen-processes"),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
