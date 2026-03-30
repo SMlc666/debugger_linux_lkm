@@ -1,14 +1,15 @@
 package com.smlc666.lkmdbg.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -64,23 +65,43 @@ internal fun LkmdbgFilterPill(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        modifier = modifier,
+    val containerColor by animateColorAsState(
+        targetValue = if (selected) SignalCyan.copy(alpha = 0.92f) else DeepTeal.copy(alpha = 0.34f),
+        animationSpec = tween(durationMillis = 140),
+        label = "filter_pill_container",
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (selected) Graphite else MaterialTheme.colorScheme.onSurfaceVariant,
+        animationSpec = tween(durationMillis = 140),
+        label = "filter_pill_content",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) SignalCyan.copy(alpha = 0.24f) else Slate.copy(alpha = 0.18f),
+        animationSpec = tween(durationMillis = 140),
+        label = "filter_pill_border",
+    )
+
+    Surface(
+        modifier = modifier.clickable(onClick = onClick),
+        color = containerColor,
+        contentColor = contentColor,
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(
             width = 1.dp,
-            color = if (selected) SignalCyan.copy(alpha = 0.24f) else Slate.copy(alpha = 0.18f),
+            color = borderColor,
         ),
-        colors = FilterChipDefaults.filterChipColors(
-            containerColor = DeepTeal.copy(alpha = 0.34f),
-            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            selectedContainerColor = SignalCyan.copy(alpha = 0.92f),
-            selectedLabelColor = Graphite,
-        ),
-        label = { Text(text) },
-    )
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+    }
 }
 
 @Composable

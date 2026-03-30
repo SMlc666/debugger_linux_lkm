@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
@@ -119,9 +120,9 @@ private fun WorkspaceTabPill(
     )
 
     Surface(
-        onClick = { onSelect(tab) },
         modifier = Modifier
             .animateContentSize()
+            .clickable(onClick = { onSelect(tab) })
             .testTag("workspace-tab-${tab.name}"),
         shape = RoundedCornerShape(18.dp),
         color = containerColor,
