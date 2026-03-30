@@ -12,6 +12,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -24,6 +25,7 @@ import com.smlc666.lkmdbg.data.ResolvedProcessRecord
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.nativeui.NativeWorkspaceTextureView
 import com.smlc666.lkmdbg.nativeui.toNativeWorkspaceSnapshot
+import com.smlc666.lkmdbg.shell.AppIconLoader
 import com.smlc666.lkmdbg.shell.BridgeStatusFormatter
 import com.smlc666.lkmdbg.shell.SessionAutomationController
 import kotlinx.coroutines.flow.collect
@@ -36,6 +38,7 @@ class LkmdbgOverlayService : LifecycleService() {
     private lateinit var windowManager: WindowManager
     private lateinit var repository: SessionBridgeRepository
     private lateinit var automation: SessionAutomationController
+    private lateinit var iconLoader: AppIconLoader
     private var rootView: FrameLayout? = null
     private var workspaceView: NativeWorkspaceTextureView? = null
     private var statusView: TextView? = null
@@ -57,6 +60,7 @@ class LkmdbgOverlayService : LifecycleService() {
         try {
             repository = (application as LkmdbgApplication).sessionRepository
             automation = SessionAutomationController(repository)
+            iconLoader = AppIconLoader(this)
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             automation.requestWarmStart(lifecycleScope)
             automation.startStatusLoop(lifecycleScope)
@@ -378,20 +382,78 @@ class LkmdbgOverlayService : LifecycleService() {
             return
         }
         filtered.take(24).forEach { process ->
-            listView.addView(makeProcessButton(process))
+            listView.addView(makeProcessRow(process))
         }
     }
 
-    private fun makeProcessButton(process: ResolvedProcessRecord): Button =
-        Button(this).apply {
-            text = "${process.displayName} - pid=${process.pid}"
-            textSize = 12f
+    private fun makeProcessRow(process: ResolvedProcessRecord): View {
+        val density = resources.displayMetrics.density
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply {
-                bottomMargin = (6f * resources.displayMetrics.density).roundToInt()
+                bottomMargin = (6f * density).roundToInt()
             }
+            setPadding(
+                (10f * density).roundToInt(),
+                (8f * density).roundToInt(),
+                (10f * density).roundToInt(),
+                (8f * density).roundToInt(),
+            )
+            setBackgroundColor(Color.argb(210, 18, 32, 44))
+            val iconView = ImageView(this@LkmdbgOverlayService).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    (28f * density).roundToInt(),
+                    (28f * density).roundToInt(),
+                ).apply {
+                    marginEnd = (10f * density).roundToInt()
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                iconLoader.load(process.iconPackageName)?.let(::setImageDrawable)
+            }
+            val textColumn = LinearLayout(this@LkmdbgOverlayService).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    1f,
+                )
+            }
+            val titleView = TextView(this@LkmdbgOverlayService).apply {
+                text = process.displayName
+                textSize = 13f
+                setTextColor(Color.WHITE)
+            }
+            val subtitleView = TextView(this@LkmdbgOverlayService).apply {
+                text = buildString {
+                    append("pid=")
+                    append(process.pid)
+                    append(" uid=")
+                    append(process.uid)
+                    if (!process.packageName.isNullOrBlank()) {
+                        append("  ")
+                        append(process.packageName)
+                    }
+                }
+                textSize = 11f
+                setTextColor(Color.argb(230, 197, 214, 225))
+            }
+            val kindView = TextView(this@LkmdbgOverlayService).apply {
+                text = when {
+                    process.isAndroidApp && process.isSystemApp -> getString(com.smlc666.lkmdbg.R.string.process_kind_system_app)
+                    process.isAndroidApp -> getString(com.smlc666.lkmdbg.R.string.process_kind_user_app)
+                    else -> getString(com.smlc666.lkmdbg.R.string.process_kind_command_line)
+                }
+                textSize = 11f
+                setTextColor(Color.argb(255, 101, 222, 215))
+            }
+            textColumn.addView(titleView)
+            textColumn.addView(subtitleView)
+            addView(iconView)
+            addView(textColumn)
+            addView(kindView)
             setOnClickListener {
                 lifecycleScope.launch {
                     repository.attachProcess(process.pid)
@@ -399,6 +461,7 @@ class LkmdbgOverlayService : LifecycleService() {
                 }
             }
         }
+    }
 
     private var lastTouchRawX = 0f
     private var lastTouchRawY = 0f
