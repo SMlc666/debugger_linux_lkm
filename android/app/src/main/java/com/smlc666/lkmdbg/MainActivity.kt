@@ -25,6 +25,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var statusView: TextView
     private lateinit var overlayView: TextView
     private lateinit var crashView: TextView
+    private lateinit var diagnosticsView: TextView
     private lateinit var repository: SessionBridgeRepository
     private lateinit var automation: SessionAutomationController
 
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
 
         repository = (application as LkmdbgApplication).sessionRepository
         automation = SessionAutomationController(repository)
+        refreshBridgeDiagnostics()
         automation.requestWarmStart(lifecycleScope)
         lifecycleScope.launch {
             repository.state.collect { state ->
@@ -49,6 +51,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         refreshOverlayStatus()
         refreshCrashStatus()
+        refreshBridgeDiagnostics()
         automation.requestWarmStart(lifecycleScope)
     }
 
@@ -89,6 +92,14 @@ class MainActivity : ComponentActivity() {
             textSize = 13f
         }
         crashView = TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+            setPadding(0, (12f * density).toInt(), 0, 0)
+            textSize = 12f
+        }
+        diagnosticsView = TextView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -144,9 +155,11 @@ class MainActivity : ComponentActivity() {
         column.addView(overlayView)
         column.addView(statusView)
         column.addView(buttonRow)
+        column.addView(diagnosticsView)
         column.addView(crashView)
         column.addView(crashButtonRow)
         root.addView(column)
+        refreshBridgeDiagnostics()
         refreshCrashStatus()
         return root
     }
@@ -173,6 +186,19 @@ class MainActivity : ComponentActivity() {
             .take(10)
             .joinToString("\n")
         crashView.text = getString(R.string.launcher_last_crash_summary, summary)
+    }
+
+    private fun refreshBridgeDiagnostics() {
+        if (!::diagnosticsView.isInitialized || !::repository.isInitialized)
+            return
+        val diagnostics = repository.rootBridgeDiagnostics()
+        val candidates = diagnostics.suCandidates.take(5).joinToString(" | ")
+        diagnosticsView.text = getString(
+            R.string.launcher_root_diagnostics,
+            diagnostics.uid,
+            diagnostics.agentPath,
+            candidates,
+        )
     }
 
     private fun copyLastCrash() {

@@ -64,6 +64,7 @@
     <string name="launcher_action_clear_last_crash">Clear last crash</string>
     <string name="launcher_last_crash_empty">No saved crash report.</string>
     <string name="launcher_last_crash_summary">Last crash:\n%1$s</string>
+    <string name="launcher_root_diagnostics">uid=%1$d\nagent=%2$s\nsu=%3$s</string>
     <string name="overlay_panel_title">Floating Overlay</string>
     <string name="overlay_panel_subtitle">Launch a draggable ball, then expand into a full-screen translucent workspace backed by the same session repository.</string>
     <string name="overlay_permission_status">overlay permission: %1$s, overlay running: %2$s</string>

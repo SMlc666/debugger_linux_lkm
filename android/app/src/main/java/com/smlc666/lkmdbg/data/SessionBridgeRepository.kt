@@ -126,6 +126,8 @@ class SessionBridgeRepository(
 
     val state: StateFlow<SessionBridgeState> = _state.asStateFlow()
 
+    fun rootBridgeDiagnostics(): RootBridgeDiagnostics = client.diagnostics()
+
     fun updateTargetPidInput(value: String) {
         _state.update { current ->
             current.copy(targetPidInput = value.filter { it.isDigit() })

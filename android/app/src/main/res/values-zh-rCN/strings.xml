@@ -64,6 +64,7 @@
     <string name="launcher_action_clear_last_crash">清除最近崩溃</string>
     <string name="launcher_last_crash_empty">当前没有保存的崩溃报告。</string>
     <string name="launcher_last_crash_summary">最近崩溃：\n%1$s</string>
+    <string name="launcher_root_diagnostics">uid=%1$d\nagent=%2$s\nsu=%3$s</string>
     <string name="overlay_panel_title">悬浮窗</string>
     <string name="overlay_panel_subtitle">启动一个可拖拽悬浮球，点击后展开成共享同一份 session repository 的全屏半透明工作区。</string>
     <string name="overlay_permission_status">悬浮权限：%1$s，悬浮窗运行中：%2$s</string>

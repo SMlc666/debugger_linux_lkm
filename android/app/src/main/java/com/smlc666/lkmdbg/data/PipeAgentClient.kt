@@ -50,6 +50,13 @@ class PipeAgentClient(
     val agentPathHint: String
         get() = BundledAgentInstaller.installedAgentPath(context)
 
+    fun diagnostics(): RootBridgeDiagnostics =
+        RootBridgeDiagnostics(
+            uid = AndroidProcess.myUid(),
+            agentPath = agentPathHint,
+            suCandidates = rootBinaryCandidates(),
+        )
+
     suspend fun connect(): BridgeHelloReply = withContext(Dispatchers.IO) {
         synchronized(lock) {
             ensureProcessLocked()
