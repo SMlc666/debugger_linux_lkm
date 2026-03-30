@@ -3,14 +3,13 @@ package com.smlc666.lkmdbg.ui.screens
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.assertDoesNotExist
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.ui.sampleSessionState
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,15 +40,20 @@ class SessionScreenTest {
             )
         }
 
-        composeRule.onNodeWithText("Example Game").assertExists()
-        composeRule.onNodeWithText("toybox").assertExists()
+        assertNodeCount("Example Game", 1)
+        assertNodeCount("toybox", 1)
 
         composeRule.onNodeWithTag("process-filter-AndroidApps").performClick()
-        composeRule.onNodeWithText("Example Game").assertExists()
-        composeRule.onNodeWithText("toybox").assertDoesNotExist()
+        assertNodeCount("Example Game", 1)
+        assertNodeCount("toybox", 0)
 
         composeRule.onNodeWithTag("process-filter-CommandLine").performClick()
-        composeRule.onNodeWithText("toybox").assertExists()
-        composeRule.onNodeWithText("Example Game").assertDoesNotExist()
+        assertNodeCount("toybox", 1)
+        assertNodeCount("Example Game", 0)
+    }
+
+    private fun assertNodeCount(text: String, expected: Int) {
+        val count = composeRule.onAllNodesWithText(text).fetchSemanticsNodes().size
+        assertEquals("unexpected node count for '$text'", expected, count)
     }
 }
