@@ -1,5 +1,6 @@
 package com.smlc666.lkmdbg.ui.screens
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -7,21 +8,27 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.data.ResolvedProcessRecord
-import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.data.SessionBridgeState
+import com.smlc666.lkmdbg.ui.components.AppProcessIcon
+import com.smlc666.lkmdbg.ui.components.LkmdbgActionButton
+import com.smlc666.lkmdbg.ui.components.LkmdbgFilterPill
+import com.smlc666.lkmdbg.ui.components.LkmdbgInputField
+import com.smlc666.lkmdbg.ui.components.LkmdbgTag
+import com.smlc666.lkmdbg.ui.components.LkmdbgTagTone
 import com.smlc666.lkmdbg.ui.components.PanelCard
 
 @Composable
@@ -38,29 +45,37 @@ internal fun SessionScreen(
 ) {
     val filteredProcesses = state.processes.filter { state.processFilter.matches(it) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        SessionControlCard(
-            state = state,
-            onConnect = onConnect,
-            onOpenSession = onOpenSession,
-            onRefreshStatus = onRefreshStatus,
-            onAttachTarget = onAttachTarget,
-            onTargetPidChanged = onTargetPidChanged,
-        )
-        QuickAttachCard(
-            state = state,
-            filteredProcesses = filteredProcesses,
-            onRefreshProcesses = onRefreshProcesses,
-            onProcessFilterChanged = onProcessFilterChanged,
-            onAttachProcess = onAttachProcess,
-        )
-        PanelCard(
-            title = stringResource(R.string.session_attach_queue_title),
-            subtitle = stringResource(R.string.session_attach_queue_subtitle),
-        ) {
-            Text(
-                text = stringResource(R.string.session_attach_queue_detail),
+    LazyColumn(
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            SessionControlCard(
+                state = state,
+                onConnect = onConnect,
+                onOpenSession = onOpenSession,
+                onRefreshStatus = onRefreshStatus,
+                onAttachTarget = onAttachTarget,
+                onTargetPidChanged = onTargetPidChanged,
             )
+        }
+        item {
+            QuickAttachCard(
+                state = state,
+                filteredProcesses = filteredProcesses,
+                onRefreshProcesses = onRefreshProcesses,
+                onProcessFilterChanged = onProcessFilterChanged,
+                onAttachProcess = onAttachProcess,
+            )
+        }
+        item {
+            PanelCard(
+                title = stringResource(R.string.session_attach_queue_title),
+                subtitle = stringResource(R.string.session_attach_queue_subtitle),
+            ) {
+                Text(
+                    text = stringResource(R.string.session_attach_queue_detail),
+                )
+            }
         }
     }
 }
@@ -78,38 +93,64 @@ private fun SessionControlCard(
         title = stringResource(R.string.session_panel_title),
         subtitle = stringResource(R.string.session_panel_subtitle),
     ) {
-        Text(text = stringResource(R.string.session_last_message, state.lastMessage))
+        Text(
+            text = stringResource(R.string.session_last_message, state.lastMessage),
+            style = MaterialTheme.typography.bodyMedium,
+        )
         Spacer(Modifier.height(14.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            FilledTonalButton(onClick = onConnect, enabled = !state.busy) {
-                Text(stringResource(R.string.session_action_connect))
-            }
-            Button(onClick = onOpenSession, enabled = !state.busy) {
-                Text(stringResource(R.string.session_action_open_session))
-            }
-            FilledTonalButton(onClick = onRefreshStatus, enabled = !state.busy) {
-                Text(stringResource(R.string.session_action_refresh))
-            }
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            LkmdbgActionButton(
+                text = stringResource(R.string.session_action_connect),
+                onClick = onConnect,
+                enabled = !state.busy,
+            )
+            LkmdbgActionButton(
+                text = stringResource(R.string.session_action_open_session),
+                onClick = onOpenSession,
+                enabled = !state.busy,
+                prominent = true,
+            )
+            LkmdbgActionButton(
+                text = stringResource(R.string.session_action_refresh),
+                onClick = onRefreshStatus,
+                enabled = !state.busy,
+            )
         }
         Spacer(Modifier.height(14.dp))
-        OutlinedTextField(
+        LkmdbgInputField(
             value = state.targetPidInput,
             onValueChange = onTargetPidChanged,
-            enabled = !state.busy,
+            label = stringResource(R.string.session_target_pid),
             singleLine = true,
-            label = { Text(stringResource(R.string.session_target_pid)) },
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(12.dp))
-        Button(onClick = onAttachTarget, enabled = !state.busy) {
-            Text(stringResource(R.string.session_action_attach_target))
-        }
+        LkmdbgActionButton(
+            text = stringResource(R.string.session_action_attach_target),
+            onClick = onAttachTarget,
+            enabled = !state.busy,
+            prominent = true,
+        )
         Spacer(Modifier.height(18.dp))
-        Text(stringResource(R.string.session_flag_open, state.snapshot.sessionOpen))
-        Text(stringResource(R.string.session_flag_connected, state.snapshot.connected))
-        Text(stringResource(R.string.session_flag_hook_active, state.snapshot.hookActive))
-        Text(stringResource(R.string.session_flag_owner_pid, state.snapshot.ownerPid))
-        Text(stringResource(R.string.session_flag_event_queue, state.snapshot.eventQueueDepth.toString()))
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            LkmdbgTag(
+                text = stringResource(R.string.session_flag_open, state.snapshot.sessionOpen),
+                tone = LkmdbgTagTone.Accent,
+            )
+            LkmdbgTag(
+                text = stringResource(R.string.session_flag_connected, state.snapshot.connected),
+                tone = LkmdbgTagTone.Positive,
+            )
+            LkmdbgTag(text = stringResource(R.string.session_flag_hook_active, state.snapshot.hookActive))
+            LkmdbgTag(text = stringResource(R.string.session_flag_owner_pid, state.snapshot.ownerPid))
+            LkmdbgTag(text = stringResource(R.string.session_flag_event_queue, state.snapshot.eventQueueDepth.toString()))
+        }
     }
 }
 
@@ -130,18 +171,22 @@ private fun QuickAttachCard(
         title = stringResource(R.string.session_quick_attach_title),
         subtitle = stringResource(R.string.session_quick_attach_subtitle),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            FilledTonalButton(onClick = onRefreshProcesses, enabled = !state.busy) {
-                Text(stringResource(R.string.process_action_refresh))
-            }
-        }
+        LkmdbgActionButton(
+            text = stringResource(R.string.process_action_refresh),
+            onClick = onRefreshProcesses,
+            enabled = !state.busy,
+            prominent = true,
+        )
         Spacer(Modifier.height(12.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             ProcessFilter.entries.forEach { filter ->
-                FilterChip(
+                LkmdbgFilterPill(
+                    text = stringResource(filter.labelRes()),
                     selected = state.processFilter == filter,
                     onClick = { onProcessFilterChanged(filter) },
-                    label = { Text(stringResource(filter.labelRes())) },
                 )
             }
         }
@@ -151,27 +196,46 @@ private fun QuickAttachCard(
                 text = stringResource(R.string.process_empty),
             )
         } else {
-            filteredProcesses.take(8).forEach { process ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(process.displayName)
-                        Text(
-                            text = process.processName,
-                        )
-                        Text(
-                            text = stringResource(R.string.process_pid_uid, process.pid, process.uid),
-                        )
-                    }
-                    TextButton(
-                        onClick = { onAttachProcess(process.pid) },
-                        enabled = !state.busy,
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                filteredProcesses.take(8).forEach { process ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Text(stringResource(R.string.process_action_attach))
+                        AppProcessIcon(
+                            packageName = process.iconPackageName,
+                            displayName = process.displayName,
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                process.displayName,
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                text = process.processName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                LkmdbgTag(
+                                    text = stringResource(R.string.process_pid_uid, process.pid, process.uid),
+                                    tone = LkmdbgTagTone.Positive,
+                                )
+                                if (process.isAndroidApp) {
+                                    LkmdbgTag(
+                                        text = stringResource(process.kindLabelRes()),
+                                        tone = LkmdbgTagTone.Accent,
+                                    )
+                                }
+                            }
+                        }
+                        LkmdbgActionButton(
+                            text = stringResource(R.string.process_action_attach),
+                            onClick = { onAttachProcess(process.pid) },
+                            enabled = !state.busy,
+                        )
                     }
                 }
             }
@@ -186,4 +250,11 @@ private fun ProcessFilter.labelRes(): Int =
         ProcessFilter.CommandLine -> R.string.process_filter_cmdline
         ProcessFilter.SystemApps -> R.string.process_filter_system
         ProcessFilter.UserApps -> R.string.process_filter_user
+    }
+
+private fun ResolvedProcessRecord.kindLabelRes(): Int =
+    when {
+        !isAndroidApp -> R.string.process_kind_command_line
+        isSystemApp -> R.string.process_kind_system_app
+        else -> R.string.process_kind_user_app
     }

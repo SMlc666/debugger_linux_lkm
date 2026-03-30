@@ -195,6 +195,11 @@
     <string name="process_filter_system">System apps</string>
     <string name="process_filter_user">User apps</string>
     <string name="process_summary_counts">total=%1$d  android=%2$d  cmd=%3$d  system=%4$d  user=%5$d</string>
+    <string name="process_summary_total">total %1$d</string>
+    <string name="process_summary_android">android %1$d</string>
+    <string name="process_summary_cmd">cmd %1$d</string>
+    <string name="process_summary_system">system %1$d</string>
+    <string name="process_summary_user">user %1$d</string>
     <string name="process_empty">No process list yet. Refresh after the root agent comes up.</string>
     <string name="process_pid_uid">pid=%1$d  uid=%2$d</string>
     <string name="process_kind_label">class: %1$s</string>

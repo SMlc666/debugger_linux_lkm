@@ -12,13 +12,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,6 +38,9 @@ import com.smlc666.lkmdbg.data.MemorySearchValueType
 import com.smlc666.lkmdbg.data.MemoryScalarValue
 import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.ui.DashboardState
+import com.smlc666.lkmdbg.ui.components.LkmdbgActionButton
+import com.smlc666.lkmdbg.ui.components.LkmdbgFilterPill
+import com.smlc666.lkmdbg.ui.components.LkmdbgInputField
 import com.smlc666.lkmdbg.ui.components.PanelCard
 
 @Composable
@@ -82,7 +83,10 @@ internal fun MemoryScreen(
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
         PanelCard(
             title = stringResource(R.string.memory_panel_title),
             subtitle = stringResource(R.string.memory_panel_subtitle),
@@ -93,52 +97,61 @@ internal fun MemoryScreen(
             )
             Spacer(Modifier.height(12.dp))
 
-            OutlinedTextField(
+            LkmdbgInputField(
                 value = state.memoryAddressInput,
                 onValueChange = onMemoryAddressChanged,
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text(stringResource(R.string.memory_address_label)) },
-                placeholder = { Text(stringResource(R.string.memory_address_placeholder)) },
+                label = stringResource(R.string.memory_address_label),
+                placeholder = stringResource(R.string.memory_address_placeholder),
                 singleLine = true,
             )
             Spacer(Modifier.height(10.dp))
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = onJumpMemoryAddress, enabled = !state.busy) {
-                    Text(stringResource(R.string.memory_action_jump))
-                }
-                FilledTonalButton(
+                LkmdbgActionButton(
+                    text = stringResource(R.string.memory_action_jump),
+                    onClick = onJumpMemoryAddress,
+                    enabled = !state.busy,
+                    prominent = true,
+                )
+                LkmdbgActionButton(
+                    text = stringResource(R.string.memory_action_prev_page),
                     onClick = { onStepMemoryPage(-1) },
                     enabled = !state.busy && state.memoryPage != null,
-                ) {
-                    Text(stringResource(R.string.memory_action_prev_page))
-                }
-                FilledTonalButton(
+                )
+                LkmdbgActionButton(
+                    text = stringResource(R.string.memory_action_next_page),
                     onClick = { onStepMemoryPage(1) },
                     enabled = !state.busy && state.memoryPage != null,
-                ) {
-                    Text(stringResource(R.string.memory_action_next_page))
-                }
+                )
             }
 
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = onPreviewSelectedPc, enabled = !state.busy) {
-                    Text(stringResource(R.string.memory_action_preview_pc))
-                }
-                FilledTonalButton(onClick = onRefreshVmas, enabled = !state.busy) {
-                    Text(stringResource(R.string.memory_action_refresh_ranges))
-                }
-                FilledTonalButton(onClick = { showRanges = true }, enabled = state.vmas.isNotEmpty()) {
-                    Text(stringResource(R.string.memory_action_ranges))
-                }
+                LkmdbgActionButton(
+                    text = stringResource(R.string.memory_action_preview_pc),
+                    onClick = onPreviewSelectedPc,
+                    enabled = !state.busy,
+                )
+                LkmdbgActionButton(
+                    text = stringResource(R.string.memory_action_refresh_ranges),
+                    onClick = onRefreshVmas,
+                    enabled = !state.busy,
+                )
+                LkmdbgActionButton(
+                    text = stringResource(R.string.memory_action_ranges),
+                    onClick = { showRanges = true },
+                    enabled = state.vmas.isNotEmpty(),
+                )
             }
 
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = onRefreshImages, enabled = !state.busy) {
-                    Text(stringResource(R.string.memory_action_refresh_images))
-                }
+                LkmdbgActionButton(
+                    text = stringResource(R.string.memory_action_refresh_images),
+                    onClick = onRefreshImages,
+                    enabled = !state.busy,
+                )
             }
 
             Spacer(Modifier.height(14.dp))
@@ -157,125 +170,143 @@ internal fun MemoryScreen(
                 Spacer(Modifier.height(8.dp))
                 MemoryChipRow {
                     listOf(1, 2, 4, 8, 16).forEach { size ->
-                        FilterChip(
+                        LkmdbgFilterPill(
+                            text = stringResource(R.string.memory_selection_size, size),
                             selected = state.memorySelectionSize == size,
                             onClick = { onSelectionSizeChanged(size) },
-                            label = { Text(stringResource(R.string.memory_selection_size, size)) },
                         )
                     }
                 }
 
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = onLoadSelectionIntoHexSearch, enabled = !state.busy) {
-                        Text(stringResource(R.string.memory_action_selection_hex_search))
-                    }
-                    FilledTonalButton(onClick = onLoadSelectionIntoAsciiSearch, enabled = !state.busy) {
-                        Text(stringResource(R.string.memory_action_selection_ascii_search))
-                    }
+                    LkmdbgActionButton(
+                        text = stringResource(R.string.memory_action_selection_hex_search),
+                        onClick = onLoadSelectionIntoHexSearch,
+                        enabled = !state.busy,
+                    )
+                    LkmdbgActionButton(
+                        text = stringResource(R.string.memory_action_selection_ascii_search),
+                        onClick = onLoadSelectionIntoAsciiSearch,
+                        enabled = !state.busy,
+                    )
                 }
 
                 Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
+                LkmdbgInputField(
                     value = state.memoryWriteHexInput,
                     onValueChange = onWriteHexChanged,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.memory_write_hex_label)) },
-                    placeholder = { Text(stringResource(R.string.memory_write_hex_placeholder)) },
+                    label = stringResource(R.string.memory_write_hex_label),
+                    placeholder = stringResource(R.string.memory_write_hex_placeholder),
                 )
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
+                LkmdbgInputField(
                     value = state.memoryWriteAsciiInput,
                     onValueChange = onWriteAsciiChanged,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.memory_write_ascii_label)) },
-                    placeholder = { Text(stringResource(R.string.memory_write_ascii_placeholder)) },
+                    label = stringResource(R.string.memory_write_ascii_label),
+                    placeholder = stringResource(R.string.memory_write_ascii_placeholder),
                 )
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = onLoadSelectionIntoEditors, enabled = !state.busy) {
-                        Text(stringResource(R.string.memory_action_load_selection))
-                    }
-                    FilledTonalButton(onClick = onWriteHexAtFocus, enabled = !state.busy) {
-                        Text(stringResource(R.string.memory_action_write_hex))
-                    }
-                    FilledTonalButton(onClick = onWriteAsciiAtFocus, enabled = !state.busy) {
-                        Text(stringResource(R.string.memory_action_write_ascii))
-                    }
+                    LkmdbgActionButton(
+                        text = stringResource(R.string.memory_action_load_selection),
+                        onClick = onLoadSelectionIntoEditors,
+                        enabled = !state.busy,
+                    )
+                    LkmdbgActionButton(
+                        text = stringResource(R.string.memory_action_write_hex),
+                        onClick = onWriteHexAtFocus,
+                        enabled = !state.busy,
+                        prominent = true,
+                    )
+                    LkmdbgActionButton(
+                        text = stringResource(R.string.memory_action_write_ascii),
+                        onClick = onWriteAsciiAtFocus,
+                        enabled = !state.busy,
+                    )
                 }
                 Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
+                LkmdbgInputField(
                     value = state.memoryWriteAsmInput,
                     onValueChange = onWriteAsmChanged,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.memory_write_asm_label)) },
-                    placeholder = { Text(stringResource(R.string.memory_write_asm_placeholder)) },
+                    label = stringResource(R.string.memory_write_asm_label),
+                    placeholder = stringResource(R.string.memory_write_asm_placeholder),
                     minLines = 2,
                 )
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = onAssembleArm64ToEditors, enabled = !state.busy) {
-                        Text(stringResource(R.string.memory_action_asm_to_editor))
-                    }
-                    FilledTonalButton(onClick = onAssembleArm64AndWrite, enabled = !state.busy) {
-                        Text(stringResource(R.string.memory_action_asm_write))
-                    }
+                    LkmdbgActionButton(
+                        text = stringResource(R.string.memory_action_asm_to_editor),
+                        onClick = onAssembleArm64ToEditors,
+                        enabled = !state.busy,
+                    )
+                    LkmdbgActionButton(
+                        text = stringResource(R.string.memory_action_asm_write),
+                        onClick = onAssembleArm64AndWrite,
+                        enabled = !state.busy,
+                        prominent = true,
+                    )
                 }
                 Spacer(Modifier.height(14.dp))
             }
 
-            OutlinedTextField(
+            LkmdbgInputField(
                 value = state.memorySearch.query,
                 onValueChange = onSearchQueryChanged,
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text(stringResource(R.string.memory_search_query_label)) },
-                placeholder = { Text(stringResource(R.string.memory_search_query_placeholder)) },
+                label = stringResource(R.string.memory_search_query_label),
+                placeholder = stringResource(R.string.memory_search_query_placeholder),
                 singleLine = true,
             )
             Spacer(Modifier.height(10.dp))
 
             MemoryChipRow {
                 MemorySearchValueType.entries.forEach { type ->
-                    FilterChip(
+                    LkmdbgFilterPill(
+                        text = stringResource(type.labelRes),
                         selected = state.memorySearch.valueType == type,
                         onClick = { onSearchValueTypeChanged(type) },
-                        label = { Text(stringResource(type.labelRes)) },
                     )
                 }
             }
             Spacer(Modifier.height(10.dp))
             MemoryChipRow {
                 MemorySearchRefineMode.entries.forEach { mode ->
-                    FilterChip(
+                    LkmdbgFilterPill(
+                        text = stringResource(mode.labelRes),
                         selected = state.memorySearch.refineMode == mode,
                         onClick = { onSearchRefineModeChanged(mode) },
-                        label = { Text(stringResource(mode.labelRes)) },
                     )
                 }
             }
             Spacer(Modifier.height(10.dp))
             MemoryChipRow {
                 MemoryRegionPreset.entries.forEach { preset ->
-                    FilterChip(
+                    LkmdbgFilterPill(
+                        text = stringResource(preset.labelRes),
                         selected = state.memorySearch.regionPreset == preset,
                         onClick = { onRegionPresetChanged(preset) },
-                        label = { Text(stringResource(preset.labelRes)) },
                     )
                 }
             }
             Spacer(Modifier.height(12.dp))
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = onSearchMemory, enabled = !state.busy) {
-                    Text(stringResource(R.string.memory_action_search))
-                }
-                FilledTonalButton(
+                LkmdbgActionButton(
+                    text = stringResource(R.string.memory_action_search),
+                    onClick = onSearchMemory,
+                    enabled = !state.busy,
+                    prominent = true,
+                )
+                LkmdbgActionButton(
+                    text = stringResource(R.string.memory_action_refine),
                     onClick = onRefineMemory,
                     enabled = !state.busy &&
                         (state.memorySearch.results.isNotEmpty() || state.memorySearch.snapshotReady),
-                ) {
-                    Text(stringResource(R.string.memory_action_refine))
-                }
+                )
             }
 
             Spacer(Modifier.height(12.dp))

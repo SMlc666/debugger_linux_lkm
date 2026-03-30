@@ -7,11 +7,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,7 +26,49 @@ import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.data.ResolvedProcessRecord
 import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.ui.components.AppProcessIcon
+import com.smlc666.lkmdbg.ui.components.LkmdbgActionButton
+import com.smlc666.lkmdbg.ui.components.LkmdbgFilterPill
+import com.smlc666.lkmdbg.ui.components.LkmdbgTag
+import com.smlc666.lkmdbg.ui.components.LkmdbgTagTone
 import com.smlc666.lkmdbg.ui.components.PanelCard
+
+@Composable
+internal fun ProcessWorkspaceScreen(
+    state: SessionBridgeState,
+    onRefreshProcesses: () -> Unit,
+    onProcessFilterChanged: (ProcessFilter) -> Unit,
+    onAttachProcess: (Int) -> Unit,
+) {
+    val filteredProcesses = state.processes.filter { state.processFilter.matches(it) }
+
+    LazyColumn(
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            ProcessControlPanel(
+                state = state,
+                onRefreshProcesses = onRefreshProcesses,
+                onProcessFilterChanged = onProcessFilterChanged,
+            )
+        }
+        if (filteredProcesses.isEmpty()) {
+            item {
+                Text(
+                    text = state.lastMessage.ifBlank { stringResource(R.string.process_empty) },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            items(filteredProcesses, key = { "${it.pid}:${it.processName}" }) { process ->
+                ProcessRowCard(
+                    process = process,
+                    onAttach = { onAttachProcess(process.pid) },
+                )
+            }
+        }
+    }
+}
 
 @Composable
 internal fun ProcessControlPanel(
@@ -43,40 +87,42 @@ internal fun ProcessControlPanel(
         title = stringResource(R.string.process_panel_title),
         subtitle = stringResource(R.string.process_panel_subtitle),
     ) {
-        Text(
-            text = stringResource(
-                R.string.process_summary_counts,
-                counts.total,
-                counts.androidApps,
-                counts.commandLine,
-                counts.systemApps,
-                counts.userApps,
-            ),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            LkmdbgTag(
+                text = stringResource(R.string.process_summary_total, counts.total),
+                tone = LkmdbgTagTone.Accent,
+            )
+            LkmdbgTag(text = stringResource(R.string.process_summary_android, counts.androidApps))
+            LkmdbgTag(text = stringResource(R.string.process_summary_cmd, counts.commandLine))
+            LkmdbgTag(text = stringResource(R.string.process_summary_system, counts.systemApps))
+            LkmdbgTag(text = stringResource(R.string.process_summary_user, counts.userApps))
+        }
+        Spacer(Modifier.height(14.dp))
+        LkmdbgActionButton(
+            text = stringResource(R.string.process_action_refresh),
+            onClick = onRefreshProcesses,
+            enabled = !state.busy,
+            prominent = true,
         )
         Spacer(Modifier.height(14.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            FilledTonalButton(onClick = onRefreshProcesses, enabled = !state.busy) {
-                Text(stringResource(R.string.process_action_refresh))
-            }
-        }
-        Spacer(Modifier.height(14.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             ProcessFilter.entries.forEach { filter ->
-                FilterChip(
+                LkmdbgFilterPill(
+                    text = stringResource(filter.labelRes()),
                     selected = state.processFilter == filter,
                     onClick = { onProcessFilterChanged(filter) },
-                    label = { Text(stringResource(filter.labelRes())) },
                 )
             }
-        }
-        if (state.processes.isEmpty()) {
-            Spacer(Modifier.height(16.dp))
-            Text(
-                text = stringResource(R.string.process_empty),
-                style = MaterialTheme.typography.bodyLarge,
-            )
         }
     }
 }
@@ -85,7 +131,7 @@ internal fun ProcessControlPanel(
 internal fun ProcessRowCard(process: ResolvedProcessRecord, onAttach: () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
         ),
     ) {
         Row(
@@ -97,40 +143,57 @@ internal fun ProcessRowCard(process: ResolvedProcessRecord, onAttach: () -> Unit
             AppProcessIcon(
                 packageName = process.iconPackageName,
                 displayName = process.displayName,
-                modifier = Modifier,
             )
             Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text(
-                    text = process.displayName,
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    text = process.processName,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = stringResource(R.string.process_pid_uid, process.pid, process.uid),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                    text = stringResource(R.string.process_kind_label, stringResource(process.kindLabelRes())),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = process.displayName,
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            text = process.processName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    LkmdbgActionButton(
+                        text = stringResource(R.string.process_action_attach),
+                        onClick = onAttach,
+                        prominent = true,
+                    )
+                }
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    LkmdbgTag(
+                        text = stringResource(R.string.process_pid_uid, process.pid, process.uid),
+                        tone = LkmdbgTagTone.Positive,
+                    )
+                    LkmdbgTag(
+                        text = stringResource(process.kindLabelRes()),
+                        tone = if (process.isAndroidApp) LkmdbgTagTone.Accent else LkmdbgTagTone.Neutral,
+                    )
+                }
                 process.packageName?.let { packageName ->
                     Text(
                         text = stringResource(R.string.process_package_name, packageName),
                         style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
                     )
                 }
-                Button(onClick = onAttach) {
-                    Text(stringResource(R.string.process_action_attach))
-                }
+                Text(
+                    text = process.cmdline.ifBlank { process.comm },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

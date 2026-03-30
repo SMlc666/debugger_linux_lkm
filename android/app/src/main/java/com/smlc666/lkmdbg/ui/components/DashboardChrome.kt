@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -19,8 +20,6 @@ import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -37,6 +36,8 @@ import androidx.compose.ui.unit.dp
 import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.ui.WorkspaceTab
+import com.smlc666.lkmdbg.ui.theme.SignalCyan
+import com.smlc666.lkmdbg.ui.theme.Slate
 
 @Composable
 internal fun WorkspaceRail(selectedTab: WorkspaceTab, onSelect: (WorkspaceTab) -> Unit) {
@@ -45,22 +46,11 @@ internal fun WorkspaceRail(selectedTab: WorkspaceTab, onSelect: (WorkspaceTab) -
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         WorkspaceTab.entries.forEach { tab ->
-            if (selectedTab == tab) {
-                FilledTonalButton(onClick = { onSelect(tab) }) {
-                    Icon(tab.icon, contentDescription = stringResource(tab.titleRes))
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(tab.titleRes))
-                }
-            } else {
-                FilterChip(
-                    selected = false,
-                    onClick = { onSelect(tab) },
-                    label = { Text(stringResource(tab.titleRes)) },
-                    leadingIcon = {
-                        Icon(tab.icon, contentDescription = stringResource(tab.titleRes))
-                    },
-                )
-            }
+            WorkspaceTabPill(
+                tab = tab,
+                selected = selectedTab == tab,
+                onSelect = onSelect,
+            )
         }
     }
 }
@@ -84,23 +74,33 @@ internal fun WorkspaceBar(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         WorkspaceTab.entries.forEach { tab ->
-            if (selectedTab == tab) {
-                FilledTonalButton(onClick = { onSelect(tab) }) {
-                    Icon(tab.icon, contentDescription = stringResource(tab.titleRes))
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(tab.titleRes))
-                }
-            } else {
-                FilterChip(
-                    selected = false,
-                    onClick = { onSelect(tab) },
-                    label = { Text(stringResource(tab.titleRes)) },
-                    leadingIcon = {
-                        Icon(tab.icon, contentDescription = stringResource(tab.titleRes))
-                    },
-                )
-            }
+            WorkspaceTabPill(
+                tab = tab,
+                selected = selectedTab == tab,
+                onSelect = onSelect,
+            )
         }
+    }
+}
+
+@Composable
+private fun WorkspaceTabPill(
+    tab: WorkspaceTab,
+    selected: Boolean,
+    onSelect: (WorkspaceTab) -> Unit,
+) {
+    if (selected) {
+        LkmdbgActionButton(
+            text = stringResource(tab.titleRes),
+            onClick = { onSelect(tab) },
+            prominent = true,
+        )
+    } else {
+        LkmdbgFilterPill(
+            text = stringResource(tab.titleRes),
+            selected = false,
+            onClick = { onSelect(tab) },
+        )
     }
 }
 
@@ -219,8 +219,9 @@ internal fun PanelCard(
     Card(
         modifier = modifier,
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
         ),
+        border = BorderStroke(1.dp, Slate.copy(alpha = 0.18f)),
         shape = RoundedCornerShape(28.dp),
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
@@ -238,11 +239,17 @@ internal fun PanelCard(
                 Text(title, style = MaterialTheme.typography.headlineSmall)
             }
             Spacer(Modifier.height(6.dp))
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Surface(
+                color = SignalCyan.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(999.dp),
+            ) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
             Spacer(Modifier.height(18.dp))
             content()
         }

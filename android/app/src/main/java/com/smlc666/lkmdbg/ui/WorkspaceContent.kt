@@ -1,14 +1,12 @@
 package com.smlc666.lkmdbg.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.smlc666.lkmdbg.data.SessionBridgeState
@@ -16,8 +14,7 @@ import com.smlc666.lkmdbg.ui.components.StatusStrip
 import com.smlc666.lkmdbg.ui.components.WorkspaceBar
 import com.smlc666.lkmdbg.ui.screens.EventScreen
 import com.smlc666.lkmdbg.ui.screens.MemoryScreen
-import com.smlc666.lkmdbg.ui.screens.ProcessControlPanel
-import com.smlc666.lkmdbg.ui.screens.ProcessRowCard
+import com.smlc666.lkmdbg.ui.screens.ProcessWorkspaceScreen
 import com.smlc666.lkmdbg.ui.screens.SessionScreen
 import com.smlc666.lkmdbg.ui.screens.ThreadScreen
 
@@ -33,24 +30,19 @@ internal fun WorkspaceContent(
     showStatusStrip: Boolean = true,
     showWorkspaceBar: Boolean = true,
 ) {
-    val filteredProcesses = remember(sessionState.processes, sessionState.processFilter) {
-        sessionState.processes.filter { sessionState.processFilter.matches(it) }
-    }
-
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = contentPadding,
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(contentPadding),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (showStatusStrip) {
-            item { StatusStrip(sessionState) }
+            StatusStrip(sessionState)
         }
         if (showWorkspaceBar) {
-            item {
-                WorkspaceBar(selectedTab = selectedTab, onSelect = onSelectTab)
-            }
+            WorkspaceBar(selectedTab = selectedTab, onSelect = onSelectTab)
         }
-        item {
+        Column(modifier = Modifier.weight(1f)) {
             when (selectedTab) {
                 WorkspaceTab.Session -> SessionScreen(
                     state = sessionState,
@@ -64,10 +56,11 @@ internal fun WorkspaceContent(
                     onAttachProcess = actions.onAttachProcess,
                 )
 
-                WorkspaceTab.Processes -> ProcessControlPanel(
+                WorkspaceTab.Processes -> ProcessWorkspaceScreen(
                     state = sessionState,
                     onRefreshProcesses = actions.onRefreshProcesses,
                     onProcessFilterChanged = actions.onProcessFilterChanged,
+                    onAttachProcess = actions.onAttachProcess,
                 )
 
                 WorkspaceTab.Memory -> MemoryScreen(
@@ -109,24 +102,6 @@ internal fun WorkspaceContent(
                     state = sessionState,
                     onRefreshEvents = actions.onRefreshEvents,
                 )
-            }
-        }
-        if (selectedTab == WorkspaceTab.Processes) {
-            if (filteredProcesses.isEmpty()) {
-                item {
-                    Text(
-                        text = sessionState.lastMessage,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            } else {
-                items(filteredProcesses, key = { "${it.pid}:${it.processName}" }) { process ->
-                    ProcessRowCard(
-                        process = process,
-                        onAttach = { actions.onAttachProcess(process.pid) },
-                    )
-                }
             }
         }
     }

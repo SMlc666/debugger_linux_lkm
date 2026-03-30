@@ -195,6 +195,11 @@
     <string name="process_filter_system">系统应用</string>
     <string name="process_filter_user">用户应用</string>
     <string name="process_summary_counts">总计=%1$d  安卓=%2$d  命令行=%3$d  系统=%4$d  用户=%5$d</string>
+    <string name="process_summary_total">总计 %1$d</string>
+    <string name="process_summary_android">安卓 %1$d</string>
+    <string name="process_summary_cmd">命令行 %1$d</string>
+    <string name="process_summary_system">系统 %1$d</string>
+    <string name="process_summary_user">用户 %1$d</string>
     <string name="process_empty">还没有进程列表。等待 root agent 就绪后刷新。</string>
     <string name="process_pid_uid">pid=%1$d  uid=%2$d</string>
     <string name="process_kind_label">类型：%1$s</string>
