@@ -104,7 +104,7 @@ class LkmdbgOverlayService : LifecycleService() {
                         lastTouchRawX = event.rawX
                         lastTouchRawY = event.rawY
                         dragDistancePx = 0f
-                        false
+                        true
                     }
 
                     MotionEvent.ACTION_MOVE -> {
@@ -120,7 +120,11 @@ class LkmdbgOverlayService : LifecycleService() {
                     MotionEvent.ACTION_UP -> {
                         if (dragDistancePx <= 12f * density)
                             updateExpandedState(true)
-                        dispatchNativeTouch(event)
+                        true
+                    }
+
+                    MotionEvent.ACTION_CANCEL -> {
+                        dragDistancePx = 0f
                         true
                     }
 
