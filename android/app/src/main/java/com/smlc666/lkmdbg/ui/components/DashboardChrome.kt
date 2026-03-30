@@ -1,8 +1,13 @@
 package com.smlc666.lkmdbg.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
@@ -12,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -36,6 +40,8 @@ import androidx.compose.ui.unit.dp
 import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.ui.WorkspaceTab
+import com.smlc666.lkmdbg.ui.theme.DeepTeal
+import com.smlc666.lkmdbg.ui.theme.Graphite
 import com.smlc666.lkmdbg.ui.theme.SignalCyan
 import com.smlc666.lkmdbg.ui.theme.Slate
 
@@ -89,18 +95,53 @@ private fun WorkspaceTabPill(
     selected: Boolean,
     onSelect: (WorkspaceTab) -> Unit,
 ) {
-    if (selected) {
-        LkmdbgActionButton(
-            text = stringResource(tab.titleRes),
-            onClick = { onSelect(tab) },
-            prominent = true,
-        )
-    } else {
-        LkmdbgFilterPill(
-            text = stringResource(tab.titleRes),
-            selected = false,
-            onClick = { onSelect(tab) },
-        )
+    val containerColor by animateColorAsState(
+        targetValue = if (selected) SignalCyan.copy(alpha = 0.92f) else DeepTeal.copy(alpha = 0.36f),
+        animationSpec = tween(durationMillis = 180),
+        label = "workspace_tab_container",
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (selected) Graphite else MaterialTheme.colorScheme.onSurfaceVariant,
+        animationSpec = tween(durationMillis = 180),
+        label = "workspace_tab_content",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) SignalCyan.copy(alpha = 0.2f) else Slate.copy(alpha = 0.18f),
+        animationSpec = tween(durationMillis = 180),
+        label = "workspace_tab_border",
+    )
+    val elevation by animateDpAsState(
+        targetValue = if (selected) 8.dp else 0.dp,
+        animationSpec = tween(durationMillis = 180),
+        label = "workspace_tab_elevation",
+    )
+
+    Surface(
+        onClick = { onSelect(tab) },
+        modifier = Modifier.animateContentSize(),
+        shape = RoundedCornerShape(18.dp),
+        color = containerColor,
+        contentColor = contentColor,
+        tonalElevation = elevation,
+        shadowElevation = elevation,
+        border = BorderStroke(1.dp, borderColor),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = tab.icon,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = stringResource(tab.titleRes),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            )
+        }
     }
 }
 
@@ -224,7 +265,11 @@ internal fun PanelCard(
         border = BorderStroke(1.dp, Slate.copy(alpha = 0.18f)),
         shape = RoundedCornerShape(28.dp),
     ) {
-        Column(modifier = Modifier.padding(20.dp)) {
+        Column(
+            modifier = Modifier
+                .animateContentSize()
+                .padding(20.dp),
+        ) {
             Row(
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),

@@ -12,6 +12,11 @@
     <string name="workspace_memory">Memory</string>
     <string name="workspace_threads">Threads</string>
     <string name="workspace_events">Events</string>
+    <string name="workspace_session_subtitle">Connect the agent, open a session fd, and attach a target.</string>
+    <string name="workspace_processes_subtitle">Browse the resolved process list and attach without typing a PID.</string>
+    <string name="workspace_memory_subtitle">Inspect memory pages, ranges, images, and value search results.</string>
+    <string name="workspace_threads_subtitle">Refresh threads and inspect integer plus floating-point registers.</string>
+    <string name="workspace_events_subtitle">Drain the live kernel-backed event queue for the current session.</string>
     <string name="dashboard_chip_root">root bridge</string>
     <string name="dashboard_chip_pipe">stdio pipe</string>
     <string name="dashboard_chip_md3">md3 shell</string>
@@ -63,6 +68,7 @@
     <string name="overlay_drag_handle">Drag</string>
     <string name="overlay_ball_label">DBG</string>
     <string name="overlay_title">lkmdbg overlay</string>
+    <string name="overlay_title_with_section">lkmdbg overlay · %1$s</string>
     <string name="overlay_status_template">transport=%1$s  pid=%2$d  tid=%3$d  sid=%4$s</string>
     <string name="memory_panel_title">Memory Snapshot</string>
     <string name="memory_panel_subtitle">Inspector-first memory workspace with typed search, range presets, raw bytes, and image context.</string>

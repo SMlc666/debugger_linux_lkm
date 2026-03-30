@@ -113,6 +113,7 @@ internal fun OverlayWorkspace(
                             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)),
                     ) {
                         ExpandedOverlayHeader(
+                            selectedTab = selectedTab,
                             transport = sessionState.snapshot.transport,
                             targetPid = sessionState.snapshot.targetPid,
                             targetTid = sessionState.snapshot.targetTid,
@@ -223,6 +224,7 @@ private fun FloatingBall(
 
 @Composable
 private fun ExpandedOverlayHeader(
+    selectedTab: WorkspaceTab,
     transport: String,
     targetPid: Int,
     targetTid: Int,
@@ -242,6 +244,7 @@ private fun ExpandedOverlayHeader(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             HeaderText(
+                selectedTab = selectedTab,
                 transport = transport,
                 targetPid = targetPid,
                 targetTid = targetTid,
@@ -263,6 +266,7 @@ private fun ExpandedOverlayHeader(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             HeaderText(
+                selectedTab = selectedTab,
                 transport = transport,
                 targetPid = targetPid,
                 targetTid = targetTid,
@@ -282,6 +286,7 @@ private fun ExpandedOverlayHeader(
 
 @Composable
 private fun HeaderText(
+    selectedTab: WorkspaceTab,
     transport: String,
     targetPid: Int,
     targetTid: Int,
@@ -302,7 +307,10 @@ private fun HeaderText(
                 tint = MaterialTheme.colorScheme.primary,
             )
             Text(
-                text = stringResource(R.string.overlay_title),
+                text = stringResource(
+                    R.string.overlay_title_with_section,
+                    stringResource(selectedTab.titleRes),
+                ),
                 style = MaterialTheme.typography.titleMedium,
             )
         }

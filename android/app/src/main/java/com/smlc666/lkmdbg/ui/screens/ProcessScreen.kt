@@ -1,5 +1,6 @@
 package com.smlc666.lkmdbg.ui.screens
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -7,7 +8,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -15,6 +15,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -136,6 +137,7 @@ internal fun ProcessRowCard(process: ResolvedProcessRecord, onAttach: () -> Unit
     ) {
         Row(
             modifier = Modifier
+                .animateContentSize()
                 .fillMaxWidth()
                 .padding(16.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -183,11 +185,17 @@ internal fun ProcessRowCard(process: ResolvedProcessRecord, onAttach: () -> Unit
                     )
                 }
                 process.packageName?.let { packageName ->
-                    Text(
-                        text = stringResource(R.string.process_package_name, packageName),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.38f),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.process_package_name, packageName),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        )
+                    }
                 }
                 Text(
                     text = process.cmdline.ifBlank { process.comm },

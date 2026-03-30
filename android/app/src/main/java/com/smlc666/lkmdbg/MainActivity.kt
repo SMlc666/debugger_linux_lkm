@@ -11,10 +11,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val repository = (application as LkmdbgApplication).sessionRepository
         setContent {
             LkmdbgTheme {
-                LkmdbgApp(repository)
+                LkmdbgApp()
             }
         }
     }

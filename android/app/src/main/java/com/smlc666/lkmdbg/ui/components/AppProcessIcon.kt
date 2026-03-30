@@ -52,9 +52,10 @@ internal fun AppProcessIcon(
         }
     }
 
-    if (bitmap != null) {
+    val loadedBitmap = bitmap
+    if (loadedBitmap != null) {
         Image(
-            bitmap = bitmap.asImageBitmap(),
+            bitmap = loadedBitmap.asImageBitmap(),
             contentDescription = displayName,
             modifier = modifier
                 .size(52.dp)

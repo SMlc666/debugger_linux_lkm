@@ -12,6 +12,11 @@
     <string name="workspace_memory">内存</string>
     <string name="workspace_threads">线程</string>
     <string name="workspace_events">事件</string>
+    <string name="workspace_session_subtitle">连接 agent，打开 session fd，并把目标附加进来。</string>
+    <string name="workspace_processes_subtitle">浏览解析后的进程列表，直接附加，不必手输 PID。</string>
+    <string name="workspace_memory_subtitle">查看内存页、区域、映像和数值搜索结果。</string>
+    <string name="workspace_threads_subtitle">刷新线程，并检查整数与浮点寄存器。</string>
+    <string name="workspace_events_subtitle">读取当前会话对应的内核事件队列。</string>
     <string name="dashboard_chip_root">root 桥接</string>
     <string name="dashboard_chip_pipe">stdio 管道</string>
     <string name="dashboard_chip_md3">MD3 外壳</string>
@@ -63,6 +68,7 @@
     <string name="overlay_drag_handle">拖动</string>
     <string name="overlay_ball_label">调试</string>
     <string name="overlay_title">lkmdbg 悬浮窗</string>
+    <string name="overlay_title_with_section">lkmdbg 悬浮窗 · %1$s</string>
     <string name="overlay_status_template">transport=%1$s  pid=%2$d  tid=%3$d  sid=%4$s</string>
     <string name="memory_panel_title">内存工作台</string>
     <string name="memory_panel_subtitle">以内存查看器为中心，集成类型搜索、区域预设、原始字节和映像上下文。</string>
