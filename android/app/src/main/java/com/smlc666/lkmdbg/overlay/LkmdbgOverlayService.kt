@@ -98,7 +98,7 @@ class LkmdbgOverlayService : LifecycleService() {
             )
             setOnTouchListener { _: View, event: MotionEvent ->
                 if (expanded)
-                    return@setOnTouchListener false
+                    return@setOnTouchListener dispatchNativeTouch(event)
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         lastTouchRawX = event.rawX
@@ -120,6 +120,7 @@ class LkmdbgOverlayService : LifecycleService() {
                     MotionEvent.ACTION_UP -> {
                         if (dragDistancePx <= 12f * density)
                             updateExpandedState(true)
+                        dispatchNativeTouch(event)
                         true
                     }
 

@@ -3,7 +3,6 @@ import org.gradle.api.GradleException
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
 }
 
 val bundledAgentAssetRoot = layout.buildDirectory.dir("generated/assets/bundledAgent/main")
@@ -69,10 +68,6 @@ android {
         jvmTarget = "17"
     }
 
-    buildFeatures {
-        compose = true
-    }
-
     testOptions {
         unitTests.isIncludeAndroidResources = true
     }
@@ -101,24 +96,11 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.service)
-    implementation(libs.androidx.activity.compose)
     implementation(libs.kotlinx.coroutines.android)
 
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.foundation)
-    implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material.icons.extended)
-    implementation(libs.androidx.compose.ui.tooling.preview)
-    debugImplementation(libs.androidx.compose.ui.tooling)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
-
-    testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.junit4)
     testImplementation(libs.robolectric)
-    testImplementation(libs.androidx.compose.ui.test.junit4)
 }
 
 val buildBundledAgentDebug by tasks.registering {

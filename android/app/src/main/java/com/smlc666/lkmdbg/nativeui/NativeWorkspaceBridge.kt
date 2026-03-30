@@ -21,5 +21,22 @@ internal object NativeWorkspaceBridge {
         threadCount: Int,
         eventCount: Int,
     )
+    external fun nativeUpdateStrings(
+        handle: Long,
+        title: String,
+        session: String,
+        processes: String,
+        memory: String,
+        threads: String,
+        events: String,
+        connected: String,
+        sessionOpen: String,
+        hook: String,
+        processCount: String,
+        threadCount: String,
+        eventCount: String,
+    )
+    external fun nativeUpdateFontPaths(handle: Long, fontPaths: Array<String>)
+    external fun nativeOnTouch(handle: Long, action: Int, x: Float, y: Float)
     external fun nativeRender(handle: Long)
 }

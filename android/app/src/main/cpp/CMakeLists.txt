@@ -29,7 +29,21 @@ add_subdirectory(${KEYSTONE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/keystone)
 
 add_library(lkmdbg_native SHARED
 	native_disassembler.cpp
-	native_workspace_renderer.cpp)
+	nativeui/egl_window_context.cpp
+	nativeui/imgui_controls.cpp
+	nativeui/imgui_workspace_renderer.cpp
+	nativeui/workspace_layout.cpp
+	nativeui/native_workspace_jni.cpp)
 target_compile_definitions(lkmdbg_native PRIVATE CAPSTONE_STATIC)
-target_include_directories(lkmdbg_native PRIVATE ${KEYSTONE_DIR}/include)
-target_link_libraries(lkmdbg_native PRIVATE capstone_static keystone android jnigraphics log)
+target_include_directories(lkmdbg_native PRIVATE
+	${KEYSTONE_DIR}/include
+	${CMAKE_CURRENT_SOURCE_DIR}
+	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui
+	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui/backends)
+target_sources(lkmdbg_native PRIVATE
+	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui/imgui.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui/imgui_draw.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui/imgui_tables.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui/imgui_widgets.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui/backends/imgui_impl_opengl3.cpp)
+target_link_libraries(lkmdbg_native PRIVATE capstone_static keystone EGL GLESv3 android jnigraphics log)
