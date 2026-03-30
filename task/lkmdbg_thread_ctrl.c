@@ -1734,13 +1734,19 @@ static int lkmdbg_register_hwpoint(struct lkmdbg_session *session,
 	attr.bp_type = req->type;
 	attr.disabled = 1;
 
+	if (!lkmdbg_hw_breakpoint_runtime_available()) {
+		put_task_struct(task);
+		kfree(entry);
+		return -EOPNOTSUPP;
+	}
+
 	mutex_lock(&session->lock);
 	session->next_hwpoint_id++;
 	id = session->next_hwpoint_id;
 	mutex_unlock(&session->lock);
 
-	entry->event = register_user_hw_breakpoint(&attr, lkmdbg_hwpoint_event,
-						     entry, task);
+	entry->event = lkmdbg_register_user_hw_breakpoint_runtime(
+		&attr, (void *)lkmdbg_hwpoint_event, entry, task);
 	entry->session = session;
 	entry->id = id;
 	entry->addr = req->addr;
@@ -1758,11 +1764,6 @@ static int lkmdbg_register_hwpoint(struct lkmdbg_session *session,
 	lkmdbg_hwpoint_reset_cycle(entry);
 	put_task_struct(task);
 
-	if (!entry->event) {
-		kfree(entry);
-		return -EOPNOTSUPP;
-	}
-
 	if (IS_ERR(entry->event)) {
 		ret = PTR_ERR(entry->event);
 		kfree(entry);
@@ -1770,9 +1771,9 @@ static int lkmdbg_register_hwpoint(struct lkmdbg_session *session,
 	}
 
 	attr.disabled = 0;
-	ret = modify_user_hw_breakpoint(entry->event, &attr);
+	ret = lkmdbg_modify_user_hw_breakpoint_runtime(entry->event, &attr);
 	if (ret) {
-		unregister_hw_breakpoint(entry->event);
+		lkmdbg_unregister_hw_breakpoint_runtime(entry->event);
 		kfree(entry);
 		return ret;
 	}
@@ -1809,7 +1810,7 @@ static int lkmdbg_unregister_hwpoint(struct lkmdbg_session *session, u64 id)
 	if (mmu_exec)
 		ret = lkmdbg_unregister_mmu_hwpoint(entry);
 	else
-		unregister_hw_breakpoint(entry->event);
+		lkmdbg_unregister_hw_breakpoint_runtime(entry->event);
 	lkmdbg_hwpoint_put(entry);
 	return ret;
 }
@@ -1837,7 +1838,7 @@ static int lkmdbg_rearm_hwpoint_locked(struct lkmdbg_hwpoint *entry)
 	attr.bp_type = entry->type;
 	attr.disabled = 0;
 
-	ret = modify_user_hw_breakpoint(entry->event, &attr);
+	ret = lkmdbg_modify_user_hw_breakpoint_runtime(entry->event, &attr);
 	if (ret)
 		return ret;
 
@@ -3273,7 +3274,7 @@ void lkmdbg_thread_ctrl_release(struct lkmdbg_session *session)
 		if (lkmdbg_hwpoint_is_mmu(entry))
 			lkmdbg_unregister_mmu_hwpoint(entry);
 		else
-			unregister_hw_breakpoint(entry->event);
+			lkmdbg_unregister_hw_breakpoint_runtime(entry->event);
 		lkmdbg_hwpoint_put(entry);
 		mutex_lock(&session->lock);
 	}

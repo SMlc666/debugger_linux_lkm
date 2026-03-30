@@ -6,6 +6,16 @@
 typedef int (*lkmdbg_task_work_add_runtime_fn)(struct task_struct *task,
 					       struct callback_head *work,
 					       unsigned int notify);
+typedef int (*lkmdbg_kern_path_runtime_fn)(const char *name, unsigned int flags,
+					   struct path *path);
+typedef void (*lkmdbg_path_put_runtime_fn)(const struct path *path);
+typedef struct perf_event *(*lkmdbg_register_user_hw_breakpoint_runtime_fn)(
+	struct perf_event_attr *attr, void *triggered, void *context,
+	struct task_struct *task);
+typedef int (*lkmdbg_modify_user_hw_breakpoint_runtime_fn)(
+	struct perf_event *bp, struct perf_event_attr *attr);
+typedef void (*lkmdbg_unregister_hw_breakpoint_runtime_fn)(
+	struct perf_event *bp);
 
 static unsigned long lkmdbg_lookup_runtime_symbol(const char *name)
 {
@@ -194,6 +204,26 @@ static int lkmdbg_resolve_runtime_symbols(void)
 	if (addr)
 		lkmdbg_symbols.access_remote_vm_inner_sym = addr;
 
+	addr = lkmdbg_lookup_runtime_symbol("kern_path");
+	if (addr)
+		lkmdbg_symbols.kern_path_sym = addr;
+
+	addr = lkmdbg_lookup_runtime_symbol("path_put");
+	if (addr)
+		lkmdbg_symbols.path_put_sym = addr;
+
+	addr = lkmdbg_lookup_runtime_symbol("register_user_hw_breakpoint");
+	if (addr)
+		lkmdbg_symbols.register_user_hw_breakpoint_sym = addr;
+
+	addr = lkmdbg_lookup_runtime_symbol("modify_user_hw_breakpoint");
+	if (addr)
+		lkmdbg_symbols.modify_user_hw_breakpoint_sym = addr;
+
+	addr = lkmdbg_lookup_runtime_symbol("unregister_hw_breakpoint");
+	if (addr)
+		lkmdbg_symbols.unregister_hw_breakpoint_sym = addr;
+
 	return 0;
 }
 
@@ -221,6 +251,75 @@ int __nocfi lkmdbg_task_work_add_runtime(struct task_struct *task,
 
 	fn = (lkmdbg_task_work_add_runtime_fn)lkmdbg_symbols.task_work_add_sym;
 	return fn(task, work, notify);
+}
+
+int lkmdbg_kern_path_runtime(const char *name, unsigned int flags,
+			     struct path *path)
+{
+	lkmdbg_kern_path_runtime_fn fn;
+
+	if (!lkmdbg_symbols.kern_path_sym)
+		return -EOPNOTSUPP;
+
+	fn = (lkmdbg_kern_path_runtime_fn)lkmdbg_symbols.kern_path_sym;
+	return fn(name, flags, path);
+}
+
+void lkmdbg_path_put_runtime(const struct path *path)
+{
+	lkmdbg_path_put_runtime_fn fn;
+
+	if (!lkmdbg_symbols.path_put_sym)
+		return;
+
+	fn = (lkmdbg_path_put_runtime_fn)lkmdbg_symbols.path_put_sym;
+	fn(path);
+}
+
+bool lkmdbg_hw_breakpoint_runtime_available(void)
+{
+	return lkmdbg_symbols.register_user_hw_breakpoint_sym &&
+	       lkmdbg_symbols.modify_user_hw_breakpoint_sym &&
+	       lkmdbg_symbols.unregister_hw_breakpoint_sym;
+}
+
+struct perf_event *lkmdbg_register_user_hw_breakpoint_runtime(
+	struct perf_event_attr *attr, void *triggered, void *context,
+	struct task_struct *task)
+{
+	lkmdbg_register_user_hw_breakpoint_runtime_fn fn;
+
+	if (!lkmdbg_symbols.register_user_hw_breakpoint_sym)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	fn = (lkmdbg_register_user_hw_breakpoint_runtime_fn)
+		lkmdbg_symbols.register_user_hw_breakpoint_sym;
+	return fn(attr, triggered, context, task);
+}
+
+int lkmdbg_modify_user_hw_breakpoint_runtime(struct perf_event *bp,
+					     struct perf_event_attr *attr)
+{
+	lkmdbg_modify_user_hw_breakpoint_runtime_fn fn;
+
+	if (!lkmdbg_symbols.modify_user_hw_breakpoint_sym)
+		return -EOPNOTSUPP;
+
+	fn = (lkmdbg_modify_user_hw_breakpoint_runtime_fn)
+		lkmdbg_symbols.modify_user_hw_breakpoint_sym;
+	return fn(bp, attr);
+}
+
+void lkmdbg_unregister_hw_breakpoint_runtime(struct perf_event *bp)
+{
+	lkmdbg_unregister_hw_breakpoint_runtime_fn fn;
+
+	if (!lkmdbg_symbols.unregister_hw_breakpoint_sym)
+		return;
+
+	fn = (lkmdbg_unregister_hw_breakpoint_runtime_fn)
+		lkmdbg_symbols.unregister_hw_breakpoint_sym;
+	fn(bp);
 }
 
 void lkmdbg_symbols_exit(void)
@@ -257,4 +356,9 @@ void lkmdbg_symbols_exit(void)
 	lkmdbg_symbols.do_sys_process_vm_writev_sym = 0;
 	lkmdbg_symbols.access_remote_vm_sym = 0;
 	lkmdbg_symbols.access_remote_vm_inner_sym = 0;
+	lkmdbg_symbols.kern_path_sym = 0;
+	lkmdbg_symbols.path_put_sym = 0;
+	lkmdbg_symbols.register_user_hw_breakpoint_sym = 0;
+	lkmdbg_symbols.modify_user_hw_breakpoint_sym = 0;
+	lkmdbg_symbols.unregister_hw_breakpoint_sym = 0;
 }

@@ -34,6 +34,7 @@ struct task_struct;
 struct vm_area_struct;
 struct lkmdbg_freezer;
 struct perf_event;
+struct perf_event_attr;
 struct lkmdbg_input_channel;
 
 struct lkmdbg_hook_registry_entry {
@@ -137,6 +138,11 @@ struct lkmdbg_symbols {
 	unsigned long do_sys_process_vm_writev_sym;
 	unsigned long access_remote_vm_sym;
 	unsigned long access_remote_vm_inner_sym;
+	unsigned long kern_path_sym;
+	unsigned long path_put_sym;
+	unsigned long register_user_hw_breakpoint_sym;
+	unsigned long modify_user_hw_breakpoint_sym;
+	unsigned long unregister_hw_breakpoint_sym;
 };
 
 struct lkmdbg_target_vma_info {
@@ -209,6 +215,16 @@ void lkmdbg_flush_icache_runtime(unsigned long start, unsigned long end);
 int lkmdbg_task_work_add_runtime(struct task_struct *task,
 				 struct callback_head *work,
 				 unsigned int notify);
+int lkmdbg_kern_path_runtime(const char *name, unsigned int flags,
+			     struct path *path);
+void lkmdbg_path_put_runtime(const struct path *path);
+bool lkmdbg_hw_breakpoint_runtime_available(void);
+struct perf_event *lkmdbg_register_user_hw_breakpoint_runtime(
+	struct perf_event_attr *attr, void *triggered, void *context,
+	struct task_struct *task);
+int lkmdbg_modify_user_hw_breakpoint_runtime(struct perf_event *bp,
+					     struct perf_event_attr *attr);
+void lkmdbg_unregister_hw_breakpoint_runtime(struct perf_event *bp);
 
 struct lkmdbg_session {
 	struct list_head node;

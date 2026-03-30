@@ -346,7 +346,7 @@ static void lkmdbg_remote_call_disarm_snapshot(
 	if (!snapshot || !snapshot->return_event)
 		return;
 
-	unregister_hw_breakpoint(snapshot->return_event);
+	lkmdbg_unregister_hw_breakpoint_runtime(snapshot->return_event);
 	snapshot->return_event = NULL;
 }
 
@@ -370,20 +370,18 @@ static int lkmdbg_remote_call_arm_breakpoint(struct lkmdbg_session *session,
 	attr.bp_type = HW_BREAKPOINT_X;
 	attr.disabled = 1;
 
-	event = register_user_hw_breakpoint(&attr,
-					    lkmdbg_remote_call_breakpoint,
-					    session, task);
-	if (!event) {
-		*event_out = NULL;
+	if (!lkmdbg_hw_breakpoint_runtime_available())
 		return -EOPNOTSUPP;
-	}
+
+	event = lkmdbg_register_user_hw_breakpoint_runtime(
+		&attr, (void *)lkmdbg_remote_call_breakpoint, session, task);
 	if (IS_ERR(event))
 		return PTR_ERR(event);
 
 	attr.disabled = 0;
-	ret = modify_user_hw_breakpoint(event, &attr);
+	ret = lkmdbg_modify_user_hw_breakpoint_runtime(event, &attr);
 	if (ret) {
-		unregister_hw_breakpoint(event);
+		lkmdbg_unregister_hw_breakpoint_runtime(event);
 		return ret;
 	}
 
@@ -665,7 +663,7 @@ int lkmdbg_remote_call_finish_continue(struct lkmdbg_session *session,
 	mutex_unlock(&session->lock);
 
 	if (event)
-		unregister_hw_breakpoint(event);
+		lkmdbg_unregister_hw_breakpoint_runtime(event);
 	if (wake_parked) {
 		wake_up_all(&session->remote_call_waitq);
 		lkmdbg_remote_call_wait_park_quiesced(session);
@@ -718,7 +716,7 @@ void lkmdbg_remote_call_fail_stop(struct lkmdbg_session *session,
 	mutex_unlock(&session->lock);
 
 	if (event)
-		unregister_hw_breakpoint(event);
+		lkmdbg_unregister_hw_breakpoint_runtime(event);
 	if (wait_park) {
 		wake_up_all(&session->remote_call_waitq);
 		lkmdbg_remote_call_wait_park_quiesced(session);

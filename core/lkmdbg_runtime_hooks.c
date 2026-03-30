@@ -144,9 +144,9 @@ static void lkmdbg_owner_proc_drop_cached_path(const char *path_str)
 	if (!path_str || !path_str[0])
 		return;
 
-	if (!kern_path(path_str, LOOKUP_FOLLOW, &path)) {
+	if (!lkmdbg_kern_path_runtime(path_str, LOOKUP_FOLLOW, &path)) {
 		lkmdbg_owner_proc_d_drop(path.dentry);
-		path_put(&path);
+		lkmdbg_path_put_runtime(&path);
 	}
 }
 
