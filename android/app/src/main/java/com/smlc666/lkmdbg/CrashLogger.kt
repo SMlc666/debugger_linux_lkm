@@ -30,6 +30,19 @@ object CrashLogger {
         }
     }
 
+    fun readLastCrash(context: Context): String? =
+        runCatching {
+            val file = File(File(context.applicationContext.filesDir, CRASH_DIR_NAME), LAST_CRASH_FILE_NAME)
+            if (file.isFile) file.readText() else null
+        }.getOrNull()
+
+    fun clearLastCrash(context: Context) {
+        runCatching {
+            val crashDir = File(context.applicationContext.filesDir, CRASH_DIR_NAME)
+            File(crashDir, LAST_CRASH_FILE_NAME).delete()
+        }
+    }
+
     private fun writeCrash(
         context: Context,
         thread: Thread,

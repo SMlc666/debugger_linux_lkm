@@ -1,5 +1,7 @@
 package com.smlc666.lkmdbg
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
@@ -22,6 +24,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private lateinit var statusView: TextView
     private lateinit var overlayView: TextView
+    private lateinit var crashView: TextView
     private lateinit var repository: SessionBridgeRepository
     private lateinit var automation: SessionAutomationController
 
@@ -45,6 +48,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshOverlayStatus()
+        refreshCrashStatus()
         automation.requestWarmStart(lifecycleScope)
     }
 
@@ -84,9 +88,21 @@ class MainActivity : ComponentActivity() {
             setPadding((12f * density).toInt(), (12f * density).toInt(), (12f * density).toInt(), (12f * density).toInt())
             textSize = 13f
         }
+        crashView = TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+            setPadding(0, (12f * density).toInt(), 0, 0)
+            textSize = 12f
+        }
         val buttonRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, (16f * density).toInt(), 0, 0)
+        }
+        val crashButtonRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, (12f * density).toInt(), 0, 0)
         }
         val grantButton = Button(this).apply {
             text = getString(R.string.overlay_action_grant)
@@ -106,16 +122,32 @@ class MainActivity : ComponentActivity() {
                 refreshOverlayStatus()
             }
         }
+        val copyCrashButton = Button(this).apply {
+            text = getString(R.string.launcher_action_copy_last_crash)
+            setOnClickListener { copyLastCrash() }
+        }
+        val clearCrashButton = Button(this).apply {
+            text = getString(R.string.launcher_action_clear_last_crash)
+            setOnClickListener {
+                CrashLogger.clearLastCrash(this@MainActivity)
+                refreshCrashStatus()
+            }
+        }
 
         buttonRow.addView(grantButton)
         buttonRow.addView(showButton)
         buttonRow.addView(hideButton)
+        crashButtonRow.addView(copyCrashButton)
+        crashButtonRow.addView(clearCrashButton)
         column.addView(titleView)
         column.addView(subtitleView)
         column.addView(overlayView)
         column.addView(statusView)
         column.addView(buttonRow)
+        column.addView(crashView)
+        column.addView(crashButtonRow)
         root.addView(column)
+        refreshCrashStatus()
         return root
     }
 
@@ -127,5 +159,26 @@ class MainActivity : ComponentActivity() {
             getString(if (OverlayPermission.hasPermission(this)) R.string.bool_yes else R.string.bool_no),
             getString(if (LkmdbgOverlayService.isRunning()) R.string.bool_yes else R.string.bool_no),
         )
+    }
+
+    private fun refreshCrashStatus() {
+        if (!::crashView.isInitialized)
+            return
+        val report = CrashLogger.readLastCrash(this)
+        if (report.isNullOrBlank()) {
+            crashView.text = getString(R.string.launcher_last_crash_empty)
+            return
+        }
+        val summary = report.lineSequence()
+            .take(10)
+            .joinToString("\n")
+        crashView.text = getString(R.string.launcher_last_crash_summary, summary)
+    }
+
+    private fun copyLastCrash() {
+        val report = CrashLogger.readLastCrash(this) ?: return
+        val clipboard = getSystemService(ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(ClipData.newPlainText("lkmdbg-last-crash", report))
+        refreshCrashStatus()
     }
 }
