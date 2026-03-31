@@ -66,41 +66,43 @@ WorkspaceCardViewModel MakeCard(std::string title, std::string body, float heigh
 }
 
 void AddSharedPanelCards(const WorkspaceLabels &labels, SectionId selected_section,
-			 float density, WorkspacePanelViewModel &panel)
+			 const WorkspaceState &state, float density,
+			 WorkspacePanelViewModel &panel)
 {
 	switch (selected_section) {
 	case SectionId::Session:
-		panel.cards.push_back(MakeCard(labels.session, labels.session_subtitle,
+		panel.cards.push_back(MakeCard(labels.session, state.session_primary,
 					       92.0f * density));
-		panel.cards.push_back(MakeCard(labels.events, labels.events_subtitle,
+		panel.cards.push_back(MakeCard(labels.events, state.session_secondary,
 					       92.0f * density));
 		break;
 	case SectionId::Processes:
-		panel.cards.push_back(MakeCard(labels.processes, labels.processes_subtitle,
+		panel.cards.push_back(MakeCard(labels.processes, state.process_primary,
 					       92.0f * density));
-		panel.cards.push_back(MakeCard(labels.session, labels.session_subtitle,
+		panel.cards.push_back(MakeCard(labels.session, state.process_secondary,
 					       92.0f * density));
 		break;
 	case SectionId::Memory:
-		panel.cards.push_back(MakeCard(labels.memory, labels.memory_subtitle,
+		panel.cards.push_back(MakeCard(labels.memory, state.memory_primary,
 					       96.0f * density));
-		panel.cards.push_back(MakeCard(labels.processes, labels.processes_subtitle,
+		panel.cards.push_back(MakeCard(labels.processes, state.memory_secondary,
 					       92.0f * density));
 		break;
 	case SectionId::Threads:
-		panel.cards.push_back(MakeCard(labels.threads, labels.threads_subtitle,
+		panel.cards.push_back(MakeCard(labels.threads, state.thread_primary,
 					       92.0f * density));
-		panel.cards.push_back(MakeCard(labels.memory, labels.memory_subtitle,
+		panel.cards.push_back(MakeCard(labels.memory, state.thread_secondary,
 					       92.0f * density));
 		break;
 	case SectionId::Events:
 	default:
-		panel.cards.push_back(MakeCard(labels.events, labels.events_subtitle,
+		panel.cards.push_back(MakeCard(labels.events, state.event_primary,
 					       92.0f * density));
-		panel.cards.push_back(MakeCard(labels.session, labels.session_subtitle,
+		panel.cards.push_back(MakeCard(labels.session, state.event_secondary,
 					       92.0f * density));
 		break;
 	}
+	panel.cards.push_back(MakeCard(labels.title, state.footer_message, 84.0f * density));
 }
 
 WorkspacePanelViewModel BuildPanel(const WorkspaceLabels &labels,
@@ -122,6 +124,7 @@ WorkspacePanelViewModel BuildPanel(const WorkspaceLabels &labels,
 			MakeStat(ui_format::KeyValue(labels.hook, state.hook_active)));
 		panel.stats.push_back(MakeStat(ui_format::KeyValue(labels.process_count,
 							 state.process_count)));
+		panel.stats.push_back(MakeStat(ui_format::KeyValue("target pid", state.target_pid)));
 		break;
 	case SectionId::Processes:
 		panel.stats.push_back(MakeStat(ui_format::KeyValue(labels.process_count,
@@ -130,6 +133,7 @@ WorkspacePanelViewModel BuildPanel(const WorkspaceLabels &labels,
 							 state.thread_count)));
 		panel.stats.push_back(MakeStat(ui_format::KeyValue(
 			labels.session_open, BoolText(labels, state.session_open))));
+		panel.stats.push_back(MakeStat(ui_format::KeyValue("target pid", state.target_pid)));
 		break;
 	case SectionId::Memory:
 		panel.stats.push_back(MakeStat(ui_format::KeyValue(
@@ -138,6 +142,8 @@ WorkspacePanelViewModel BuildPanel(const WorkspaceLabels &labels,
 							 state.process_count)));
 		panel.stats.push_back(MakeStat(ui_format::KeyValue(labels.thread_count,
 							 state.thread_count)));
+		panel.stats.push_back(MakeStat(ui_format::KeyValue("vmas", state.vma_count)));
+		panel.stats.push_back(MakeStat(ui_format::KeyValue("images", state.image_count)));
 		break;
 	case SectionId::Threads:
 		panel.stats.push_back(MakeStat(ui_format::KeyValue(labels.thread_count,
@@ -146,6 +152,7 @@ WorkspacePanelViewModel BuildPanel(const WorkspaceLabels &labels,
 							 state.event_count)));
 		panel.stats.push_back(MakeStat(ui_format::KeyValue(
 			labels.session_open, BoolText(labels, state.session_open))));
+		panel.stats.push_back(MakeStat(ui_format::KeyValue("target tid", state.target_tid)));
 		break;
 	case SectionId::Events:
 	default:
@@ -155,10 +162,11 @@ WorkspacePanelViewModel BuildPanel(const WorkspaceLabels &labels,
 							 state.process_count)));
 		panel.stats.push_back(MakeStat(ui_format::KeyValue(
 			labels.session_open, BoolText(labels, state.session_open))));
+		panel.stats.push_back(MakeStat(ui_format::KeyValue("queue", state.event_queue_depth)));
 		break;
 	}
 
-	AddSharedPanelCards(labels, selected_section, density, panel);
+	AddSharedPanelCards(labels, selected_section, state, density, panel);
 	return panel;
 }
 

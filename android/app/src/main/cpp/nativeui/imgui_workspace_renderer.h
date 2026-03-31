@@ -22,9 +22,16 @@ public:
 
 	void SetSurface(ANativeWindow *window);
 	void Resize(int width, int height, float density);
-	void UpdateState(bool expanded, bool connected, bool session_open,
-			 int hook_active, int process_count, int thread_count,
-			 int event_count);
+	void UpdateState(bool expanded, bool busy, bool connected, bool session_open,
+			 int hook_active, int target_pid, int target_tid,
+			 int event_queue_depth, int process_count, int thread_count,
+			 int event_count, int image_count, int vma_count,
+			 std::string session_primary, std::string session_secondary,
+			 std::string process_primary, std::string process_secondary,
+			 std::string memory_primary, std::string memory_secondary,
+			 std::string thread_primary, std::string thread_secondary,
+			 std::string event_primary, std::string event_secondary,
+			 std::string footer_message);
 	void UpdateLabels(const WorkspaceLabels &labels);
 	void UpdateFontPaths(std::vector<std::string> font_paths);
 	void OnTouch(int action, float x, float y);

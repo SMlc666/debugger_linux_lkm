@@ -17,6 +17,15 @@
     <string name="workspace_memory_subtitle">查看内存页、区域、映像和数值搜索结果。</string>
     <string name="workspace_threads_subtitle">刷新线程，并检查整数与浮点寄存器。</string>
     <string name="workspace_events_subtitle">读取当前会话对应的内核事件队列。</string>
+    <string name="workspace_state_busy">忙碌中 · %1$s</string>
+    <string name="workspace_process_summary">筛选=%1$s · 总计=%2$d · 安卓=%3$d · 命令行=%4$d</string>
+    <string name="workspace_memory_summary">焦点=%1$s · 字节=%2$d · 区域=%3$d · 映像=%4$d</string>
+    <string name="workspace_memory_summary_idle">内存空闲 · 区域=%1$d · 映像=%2$d</string>
+    <string name="workspace_memory_region_summary">%1$s · %2$s - %3$s</string>
+    <string name="workspace_thread_summary">tid=%1$d · pc=%2$s · sp=%3$s</string>
+    <string name="workspace_thread_register_summary">x0=%1$s · x1=%2$s · pc=%3$s</string>
+    <string name="workspace_event_summary">队列=%1$d · 最近=%2$d</string>
+    <string name="workspace_event_detail_summary">code=%1$s · tid=%2$d · seq=%3$s</string>
     <string name="dashboard_chip_root">root 桥接</string>
     <string name="dashboard_chip_pipe">stdio 管道</string>
     <string name="dashboard_chip_md3">MD3 外壳</string>

@@ -17,6 +17,15 @@
     <string name="workspace_memory_subtitle">Inspect memory pages, ranges, images, and value search results.</string>
     <string name="workspace_threads_subtitle">Refresh threads and inspect integer plus floating-point registers.</string>
     <string name="workspace_events_subtitle">Drain the live kernel-backed event queue for the current session.</string>
+    <string name="workspace_state_busy">busy · %1$s</string>
+    <string name="workspace_process_summary">filter=%1$s · total=%2$d · android=%3$d · cmd=%4$d</string>
+    <string name="workspace_memory_summary">focus=%1$s · bytes=%2$d · vmas=%3$d · images=%4$d</string>
+    <string name="workspace_memory_summary_idle">memory idle · vmas=%1$d · images=%2$d</string>
+    <string name="workspace_memory_region_summary">%1$s · %2$s - %3$s</string>
+    <string name="workspace_thread_summary">tid=%1$d · pc=%2$s · sp=%3$s</string>
+    <string name="workspace_thread_register_summary">x0=%1$s · x1=%2$s · pc=%3$s</string>
+    <string name="workspace_event_summary">queue=%1$d · recent=%2$d</string>
+    <string name="workspace_event_detail_summary">code=%1$s · tid=%2$d · seq=%3$s</string>
     <string name="dashboard_chip_root">root bridge</string>
     <string name="dashboard_chip_pipe">stdio pipe</string>
     <string name="dashboard_chip_md3">md3 shell</string>

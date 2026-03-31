@@ -28,12 +28,29 @@ struct WorkspaceLabels {
 
 struct WorkspaceState {
 	bool expanded = false;
+	bool busy = false;
 	bool connected = false;
 	bool session_open = false;
 	int hook_active = 0;
+	int target_pid = 0;
+	int target_tid = 0;
+	int event_queue_depth = 0;
 	int process_count = 0;
 	int thread_count = 0;
 	int event_count = 0;
+	int image_count = 0;
+	int vma_count = 0;
+	std::string session_primary;
+	std::string session_secondary;
+	std::string process_primary;
+	std::string process_secondary;
+	std::string memory_primary;
+	std::string memory_secondary;
+	std::string thread_primary;
+	std::string thread_secondary;
+	std::string event_primary;
+	std::string event_secondary;
+	std::string footer_message;
 	float touch_x = 0.0f;
 	float touch_y = 0.0f;
 	bool touch_down = false;

@@ -32,19 +32,49 @@ void ImGuiWorkspaceRenderer::Resize(int width, int height, float density)
 	fonts_dirty_ = true;
 }
 
-void ImGuiWorkspaceRenderer::UpdateState(bool expanded, bool connected,
+void ImGuiWorkspaceRenderer::UpdateState(bool expanded, bool busy, bool connected,
 					  bool session_open, int hook_active,
-					  int process_count, int thread_count,
-					  int event_count)
+					  int target_pid, int target_tid,
+					  int event_queue_depth, int process_count,
+					  int thread_count, int event_count,
+					  int image_count, int vma_count,
+					  std::string session_primary,
+					  std::string session_secondary,
+					  std::string process_primary,
+					  std::string process_secondary,
+					  std::string memory_primary,
+					  std::string memory_secondary,
+					  std::string thread_primary,
+					  std::string thread_secondary,
+					  std::string event_primary,
+					  std::string event_secondary,
+					  std::string footer_message)
 {
 	std::scoped_lock lock(mutex_);
 	state_.expanded = expanded;
+	state_.busy = busy;
 	state_.connected = connected;
 	state_.session_open = session_open;
 	state_.hook_active = hook_active;
+	state_.target_pid = target_pid;
+	state_.target_tid = target_tid;
+	state_.event_queue_depth = event_queue_depth;
 	state_.process_count = process_count;
 	state_.thread_count = thread_count;
 	state_.event_count = event_count;
+	state_.image_count = image_count;
+	state_.vma_count = vma_count;
+	state_.session_primary = std::move(session_primary);
+	state_.session_secondary = std::move(session_secondary);
+	state_.process_primary = std::move(process_primary);
+	state_.process_secondary = std::move(process_secondary);
+	state_.memory_primary = std::move(memory_primary);
+	state_.memory_secondary = std::move(memory_secondary);
+	state_.thread_primary = std::move(thread_primary);
+	state_.thread_secondary = std::move(thread_secondary);
+	state_.event_primary = std::move(event_primary);
+	state_.event_secondary = std::move(event_secondary);
+	state_.footer_message = std::move(footer_message);
 }
 
 void ImGuiWorkspaceRenderer::UpdateLabels(const WorkspaceLabels &labels)

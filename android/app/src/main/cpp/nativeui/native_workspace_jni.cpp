@@ -73,15 +73,34 @@ Java_com_smlc666_lkmdbg_nativeui_NativeWorkspaceBridge_nativeResize(
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_smlc666_lkmdbg_nativeui_NativeWorkspaceBridge_nativeUpdateState(
-	JNIEnv *, jobject, jlong handle, jboolean expanded, jboolean connected,
-	jboolean session_open, jint hook_active, jint process_count,
-	jint thread_count, jint event_count)
+	JNIEnv *env, jobject, jlong handle, jboolean expanded, jboolean busy,
+	jboolean connected, jboolean session_open, jint hook_active,
+	jint target_pid, jint target_tid, jint event_queue_depth,
+	jint process_count, jint thread_count, jint event_count,
+	jint image_count, jint vma_count, jstring session_primary,
+	jstring session_secondary, jstring process_primary,
+	jstring process_secondary, jstring memory_primary,
+	jstring memory_secondary, jstring thread_primary,
+	jstring thread_secondary, jstring event_primary,
+	jstring event_secondary, jstring footer_message)
 {
 	ImGuiWorkspaceRenderer *renderer = from_handle(handle);
 	if (!renderer)
 		return;
-	renderer->UpdateState(expanded, connected, session_open, hook_active,
-			      process_count, thread_count, event_count);
+	renderer->UpdateState(
+		expanded, busy, connected, session_open, hook_active, target_pid,
+		target_tid, event_queue_depth, process_count, thread_count, event_count,
+		image_count, vma_count, jstring_to_string(env, session_primary),
+		jstring_to_string(env, session_secondary),
+		jstring_to_string(env, process_primary),
+		jstring_to_string(env, process_secondary),
+		jstring_to_string(env, memory_primary),
+		jstring_to_string(env, memory_secondary),
+		jstring_to_string(env, thread_primary),
+		jstring_to_string(env, thread_secondary),
+		jstring_to_string(env, event_primary),
+		jstring_to_string(env, event_secondary),
+		jstring_to_string(env, footer_message));
 }
 
 extern "C" JNIEXPORT void JNICALL

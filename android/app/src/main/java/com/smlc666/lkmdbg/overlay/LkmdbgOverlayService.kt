@@ -241,7 +241,9 @@ class LkmdbgOverlayService : LifecycleService() {
         overlayJob?.cancel()
         overlayJob = lifecycleScope.launch {
             repository.state.collect { state ->
-                workspaceView?.updateSnapshot(state.toNativeWorkspaceSnapshot(expanded))
+                workspaceView?.updateSnapshot(
+                    state.toNativeWorkspaceSnapshot(this@LkmdbgOverlayService, expanded),
+                )
                 statusView?.text = BridgeStatusFormatter.formatOverlayStatus(this@LkmdbgOverlayService, state)
                 renderProcessPicker(state)
             }
