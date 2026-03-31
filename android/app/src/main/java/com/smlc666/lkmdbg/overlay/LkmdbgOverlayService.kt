@@ -29,6 +29,7 @@ class LkmdbgOverlayService : LifecycleService() {
     private lateinit var repository: SessionBridgeRepository
     private lateinit var automation: SessionAutomationController
     private lateinit var headerController: OverlayHeaderController
+    private lateinit var gestureController: OverlayGestureController
     private lateinit var processPickerController: OverlayProcessPickerController
     private var rootView: FrameLayout? = null
     private var workspaceView: NativeWorkspaceTextureView? = null
@@ -46,6 +47,9 @@ class LkmdbgOverlayService : LifecycleService() {
             automation = SessionAutomationController(repository)
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             windowController = OverlayWindowController(resources, windowManager)
+            gestureController = OverlayGestureController(
+                clickSlopPx = 12f * resources.displayMetrics.density,
+            )
             headerController = OverlayHeaderController(this) { action ->
                 lifecycleScope.launch {
                     action()
@@ -115,40 +119,16 @@ class LkmdbgOverlayService : LifecycleService() {
             setOnTouchListener { _: View, event: MotionEvent ->
                 if (expanded)
                     return@setOnTouchListener dispatchNativeTouch(event)
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        lastTouchRawX = event.rawX
-                        lastTouchRawY = event.rawY
-                        dragDistancePx = 0f
-                        true
-                    }
-
-                    MotionEvent.ACTION_MOVE -> {
-                        val dx = event.rawX - lastTouchRawX
-                        val dy = event.rawY - lastTouchRawY
-                        lastTouchRawX = event.rawX
-                        lastTouchRawY = event.rawY
-                        dragDistancePx += kotlin.math.abs(dx) + kotlin.math.abs(dy)
+                gestureController.onCollapsedTouch(
+                    event = event,
+                    moveBy = { dx, dy ->
                         val view = rootView
                         val currentParams = layoutParams
                         if (view != null && currentParams != null)
                             windowController.moveCollapsed(view, currentParams, dx, dy)
-                        true
-                    }
-
-                    MotionEvent.ACTION_UP -> {
-                        if (dragDistancePx <= 12f * density)
-                            updateExpandedState(true)
-                        true
-                    }
-
-                    MotionEvent.ACTION_CANCEL -> {
-                        dragDistancePx = 0f
-                        true
-                    }
-
-                    else -> false
-                }
+                    },
+                    expand = { updateExpandedState(true) },
+                )
             }
         }
         root.addView(nativeView)
@@ -189,11 +169,6 @@ class LkmdbgOverlayService : LifecycleService() {
             }
         }
     }
-
-    private var lastTouchRawX = 0f
-    private var lastTouchRawY = 0f
-    private var dragDistancePx = 0f
-
     private fun updateExpandedState(nextExpanded: Boolean) {
         if (expanded == nextExpanded)
             return

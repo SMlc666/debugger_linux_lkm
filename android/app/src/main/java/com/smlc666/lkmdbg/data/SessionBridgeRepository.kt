@@ -94,6 +94,13 @@ class SessionBridgeRepository(
         pageSize = MEMORY_BROWSER_PAGE_SIZE,
         rowBytes = MEMORY_ROW_BYTES,
     )
+    private val memoryEditor = MemoryEditorController(
+        context = appContext,
+        client = client,
+        stateFlow = _state,
+        memoryPreviewBuilder = memoryPreviewBuilder,
+        pageSize = MEMORY_BROWSER_PAGE_SIZE,
+    )
     private val memorySearchSnapshotController = MemorySearchSnapshotController(
         cacheDir = appContext.cacheDir,
         snapshotChunkSize = MEMORY_SEARCH_SNAPSHOT_CHUNK_SIZE,
@@ -414,7 +421,7 @@ class SessionBridgeRepository(
 
     suspend fun openMemoryPage(remoteAddr: ULong) {
         runOperation {
-            openMemoryPageUnsafe(remoteAddr)
+            memoryEditor.openPage(remoteAddr)
         }
     }
 
@@ -426,12 +433,12 @@ class SessionBridgeRepository(
                 updateMessage(appContext.getString(R.string.memory_error_no_pc))
                 return@runOperation
             }
-            openMemoryPageUnsafe(pc)
+            memoryEditor.openPage(pc)
         }
     }
 
     suspend fun jumpToMemoryAddress() {
-        val address = parseAddressInput(state.value.memoryAddressInput)
+        val address = memoryEditor.parseAddressInput(state.value.memoryAddressInput)
         if (address == null) {
             updateMessage(appContext.getString(R.string.memory_error_invalid_address))
             return
@@ -458,205 +465,55 @@ class SessionBridgeRepository(
             } else {
                 current.pageStart + delta
             }
-            openMemoryPageUnsafe(nextFocus)
+            memoryEditor.openPage(nextFocus)
         }
     }
 
     suspend fun loadSelectionIntoHexSearch() {
         runOperation {
-            val bytes = currentSelectionBytes() ?: run {
-                updateMessage(appContext.getString(R.string.memory_error_no_selection))
-                return@runOperation
-            }
-            val query = bytes.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
-            _state.update { current ->
-                current.copy(
-                    memorySearch = current.memorySearch.copy(
-                        valueType = MemorySearchValueType.HexBytes,
-                        query = query,
-                    ),
-                    lastMessage = appContext.getString(R.string.memory_message_search_query_loaded, query),
-                )
-            }
+            memoryEditor.loadSelectionIntoHexSearch()
         }
     }
 
     suspend fun loadSelectionIntoAsciiSearch() {
         runOperation {
-            val bytes = currentSelectionBytes() ?: run {
-                updateMessage(appContext.getString(R.string.memory_error_no_selection))
-                return@runOperation
-            }
-            val query = bytes.decodeToString()
-            _state.update { current ->
-                current.copy(
-                    memorySearch = current.memorySearch.copy(
-                        valueType = MemorySearchValueType.Ascii,
-                        query = query,
-                    ),
-                    lastMessage = appContext.getString(R.string.memory_message_search_query_loaded, query),
-                )
-            }
+            memoryEditor.loadSelectionIntoAsciiSearch()
         }
     }
 
     suspend fun loadSelectionIntoEditors() {
         runOperation {
-            val bytes = currentSelectionBytes() ?: run {
-                updateMessage(appContext.getString(R.string.memory_error_no_selection))
-                return@runOperation
-            }
-            _state.update { current ->
-                current.copy(
-                    memoryWriteHexInput = bytes.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
-                    memoryWriteAsciiInput = bytes.decodeToString(),
-                    lastMessage = appContext.getString(R.string.memory_message_editor_loaded, bytes.size),
-                )
-            }
+            memoryEditor.loadSelectionIntoEditors()
         }
     }
 
     suspend fun assembleArm64ToEditors() {
         runOperation {
-            val page = state.value.memoryPage ?: run {
-                updateMessage(appContext.getString(R.string.memory_error_no_page))
-                return@runOperation
-            }
-            val source = state.value.memoryWriteAsmInput.trim()
-            if (source.isEmpty()) {
-                updateMessage(appContext.getString(R.string.memory_error_invalid_asm))
-                return@runOperation
-            }
-            val encoded = NativeAssembler.assembleArm64(page.focusAddress, source)
-            if (encoded.isEmpty()) {
-                updateMessage(appContext.getString(R.string.memory_error_invalid_asm))
-                return@runOperation
-            }
-            _state.update { current ->
-                current.copy(
-                    memoryWriteHexInput = encoded.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
-                    memoryWriteAsciiInput = encoded.decodeToString(),
-                    lastMessage = appContext.getString(
-                        R.string.memory_message_asm_complete,
-                        encoded.size,
-                        hex64(page.focusAddress),
-                    ),
-                )
-            }
+            memoryEditor.assembleArm64ToEditors()
         }
     }
 
     suspend fun assembleArm64AndWrite() {
         runOperation {
-            val page = state.value.memoryPage ?: run {
-                updateMessage(appContext.getString(R.string.memory_error_no_page))
-                return@runOperation
-            }
-            val source = state.value.memoryWriteAsmInput.trim()
-            if (source.isEmpty()) {
-                updateMessage(appContext.getString(R.string.memory_error_invalid_asm))
-                return@runOperation
-            }
-            val encoded = NativeAssembler.assembleArm64(page.focusAddress, source)
-            if (encoded.isEmpty()) {
-                updateMessage(appContext.getString(R.string.memory_error_invalid_asm))
-                return@runOperation
-            }
-            val reply = client.writeMemory(page.focusAddress, encoded)
-            if (reply.status != 0 || reply.bytesDone.toInt() != encoded.size)
-                throw IllegalStateException(reply.message.ifBlank { "write failed bytes_done=${reply.bytesDone}" })
-            openMemoryPageUnsafe(page.focusAddress)
-            _state.update { current ->
-                current.copy(
-                    memoryWriteHexInput = encoded.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
-                    memoryWriteAsciiInput = encoded.decodeToString(),
-                    lastMessage = appContext.getString(
-                        R.string.memory_message_asm_write_complete,
-                        encoded.size,
-                        hex64(page.focusAddress),
-                    ),
-                )
-            }
+            memoryEditor.assembleArm64AndWrite()
         }
     }
 
     suspend fun writeHexAtFocus() {
         runOperation {
-            val page = state.value.memoryPage ?: run {
-                updateMessage(appContext.getString(R.string.memory_error_no_page))
-                return@runOperation
-            }
-            val data = parseHexBytes(state.value.memoryWriteHexInput)
-            if (data == null || data.isEmpty()) {
-                updateMessage(appContext.getString(R.string.memory_error_invalid_hex))
-                return@runOperation
-            }
-            val reply = client.writeMemory(page.focusAddress, data)
-            if (reply.status != 0 || reply.bytesDone.toInt() != data.size)
-                throw IllegalStateException(reply.message.ifBlank { "write failed bytes_done=${reply.bytesDone}" })
-            openMemoryPageUnsafe(page.focusAddress)
-            _state.update { current ->
-                current.copy(
-                    memoryWriteHexInput = data.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
-                    memoryWriteAsciiInput = data.decodeToString(),
-                    lastMessage = reply.message.ifBlank {
-                        appContext.getString(
-                            R.string.memory_message_write_complete,
-                            data.size,
-                            hex64(page.focusAddress),
-                        )
-                    },
-                )
-            }
+            memoryEditor.writeHexAtFocus()
         }
     }
 
     suspend fun writeAsciiAtFocus() {
         runOperation {
-            val page = state.value.memoryPage ?: run {
-                updateMessage(appContext.getString(R.string.memory_error_no_page))
-                return@runOperation
-            }
-            val data = state.value.memoryWriteAsciiInput.toByteArray(Charsets.UTF_8)
-            if (data.isEmpty()) {
-                updateMessage(appContext.getString(R.string.memory_error_invalid_ascii))
-                return@runOperation
-            }
-            val reply = client.writeMemory(page.focusAddress, data)
-            if (reply.status != 0 || reply.bytesDone.toInt() != data.size)
-                throw IllegalStateException(reply.message.ifBlank { "write failed bytes_done=${reply.bytesDone}" })
-            openMemoryPageUnsafe(page.focusAddress)
-            _state.update { current ->
-                current.copy(
-                    memoryWriteHexInput = data.joinToString(" ") { "%02x".format(it.toInt() and 0xff) },
-                    memoryWriteAsciiInput = data.decodeToString(),
-                    lastMessage = reply.message.ifBlank {
-                        appContext.getString(
-                            R.string.memory_message_write_complete,
-                            data.size,
-                            hex64(page.focusAddress),
-                        )
-                    },
-                )
-            }
+            memoryEditor.writeAsciiAtFocus()
         }
     }
 
     suspend fun selectMemoryAddress(remoteAddr: ULong) {
         runOperation {
-            val current = state.value.memoryPage
-            if (current != null && memoryPreviewBuilder.addressInsidePage(current, remoteAddr)) {
-                _state.update { snapshot ->
-                    val page = snapshot.memoryPage ?: return@update snapshot
-                    snapshot.copy(
-                        memoryAddressInput = hex64(remoteAddr),
-                        memoryPage = memoryPreviewBuilder.retargetPage(page, remoteAddr),
-                        lastMessage = appContext.getString(R.string.memory_message_cursor, hex64(remoteAddr)),
-                    )
-                }
-                return@runOperation
-            }
-            openMemoryPageUnsafe(remoteAddr)
+            memoryEditor.selectAddress(remoteAddr)
         }
     }
 
@@ -680,26 +537,6 @@ class SessionBridgeRepository(
         if (!state.value.snapshot.sessionOpen)
             unsafeOps.openSession()
         unsafeOps.refreshStatus()
-    }
-
-    private suspend fun openMemoryPageUnsafe(remoteAddr: ULong) {
-        val pageStart = memoryPreviewBuilder.alignDown(remoteAddr)
-        val reply = client.readMemory(pageStart, MEMORY_BROWSER_PAGE_SIZE)
-        ensureBridgeStatusOk(reply.status, reply.message, "READ_MEMORY")
-        val bytes = reply.data.copyOf(reply.bytesDone.toInt())
-        _state.update { current ->
-            current.copy(
-                memoryAddressInput = hex64(remoteAddr),
-                memoryPage = memoryPreviewBuilder.buildPage(remoteAddr, pageStart, bytes, current.vmas),
-                lastMessage = reply.message.ifBlank {
-                    appContext.getString(
-                        R.string.memory_message_preview,
-                        reply.bytesDone.toString(),
-                        hex64(pageStart),
-                    )
-                },
-            )
-        }
     }
 
     private suspend fun captureMemorySearchSnapshotUnsafe(
@@ -776,31 +613,6 @@ class SessionBridgeRepository(
                 ),
             )
         }
-    }
-
-    private fun currentSelectionBytes(): ByteArray? {
-        val page = state.value.memoryPage ?: return null
-        return memoryPreviewBuilder.selectionBytes(page, state.value.memorySelectionSize)
-    }
-
-    private fun parseAddressInput(value: String): ULong? {
-        val trimmed = value.trim()
-        if (trimmed.isEmpty())
-            return null
-        if (trimmed.startsWith("0x", ignoreCase = true))
-            return trimmed.removePrefix("0x").removePrefix("0X").toULongOrNull(16)
-        return trimmed.toULongOrNull() ?: trimmed.toULongOrNull(16)
-    }
-
-    private fun parseHexBytes(value: String): ByteArray? {
-        val compact = value.replace(" ", "").replace("\n", "").replace("\t", "")
-        if (compact.isEmpty() || compact.length % 2 != 0)
-            return null
-        return runCatching {
-            ByteArray(compact.length / 2) { index ->
-                compact.substring(index * 2, index * 2 + 2).toInt(16).toByte()
-            }
-        }.getOrNull()
     }
 
     private fun clearThreadState() {
