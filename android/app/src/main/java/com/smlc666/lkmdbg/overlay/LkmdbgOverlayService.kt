@@ -127,7 +127,7 @@ class LkmdbgOverlayService : LifecycleService() {
                     event = event,
                     moveBy = { dx, dy ->
                         val view = rootView
-                        val currentParams = layoutParams
+                        val currentParams = this@LkmdbgOverlayService.layoutParams
                         if (view != null && currentParams != null)
                             windowController.moveCollapsed(view, currentParams, dx, dy)
                     },

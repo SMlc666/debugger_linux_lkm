@@ -138,7 +138,7 @@ internal fun SessionBridgeState.toNativeWorkspaceSnapshot(
         )
     } ?: context.getString(R.string.event_empty)
 
-    NativeWorkspaceSnapshot(
+    return NativeWorkspaceSnapshot(
         expanded = expanded,
         busy = busy,
         connected = snapshot.connected,
