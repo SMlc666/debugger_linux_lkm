@@ -1,0 +1,27 @@
+<resources>
+    <color name="lkmdbg_dark_background">#091216</color>
+    <color name="lkmdbg_dark_surface">#101B20</color>
+    <color name="lkmdbg_dark_surface_container">#16252B</color>
+    <color name="lkmdbg_dark_surface_container_high">#20333A</color>
+    <color name="lkmdbg_dark_surface_variant">#31454C</color>
+    <color name="lkmdbg_dark_primary">#4ED7C4</color>
+    <color name="lkmdbg_dark_on_primary">#03201B</color>
+    <color name="lkmdbg_dark_primary_container">#0A524A</color>
+    <color name="lkmdbg_dark_on_primary_container">#9AF4E5</color>
+    <color name="lkmdbg_dark_secondary">#D7B377</color>
+    <color name="lkmdbg_dark_on_secondary">#2A1900</color>
+    <color name="lkmdbg_dark_secondary_container">#4E3910</color>
+    <color name="lkmdbg_dark_on_secondary_container">#F7DEA6</color>
+    <color name="lkmdbg_dark_tertiary">#91C4DD</color>
+    <color name="lkmdbg_dark_on_tertiary">#08202A</color>
+    <color name="lkmdbg_dark_tertiary_container">#284651</color>
+    <color name="lkmdbg_dark_on_tertiary_container">#D1ECF8</color>
+    <color name="lkmdbg_dark_error">#FFB4AB</color>
+    <color name="lkmdbg_dark_on_error">#690005</color>
+    <color name="lkmdbg_dark_error_container">#93000A</color>
+    <color name="lkmdbg_dark_on_error_container">#FFDAD6</color>
+    <color name="lkmdbg_dark_outline">#8A9497</color>
+    <color name="lkmdbg_dark_outline_variant">#415156</color>
+    <color name="lkmdbg_dark_on_surface">#E2EEF0</color>
+    <color name="lkmdbg_dark_on_surface_variant">#BCC8CB</color>
+</resources>

@@ -2,22 +2,16 @@
 
 #include <string>
 
+#include "nativeui/workspace_theme.h"
+
 namespace lkmdbg::nativeui::controls {
 
 namespace {
 
-ImVec4 mix(const ImVec4 &base, const ImVec4 &accent, float t)
-{
-	return ImVec4(
-		base.x + (accent.x - base.x) * t,
-		base.y + (accent.y - base.y) * t,
-		base.z + (accent.z - base.z) * t,
-		base.w + (accent.w - base.w) * t);
-}
-
 void muted_text(const char *text)
 {
-	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.79f, 0.84f, 1.0f));
+	const WorkspaceTheme &theme = GetWorkspaceTheme();
+	ImGui::PushStyleColor(ImGuiCol_Text, theme.on_surface_variant);
 	ImGui::PushTextWrapPos(0.0f);
 	ImGui::TextUnformatted(text);
 	ImGui::PopTextWrapPos();
@@ -28,28 +22,32 @@ void muted_text(const char *text)
 
 bool ActionChipButton(const char *label, bool active, float density)
 {
-	const ImVec4 cold(0.10f, 0.19f, 0.24f, 1.0f);
-	const ImVec4 warm(0.23f, 0.71f, 0.76f, 0.92f);
-	const ImVec4 fill = active ? warm : mix(cold, warm, 0.25f);
+	const WorkspaceTheme &theme = GetWorkspaceTheme();
+	const ImVec4 fill = active ? theme.primary_container :
+				     MixColor(theme.surface_container_high,
+					      theme.primary_container, 0.45f);
 	ImGui::PushStyleColor(ImGuiCol_Button, fill);
-	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, warm);
-	ImGui::PushStyleColor(ImGuiCol_ButtonActive, warm);
+	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme.primary);
+	ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.primary);
+	ImGui::PushStyleColor(ImGuiCol_Text, active ? theme.on_primary_container :
+					     theme.on_surface);
 	const bool pressed = ImGui::Button(label, ImVec2(-1.0f, 28.0f * density));
-	ImGui::PopStyleColor(3);
+	ImGui::PopStyleColor(4);
 	return pressed;
 }
 
 bool RailButton(const char *label, bool selected, float density, float highlight_mix)
 {
-	const ImVec4 base(0.10f, 0.19f, 0.24f, 1.0f);
-	const ImVec4 accent(0.23f, 0.71f, 0.76f, 0.92f);
-	const ImVec4 text_base(0.95f, 0.97f, 0.98f, 1.0f);
-	const ImVec4 text_accent(0.04f, 0.11f, 0.14f, 1.0f);
+	const WorkspaceTheme &theme = GetWorkspaceTheme();
+	const ImVec4 base = theme.surface_container;
+	const ImVec4 accent = theme.primary_container;
+	const ImVec4 text_base = theme.on_surface;
+	const ImVec4 text_accent = theme.on_primary_container;
 
-	ImGui::PushStyleColor(ImGuiCol_Header, mix(base, accent, highlight_mix));
-	ImGui::PushStyleColor(ImGuiCol_HeaderHovered, accent);
-	ImGui::PushStyleColor(ImGuiCol_HeaderActive, accent);
-	ImGui::PushStyleColor(ImGuiCol_Text, mix(text_base, text_accent, highlight_mix));
+	ImGui::PushStyleColor(ImGuiCol_Header, MixColor(base, accent, highlight_mix));
+	ImGui::PushStyleColor(ImGuiCol_HeaderHovered, theme.primary);
+	ImGui::PushStyleColor(ImGuiCol_HeaderActive, theme.primary_container);
+	ImGui::PushStyleColor(ImGuiCol_Text, MixColor(text_base, text_accent, highlight_mix));
 	const bool pressed = ImGui::Selectable(label, selected, 0, ImVec2(-1.0f, 28.0f * density));
 	ImGui::PopStyleColor(4);
 	return pressed;
@@ -57,25 +55,30 @@ bool RailButton(const char *label, bool selected, float density, float highlight
 
 void MetricPill(const MetricItem &item, float density)
 {
-	const ImVec4 base(0.09f, 0.18f, 0.22f, 1.0f);
-	const ImVec4 accent(0.23f, 0.71f, 0.76f, 0.92f);
+	const WorkspaceTheme &theme = GetWorkspaceTheme();
+	const ImVec4 base = theme.surface_container_high;
+	const ImVec4 accent = theme.secondary;
 
-	ImGui::PushStyleColor(ImGuiCol_Button, mix(base, accent, item.accent_mix));
-	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, accent);
-	ImGui::PushStyleColor(ImGuiCol_ButtonActive, accent);
+	ImGui::PushStyleColor(ImGuiCol_Button, MixColor(base, accent, item.accent_mix));
+	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme.secondary_container);
+	ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.secondary);
+	ImGui::PushStyleColor(ImGuiCol_Text, MixColor(theme.on_surface,
+						     theme.on_secondary, item.accent_mix * 0.85f));
 	ImGui::Button(item.text.c_str(), ImVec2(118.0f * density, 26.0f * density));
-	ImGui::PopStyleColor(3);
+	ImGui::PopStyleColor(4);
 }
 
 bool FillLaneButton(const char *label, bool hot, float density, float mix_value)
 {
-	const ImVec4 cold(0.10f, 0.19f, 0.24f, 1.0f);
-	const ImVec4 warm(0.23f, 0.71f, 0.76f, 0.92f);
-	ImGui::PushStyleColor(ImGuiCol_Button, mix(cold, warm, hot ? mix_value : mix_value * 0.25f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, warm);
-	ImGui::PushStyleColor(ImGuiCol_ButtonActive, warm);
+	const WorkspaceTheme &theme = GetWorkspaceTheme();
+	ImGui::PushStyleColor(
+		ImGuiCol_Button,
+		MixColor(theme.surface_container, theme.tertiary, hot ? mix_value : mix_value * 0.25f));
+	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme.tertiary_container);
+	ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.tertiary);
+	ImGui::PushStyleColor(ImGuiCol_Text, hot ? theme.on_tertiary : theme.on_surface);
 	const bool pressed = ImGui::Button(label, ImVec2(-1.0f, 24.0f * density));
-	ImGui::PopStyleColor(3);
+	ImGui::PopStyleColor(4);
 	return pressed;
 }
 
@@ -150,19 +153,22 @@ void InfoCard(const char *title, const char *body, float height)
 bool ListEntryCard(const char *title, const char *subtitle, const char *badge,
 		   bool selected, float density, float height)
 {
-	const ImVec4 cold(0.08f, 0.15f, 0.19f, 0.92f);
-	const ImVec4 warm(0.23f, 0.71f, 0.76f, selected ? 0.92f : 0.28f);
-	const ImVec4 fill = selected ? warm : cold;
+	const WorkspaceTheme &theme = GetWorkspaceTheme();
+	const ImVec4 fill = selected ? WithAlpha(theme.primary_container, 0.96f) :
+				       WithAlpha(theme.surface_container, 0.94f);
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, fill);
-	ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.20f, 0.41f, 0.47f, 0.72f));
+	ImGui::PushStyleColor(ImGuiCol_Border,
+			      selected ? theme.primary : theme.outline_variant);
 	ImGui::BeginChild(title, ImVec2(0.0f, height), ImGuiChildFlags_Borders);
 	ImGui::PushID(title);
 	const bool pressed = ImGui::InvisibleButton("entry", ImVec2(-1.0f, height - 8.0f * density));
 	ImGui::SetCursorPosY(ImGui::GetCursorPosY() - (height - 8.0f * density));
+	ImGui::PushStyleColor(ImGuiCol_Text, selected ? theme.on_primary_container :
+					     theme.on_surface);
 	ImGui::TextUnformatted(title);
 	if (badge && badge[0] != '\0') {
 		ImGui::SameLine();
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.61f, 0.92f, 0.88f, 1.0f));
+		ImGui::PushStyleColor(ImGuiCol_Text, theme.secondary);
 		ImGui::TextUnformatted(badge);
 		ImGui::PopStyleColor();
 	}
@@ -170,6 +176,7 @@ bool ListEntryCard(const char *title, const char *subtitle, const char *badge,
 		ImGui::Spacing();
 		muted_text(subtitle);
 	}
+	ImGui::PopStyleColor();
 	ImGui::PopID();
 	ImGui::EndChild();
 	ImGui::PopStyleColor(2);

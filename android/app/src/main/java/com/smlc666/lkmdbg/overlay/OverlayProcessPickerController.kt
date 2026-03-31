@@ -1,22 +1,28 @@
 package com.smlc666.lkmdbg.overlay
 
 import android.content.Context
-import android.graphics.Color
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.google.android.material.button.MaterialButton
 import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.data.ResolvedProcessRecord
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.shell.AppIconLoader
+import com.smlc666.lkmdbg.ui.theme.LkmdbgButtonTone
+import com.smlc666.lkmdbg.ui.theme.copyAlpha
+import com.smlc666.lkmdbg.ui.theme.loadLkmdbgColorRoles
+import com.smlc666.lkmdbg.ui.theme.styleBody
+import com.smlc666.lkmdbg.ui.theme.styleButton
+import com.smlc666.lkmdbg.ui.theme.styleHeadline
+import com.smlc666.lkmdbg.ui.theme.styleSurface
 import kotlin.math.roundToInt
 
 internal class OverlayProcessPickerController(
@@ -25,14 +31,16 @@ internal class OverlayProcessPickerController(
     private val iconLoader: AppIconLoader,
     private val launchAction: (suspend () -> Unit) -> Unit,
 ) {
+    private val roles = loadLkmdbgColorRoles(context)
     private var container: FrameLayout? = null
     private var summaryView: TextView? = null
     private var listView: LinearLayout? = null
+    private val filterButtons = linkedMapOf<ProcessFilter, MaterialButton>()
 
     fun build(density: Float): FrameLayout {
         val newContainer = FrameLayout(context).apply {
             visibility = View.GONE
-            setBackgroundColor(0x88050B12.toInt())
+            setBackgroundColor(roles.background.copyAlpha(0.72f))
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -41,7 +49,6 @@ internal class OverlayProcessPickerController(
         }
         val card = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.argb(238, 12, 21, 29))
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -53,13 +60,13 @@ internal class OverlayProcessPickerController(
             }
             setPadding((14f * density).roundToInt(), (14f * density).roundToInt(), (14f * density).roundToInt(), (14f * density).roundToInt())
             isClickable = true
+            styleSurface(this, roles, roles.surfaceContainerHigh, roles.outlineVariant, radiusDp = 28f)
         }
         card.setOnClickListener { }
 
         val title = TextView(context).apply {
             text = context.getString(R.string.process_panel_title)
-            textSize = 16f
-            setTextColor(Color.WHITE)
+            styleHeadline(this, roles, 16f)
         }
         val filterRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -72,8 +79,7 @@ internal class OverlayProcessPickerController(
 
         val newSummaryView = TextView(context).apply {
             setPadding(0, (10f * density).roundToInt(), 0, (8f * density).roundToInt())
-            textSize = 12f
-            setTextColor(Color.argb(230, 205, 226, 240))
+            styleBody(this, roles, 12f, secondary = true)
         }
         val scrollView = ScrollView(context).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -113,6 +119,12 @@ internal class OverlayProcessPickerController(
         val currentSummary = summaryView ?: return
         val currentList = listView ?: return
         val filtered = state.processes.filter { state.processFilter.matches(it) }
+        filterButtons.forEach { (filter, button) ->
+            styleButton(
+                button,
+                if (filter == state.processFilter) LkmdbgButtonTone.Filled else LkmdbgButtonTone.Outlined,
+            )
+        }
         currentSummary.text = context.getString(
             R.string.process_summary_counts,
             state.processes.size,
@@ -126,8 +138,7 @@ internal class OverlayProcessPickerController(
             currentList.addView(
                 TextView(context).apply {
                     text = context.getString(R.string.process_filter_empty)
-                    setTextColor(Color.WHITE)
-                    textSize = 13f
+                    styleBody(this, roles, 13f)
                 },
             )
             return
@@ -141,12 +152,14 @@ internal class OverlayProcessPickerController(
         container = null
         summaryView = null
         listView = null
+        filterButtons.clear()
     }
 
-    private fun makeFilterButton(textRes: Int, filter: ProcessFilter): Button =
-        Button(context).apply {
+    private fun makeFilterButton(textRes: Int, filter: ProcessFilter): MaterialButton {
+        return MaterialButton(context).apply {
             text = context.getString(textRes)
             textSize = 11f
+            styleButton(this, roles, LkmdbgButtonTone.Outlined)
             layoutParams = LinearLayout.LayoutParams(
                 0,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -158,10 +171,13 @@ internal class OverlayProcessPickerController(
                 repository.updateProcessFilter(filter)
                 render(repository.state.value)
             }
+            filterButtons[filter] = this
         }
+    }
 
     private fun makeProcessRow(process: ResolvedProcessRecord): View {
         val density = context.resources.displayMetrics.density
+        val roles = loadLkmdbgColorRoles(context)
         return LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
@@ -176,7 +192,7 @@ internal class OverlayProcessPickerController(
                 (10f * density).roundToInt(),
                 (8f * density).roundToInt(),
             )
-            setBackgroundColor(Color.argb(210, 18, 32, 44))
+            styleSurface(this, roles, roles.surfaceContainer, roles.outlineVariant, radiusDp = 22f)
             val iconView = ImageView(context).apply {
                 layoutParams = LinearLayout.LayoutParams(
                     (28f * density).roundToInt(),
@@ -197,8 +213,7 @@ internal class OverlayProcessPickerController(
             }
             val titleView = TextView(context).apply {
                 text = process.displayName
-                textSize = 13f
-                setTextColor(Color.WHITE)
+                styleBody(this, roles, 13f)
             }
             val subtitleView = TextView(context).apply {
                 text = buildString {
@@ -211,8 +226,7 @@ internal class OverlayProcessPickerController(
                         append(process.packageName)
                     }
                 }
-                textSize = 11f
-                setTextColor(Color.argb(230, 197, 214, 225))
+                styleBody(this, roles, 11f, secondary = true)
             }
             val kindView = TextView(context).apply {
                 text = when {
@@ -220,8 +234,8 @@ internal class OverlayProcessPickerController(
                     process.isAndroidApp -> context.getString(R.string.process_kind_user_app)
                     else -> context.getString(R.string.process_kind_command_line)
                 }
+                setTextColor(roles.secondary)
                 textSize = 11f
-                setTextColor(Color.argb(255, 101, 222, 215))
             }
             textColumn.addView(titleView)
             textColumn.addView(subtitleView)

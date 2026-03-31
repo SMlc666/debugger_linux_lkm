@@ -7,6 +7,7 @@
 
 #include "imgui.h"
 #include "backends/imgui_impl_opengl3.h"
+#include "nativeui/workspace_theme.h"
 
 namespace lkmdbg::nativeui {
 
@@ -140,7 +141,8 @@ void ImGuiWorkspaceRenderer::Render()
 
 	glViewport(0, 0, egl_.width(), egl_.height());
 	if (state_.expanded)
-		glClearColor(0.03f, 0.07f, 0.10f, 0.98f);
+		glClearColor(GetWorkspaceTheme().background.x, GetWorkspaceTheme().background.y,
+			     GetWorkspaceTheme().background.z, 0.98f);
 	else
 		glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
@@ -177,7 +179,6 @@ bool ImGuiWorkspaceRenderer::EnsureReadyLocked()
 		ImGuiIO &io = ImGui::GetIO();
 		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 		io.BackendPlatformName = "lkmdbg_native_host";
-		ImGui::StyleColorsDark();
 		ApplyStyleLocked();
 		if (!ImGui_ImplOpenGL3_Init("#version 300 es"))
 			return false;
@@ -199,28 +200,52 @@ void ImGuiWorkspaceRenderer::ShutdownLocked()
 
 void ImGuiWorkspaceRenderer::ApplyStyleLocked()
 {
+	const WorkspaceTheme &theme = GetWorkspaceTheme();
 	ImGuiStyle &style = ImGui::GetStyle();
+	style = ImGuiStyle{};
 	style.WindowRounding = 22.0f;
 	style.ChildRounding = 18.0f;
 	style.FrameRounding = 14.0f;
 	style.PopupRounding = 12.0f;
 	style.ScrollbarRounding = 10.0f;
 	style.GrabRounding = 10.0f;
+	style.TabRounding = 14.0f;
 	style.WindowPadding = ImVec2(18.0f, 18.0f);
 	style.ItemSpacing = ImVec2(12.0f, 10.0f);
 	style.ItemInnerSpacing = ImVec2(8.0f, 6.0f);
-	style.Colors[ImGuiCol_WindowBg] = ImVec4(0.05f, 0.10f, 0.13f, 0.96f);
-	style.Colors[ImGuiCol_ChildBg] = ImVec4(0.08f, 0.15f, 0.19f, 0.92f);
-	style.Colors[ImGuiCol_Header] = ImVec4(0.12f, 0.25f, 0.31f, 1.0f);
-	style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.25f, 0.73f, 0.78f, 0.85f);
-	style.Colors[ImGuiCol_HeaderActive] = ImVec4(0.29f, 0.82f, 0.86f, 1.0f);
-	style.Colors[ImGuiCol_Button] = ImVec4(0.11f, 0.23f, 0.28f, 1.0f);
-	style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.23f, 0.71f, 0.76f, 0.92f);
-	style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.27f, 0.80f, 0.84f, 1.0f);
-	style.Colors[ImGuiCol_FrameBg] = ImVec4(0.10f, 0.19f, 0.24f, 1.0f);
-	style.Colors[ImGuiCol_Border] = ImVec4(0.21f, 0.42f, 0.48f, 0.7f);
-	style.Colors[ImGuiCol_Text] = ImVec4(0.95f, 0.97f, 0.98f, 1.0f);
-	style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.56f, 0.66f, 0.70f, 1.0f);
+	style.WindowBorderSize = 1.0f;
+	style.ChildBorderSize = 1.0f;
+	style.FrameBorderSize = 1.0f;
+	style.Colors[ImGuiCol_WindowBg] = WithAlpha(theme.background, 0.97f);
+	style.Colors[ImGuiCol_ChildBg] = WithAlpha(theme.surface, 0.94f);
+	style.Colors[ImGuiCol_PopupBg] = WithAlpha(theme.surface_container_high, 0.98f);
+	style.Colors[ImGuiCol_Border] = WithAlpha(theme.outline_variant, 0.92f);
+	style.Colors[ImGuiCol_BorderShadow] = WithAlpha(theme.background, 0.0f);
+	style.Colors[ImGuiCol_FrameBg] = WithAlpha(theme.surface_container_high, 1.0f);
+	style.Colors[ImGuiCol_FrameBgHovered] = WithAlpha(theme.surface_variant, 1.0f);
+	style.Colors[ImGuiCol_FrameBgActive] = WithAlpha(theme.primary_container, 1.0f);
+	style.Colors[ImGuiCol_TitleBg] = WithAlpha(theme.surface, 1.0f);
+	style.Colors[ImGuiCol_TitleBgActive] = WithAlpha(theme.surface_container, 1.0f);
+	style.Colors[ImGuiCol_Header] = WithAlpha(theme.surface_container, 1.0f);
+	style.Colors[ImGuiCol_HeaderHovered] = WithAlpha(theme.primary_container, 0.95f);
+	style.Colors[ImGuiCol_HeaderActive] = WithAlpha(theme.primary, 0.92f);
+	style.Colors[ImGuiCol_Button] = WithAlpha(theme.surface_container_high, 1.0f);
+	style.Colors[ImGuiCol_ButtonHovered] = WithAlpha(theme.primary_container, 0.96f);
+	style.Colors[ImGuiCol_ButtonActive] = WithAlpha(theme.primary, 0.90f);
+	style.Colors[ImGuiCol_Separator] = WithAlpha(theme.outline_variant, 1.0f);
+	style.Colors[ImGuiCol_ResizeGrip] = WithAlpha(theme.primary_container, 0.65f);
+	style.Colors[ImGuiCol_ResizeGripHovered] = WithAlpha(theme.primary, 0.85f);
+	style.Colors[ImGuiCol_ResizeGripActive] = WithAlpha(theme.primary, 1.0f);
+	style.Colors[ImGuiCol_ScrollbarBg] = WithAlpha(theme.surface, 0.85f);
+	style.Colors[ImGuiCol_ScrollbarGrab] = WithAlpha(theme.surface_variant, 1.0f);
+	style.Colors[ImGuiCol_ScrollbarGrabHovered] = WithAlpha(theme.primary_container, 1.0f);
+	style.Colors[ImGuiCol_ScrollbarGrabActive] = WithAlpha(theme.primary, 1.0f);
+	style.Colors[ImGuiCol_CheckMark] = theme.primary;
+	style.Colors[ImGuiCol_SliderGrab] = theme.secondary;
+	style.Colors[ImGuiCol_SliderGrabActive] = theme.secondary_container;
+	style.Colors[ImGuiCol_Text] = theme.on_surface;
+	style.Colors[ImGuiCol_TextDisabled] = theme.on_surface_variant;
+	style.Colors[ImGuiCol_NavHighlight] = theme.secondary;
 }
 
 void ImGuiWorkspaceRenderer::RebuildFontsLocked()

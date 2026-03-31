@@ -6,6 +6,7 @@
 #include "imgui.h"
 #include "nativeui/ui_tree.h"
 #include "nativeui/workspace_view_model.h"
+#include "nativeui/workspace_theme.h"
 
 namespace lkmdbg::nativeui {
 
@@ -28,6 +29,7 @@ std::string WorkspaceLayoutManager::Render(const WorkspaceLabels &labels,
 
 void WorkspaceLayoutManager::RenderCollapsedBall(float density, float time_seconds)
 {
+	const WorkspaceTheme &theme = GetWorkspaceTheme();
 	ImGuiViewport *viewport = ImGui::GetMainViewport();
 	ImDrawList *draw_list = ImGui::GetBackgroundDrawList();
 	const ImVec2 center(viewport->Pos.x + viewport->Size.x * 0.5f,
@@ -36,14 +38,14 @@ void WorkspaceLayoutManager::RenderCollapsedBall(float density, float time_secon
 	const float radius = std::min(viewport->Size.x, viewport->Size.y) * 0.5f -
 			     (6.0f - pulse * 2.0f) * density;
 
-	draw_list->AddCircleFilled(center, radius, IM_COL32(73, 216, 210, 255), 64);
+	draw_list->AddCircleFilled(center, radius, ToImU32(theme.secondary), 64);
 	draw_list->AddCircleFilled(center, radius - 10.0f * density,
-				   IM_COL32(12, 25, 34, 255), 64);
+				   ToImU32(theme.background), 64);
 	draw_list->AddCircle(center, radius - 22.0f * density,
-			     IM_COL32(73, 216, 210, static_cast<int>(200 + pulse * 55.0f)),
+			     ToImU32(WithAlpha(theme.primary, 0.78f + pulse * 0.22f)),
 			     64, 6.0f * density);
 	draw_list->AddText(ImVec2(center.x - 18.0f * density, center.y - 10.0f * density),
-			   IM_COL32(255, 255, 255, 255), "DBG");
+			   ToImU32(theme.on_surface), "DBG");
 }
 
 std::string WorkspaceLayoutManager::RenderExpandedWorkspace(

@@ -98,6 +98,7 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.service)
+    implementation(libs.google.material)
     implementation(libs.kotlinx.coroutines.android)
 
     testImplementation(libs.junit4)

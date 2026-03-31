@@ -34,6 +34,7 @@ add_library(lkmdbg_native SHARED
 	nativeui/imgui_workspace_renderer.cpp
 	nativeui/ui_tree.cpp
 	nativeui/ui_format.cpp
+	nativeui/workspace_theme.cpp
 	nativeui/workspace_animation.cpp
 	nativeui/workspace_layout.cpp
 	nativeui/workspace_view_model.cpp

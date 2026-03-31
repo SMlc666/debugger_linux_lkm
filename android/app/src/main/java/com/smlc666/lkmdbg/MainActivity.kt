@@ -3,9 +3,9 @@ package com.smlc666.lkmdbg
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.os.Bundle
+import android.widget.FrameLayout
 import android.view.Gravity
 import android.view.ViewGroup
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -13,15 +13,23 @@ import androidx.activity.ComponentActivity
 import androidx.core.view.setPadding
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.button.MaterialButton
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.overlay.LkmdbgOverlayService
 import com.smlc666.lkmdbg.overlay.OverlayPermission
 import com.smlc666.lkmdbg.shell.BridgeStatusFormatter
 import com.smlc666.lkmdbg.shell.SessionAutomationController
+import com.smlc666.lkmdbg.ui.theme.LkmdbgButtonTone
+import com.smlc666.lkmdbg.ui.theme.loadLkmdbgColorRoles
+import com.smlc666.lkmdbg.ui.theme.styleBody
+import com.smlc666.lkmdbg.ui.theme.styleButton
+import com.smlc666.lkmdbg.ui.theme.styleHeadline
+import com.smlc666.lkmdbg.ui.theme.styleSurface
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private val roles by lazy { loadLkmdbgColorRoles(this) }
     private lateinit var statusView: TextView
     private lateinit var overlayView: TextView
     private lateinit var crashView: TextView
@@ -58,23 +66,24 @@ class MainActivity : ComponentActivity() {
     private fun buildContentView(): ScrollView {
         val density = resources.displayMetrics.density
         val padding = (20f * density).toInt()
-
-        val root = ScrollView(this)
+        val root = ScrollView(this).apply {
+            setBackgroundColor(roles.background)
+        }
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(padding)
         }
         val titleView = TextView(this).apply {
             text = getString(R.string.launcher_panel_title)
-            textSize = 22f
+            styleHeadline(this, roles, 24f)
         }
         val subtitleView = TextView(this).apply {
             text = getString(R.string.launcher_panel_body)
-            textSize = 15f
+            styleBody(this, roles, 15f, secondary = true)
             setPadding(0, (8f * density).toInt(), 0, (16f * density).toInt())
         }
         overlayView = TextView(this).apply {
-            textSize = 14f
+            styleBody(this, roles, 14f, secondary = true)
             setPadding(0, 0, 0, (12f * density).toInt())
             text = getString(
                 R.string.overlay_permission_status,
@@ -89,7 +98,8 @@ class MainActivity : ComponentActivity() {
             )
             gravity = Gravity.START
             setPadding((12f * density).toInt(), (12f * density).toInt(), (12f * density).toInt(), (12f * density).toInt())
-            textSize = 13f
+            styleBody(this, roles, 13f)
+            styleSurface(this, roles, roles.surfaceContainer)
         }
         crashView = TextView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -97,7 +107,8 @@ class MainActivity : ComponentActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             )
             setPadding(0, (12f * density).toInt(), 0, 0)
-            textSize = 12f
+            styleBody(this, roles, 12f, secondary = true)
+            styleSurface(this, roles, roles.surfaceContainerHigh)
         }
         diagnosticsView = TextView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -105,7 +116,8 @@ class MainActivity : ComponentActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             )
             setPadding(0, (12f * density).toInt(), 0, 0)
-            textSize = 12f
+            styleBody(this, roles, 12f, secondary = true)
+            styleSurface(this, roles, roles.surfaceContainerHigh)
         }
         val buttonRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -115,41 +127,46 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, (12f * density).toInt(), 0, 0)
         }
-        val grantButton = Button(this).apply {
+        val grantButton = MaterialButton(this).apply {
             text = getString(R.string.overlay_action_grant)
+            styleButton(this, roles, LkmdbgButtonTone.Outlined)
             setOnClickListener { OverlayPermission.openSettings(this@MainActivity) }
         }
-        val showButton = Button(this).apply {
+        val showButton = MaterialButton(this).apply {
             text = getString(R.string.overlay_action_show)
+            styleButton(this, roles, LkmdbgButtonTone.Filled)
             setOnClickListener {
                 LkmdbgOverlayService.start(this@MainActivity)
                 refreshOverlayStatus()
             }
         }
-        val hideButton = Button(this).apply {
+        val hideButton = MaterialButton(this).apply {
             text = getString(R.string.overlay_action_hide)
+            styleButton(this, roles, LkmdbgButtonTone.Tonal)
             setOnClickListener {
                 LkmdbgOverlayService.stop(this@MainActivity)
                 refreshOverlayStatus()
             }
         }
-        val copyCrashButton = Button(this).apply {
+        val copyCrashButton = MaterialButton(this).apply {
             text = getString(R.string.launcher_action_copy_last_crash)
+            styleButton(this, roles, LkmdbgButtonTone.Outlined)
             setOnClickListener { copyLastCrash() }
         }
-        val clearCrashButton = Button(this).apply {
+        val clearCrashButton = MaterialButton(this).apply {
             text = getString(R.string.launcher_action_clear_last_crash)
+            styleButton(this, roles, LkmdbgButtonTone.Tonal)
             setOnClickListener {
                 CrashLogger.clearLastCrash(this@MainActivity)
                 refreshCrashStatus()
             }
         }
 
-        buttonRow.addView(grantButton)
-        buttonRow.addView(showButton)
-        buttonRow.addView(hideButton)
-        crashButtonRow.addView(copyCrashButton)
-        crashButtonRow.addView(clearCrashButton)
+        buttonRow.addView(materialRowCell(grantButton))
+        buttonRow.addView(materialRowCell(showButton))
+        buttonRow.addView(materialRowCell(hideButton))
+        crashButtonRow.addView(materialRowCell(copyCrashButton))
+        crashButtonRow.addView(materialRowCell(clearCrashButton))
         column.addView(titleView)
         column.addView(subtitleView)
         column.addView(overlayView)
@@ -163,6 +180,20 @@ class MainActivity : ComponentActivity() {
         refreshCrashStatus()
         return root
     }
+
+    private fun materialRowCell(button: MaterialButton): FrameLayout =
+        FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = (6f * resources.displayMetrics.density).toInt()
+            }
+            addView(
+                button,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
 
     private fun refreshOverlayStatus() {
         if (!::overlayView.isInitialized)
