@@ -122,6 +122,7 @@ internal class OverlayProcessPickerController(
         filterButtons.forEach { (filter, button) ->
             styleButton(
                 button,
+                roles,
                 if (filter == state.processFilter) LkmdbgButtonTone.Filled else LkmdbgButtonTone.Outlined,
             )
         }

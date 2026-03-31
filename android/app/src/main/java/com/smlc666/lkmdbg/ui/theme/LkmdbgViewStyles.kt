@@ -61,8 +61,6 @@ internal fun styleButton(
     button.rippleColor = ColorStateList.valueOf(roles.primary.copyAlpha(0.18f))
     button.insetTop = 0
     button.insetBottom = 0
-    button.insetLeft = 0
-    button.insetRight = 0
     button.elevation = 0f
     button.setPadding(
         button.context.dp(10f).toInt(),
