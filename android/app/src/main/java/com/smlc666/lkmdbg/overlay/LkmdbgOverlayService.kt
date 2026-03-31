@@ -3,6 +3,7 @@ package com.smlc666.lkmdbg.overlay
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.view.ContextThemeWrapper
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -12,6 +13,7 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.smlc666.lkmdbg.CrashLogger
 import com.smlc666.lkmdbg.LkmdbgApplication
+import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.nativeui.NativeWorkspaceTextureView
 import com.smlc666.lkmdbg.shell.AppIconLoader
@@ -23,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class LkmdbgOverlayService : LifecycleService() {
     private lateinit var windowManager: WindowManager
     private lateinit var windowController: OverlayWindowController
+    private lateinit var overlayContext: Context
     private lateinit var repository: SessionBridgeRepository
     private lateinit var automation: SessionAutomationController
     private lateinit var headerController: OverlayHeaderController
@@ -46,17 +49,18 @@ class LkmdbgOverlayService : LifecycleService() {
             repository = (application as LkmdbgApplication).sessionRepository
             automation = SessionAutomationController(repository)
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+            overlayContext = ContextThemeWrapper(this, R.style.Theme_Lkmdbg)
             windowController = OverlayWindowController(resources, windowManager)
             gestureController = OverlayGestureController(
                 clickSlopPx = 12f * resources.displayMetrics.density,
             )
-            headerController = OverlayHeaderController(this) { action ->
+            headerController = OverlayHeaderController(overlayContext) { action ->
                 lifecycleScope.launch {
                     action()
                 }
             }
             processPickerController = OverlayProcessPickerController(
-                context = this,
+                context = overlayContext,
                 repository = repository,
                 iconLoader = AppIconLoader(this),
             ) { action ->
@@ -65,7 +69,7 @@ class LkmdbgOverlayService : LifecycleService() {
                 }
             }
             memoryToolboxController = OverlayMemoryToolboxController(
-                context = this,
+                context = overlayContext,
                 repository = repository,
             ) { action ->
                 lifecycleScope.launch {
@@ -80,7 +84,7 @@ class LkmdbgOverlayService : LifecycleService() {
                 }
             }
             stateBinder = OverlayStateBinder(
-                context = this,
+                context = overlayContext,
                 repository = repository,
                 headerController = headerController,
                 processPickerController = processPickerController,
@@ -124,14 +128,14 @@ class LkmdbgOverlayService : LifecycleService() {
     private fun mountOverlay(expanded: Boolean) {
         val params = windowController.createLayoutParams(expanded)
         val density = resources.displayMetrics.density
-        val root = FrameLayout(this).apply {
+        val root = FrameLayout(overlayContext).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
             )
         }
         val workspaceTopInset = if (expanded) windowController.expandedWorkspaceTopInsetPx() else 0
-        val nativeView = NativeWorkspaceTextureView(this).apply {
+        val nativeView = NativeWorkspaceTextureView(overlayContext).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
