@@ -207,7 +207,7 @@ internal class OverlayMemoryToolboxController(
             styleInputLayout(this, roles)
             addView(
                 editText,
-                ViewGroup.LayoutParams(
+                LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                 ),
