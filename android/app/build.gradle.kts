@@ -13,6 +13,7 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
 import org.gradle.api.file.FileSystemOperations
 import javax.inject.Inject
+import java.io.File
 
 plugins {
     alias(libs.plugins.android.application)
@@ -32,7 +33,13 @@ abstract class BuildBundledAgentTask @Inject constructor(
     abstract val sourceFiles: ConfigurableFileCollection
 
     @get:Input
-    abstract val ndkVersion: org.gradle.api.provider.Property<String>
+    abstract val cmakeExecutablePath: org.gradle.api.provider.Property<String>
+
+    @get:Input
+    abstract val ninjaExecutablePath: org.gradle.api.provider.Property<String>
+
+    @get:Input
+    abstract val toolchainFilePath: org.gradle.api.provider.Property<String>
 
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
@@ -45,19 +52,21 @@ abstract class BuildBundledAgentTask @Inject constructor(
         val sdk = System.getenv("ANDROID_SDK_ROOT")
             ?: System.getenv("ANDROID_HOME")
             ?: throw GradleException("ANDROID_SDK_ROOT or ANDROID_HOME is required")
-        val cmakeBin = project.file("$sdk/cmake/3.22.1/bin/cmake")
-        val ninjaBin = project.file("$sdk/cmake/3.22.1/bin/ninja")
-        val ndkDir = project.file("$sdk/ndk/${ndkVersion.get()}")
+        val cmakeBin = File(cmakeExecutablePath.get())
+        val ninjaBin = File(ninjaExecutablePath.get())
+        val toolchainFile = File(toolchainFilePath.get())
         val configureDirFile = configureDir.get().asFile
         val outputDirFile = outputDir.get().asFile
         val agentSourceDirFile = agentSourceDir.get().asFile
 
+        if (sdk.isBlank())
+            throw GradleException("ANDROID_SDK_ROOT or ANDROID_HOME is required")
         if (!cmakeBin.exists())
             throw GradleException("cmake not found at ${cmakeBin.absolutePath}")
         if (!ninjaBin.exists())
             throw GradleException("ninja not found at ${ninjaBin.absolutePath}")
-        if (!ndkDir.exists())
-            throw GradleException("ndk not found at ${ndkDir.absolutePath}")
+        if (!toolchainFile.exists())
+            throw GradleException("toolchain file not found at ${toolchainFile.absolutePath}")
 
         outputDirFile.mkdirs()
 
@@ -72,7 +81,7 @@ abstract class BuildBundledAgentTask @Inject constructor(
                 "-DANDROID_STL=c++_shared",
                 "-DANDROID_TOOLCHAIN=clang",
                 "-DCMAKE_MAKE_PROGRAM=${ninjaBin.absolutePath}",
-                "-DCMAKE_TOOLCHAIN_FILE=${ndkDir.absolutePath}/build/cmake/android.toolchain.cmake",
+                "-DCMAKE_TOOLCHAIN_FILE=${toolchainFile.absolutePath}",
             )
         }
 
@@ -191,13 +200,19 @@ dependencies {
 }
 
 val buildBundledAgentDebug by tasks.registering(BuildBundledAgentTask::class) {
+    val sdkRoot = providers.environmentVariable("ANDROID_SDK_ROOT")
+        .orElse(providers.environmentVariable("ANDROID_HOME"))
     agentSourceDir.set(layout.projectDirectory.dir("../agent"))
     sourceFiles.from(
         fileTree(layout.projectDirectory.dir("../agent/src/main/cpp")),
         layout.projectDirectory.file("../agent/CMakeLists.txt"),
         layout.projectDirectory.file("../../include/lkmdbg_ioctl.h"),
     )
-    ndkVersion.set(androidNdkVersion)
+    cmakeExecutablePath.set(sdkRoot.map { "$it/cmake/3.22.1/bin/cmake" })
+    ninjaExecutablePath.set(sdkRoot.map { "$it/cmake/3.22.1/bin/ninja" })
+    toolchainFilePath.set(
+        sdkRoot.map { "$it/ndk/$androidNdkVersion/build/cmake/android.toolchain.cmake" },
+    )
     outputDir.set(bundledAgentAssetRoot.map { it.dir("agent/arm64-v8a") })
     configureDir.set(layout.buildDirectory.dir("intermediates/bundledAgent/debug/arm64-v8a"))
     description = "Builds the bundled Android root agent and stages it into debug assets."
