@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import java.io.IOException
 
 data class SessionEventEntry(
     val record: BridgeEventRecord,
@@ -94,6 +93,16 @@ class SessionBridgeRepository(
         pageSize = MEMORY_BROWSER_PAGE_SIZE,
         rowBytes = MEMORY_ROW_BYTES,
     )
+    private val _state = MutableStateFlow(
+        SessionBridgeState(
+            agentPath = client.agentPathHint,
+            lastMessage = appContext.getString(R.string.session_message_idle),
+        ),
+    )
+    private val memorySearchSnapshotController = MemorySearchSnapshotController(
+        cacheDir = appContext.cacheDir,
+        snapshotChunkSize = MEMORY_SEARCH_SNAPSHOT_CHUNK_SIZE,
+    )
     private val memoryEditor = MemoryEditorController(
         context = appContext,
         client = client,
@@ -101,15 +110,21 @@ class SessionBridgeRepository(
         memoryPreviewBuilder = memoryPreviewBuilder,
         pageSize = MEMORY_BROWSER_PAGE_SIZE,
     )
-    private val memorySearchSnapshotController = MemorySearchSnapshotController(
-        cacheDir = appContext.cacheDir,
-        snapshotChunkSize = MEMORY_SEARCH_SNAPSHOT_CHUNK_SIZE,
+    private val operationRunner = SessionOperationRunner(
+        context = appContext,
+        stateFlow = _state,
     )
-    private val _state = MutableStateFlow(
-        SessionBridgeState(
-            agentPath = client.agentPathHint,
-            lastMessage = appContext.getString(R.string.session_message_idle),
-        ),
+    private val memorySearchCoordinator = MemorySearchCoordinator(
+        context = appContext,
+        client = client,
+        stateFlow = _state,
+        searchEngine = searchEngine,
+        snapshotController = memorySearchSnapshotController,
+    )
+    private val threadController = SessionThreadController(
+        context = appContext,
+        client = client,
+        stateFlow = _state,
     )
     private val unsafeOps = SessionBridgeUnsafeOps(
         context = appContext,
@@ -117,7 +132,7 @@ class SessionBridgeRepository(
         stateFlow = _state,
         processResolver = processResolver,
         memoryPreviewBuilder = memoryPreviewBuilder,
-        discardMemorySearchSnapshot = ::discardMemorySearchSnapshot,
+        discardMemorySearchSnapshot = { memorySearchCoordinator.discardSnapshot() },
     )
     val state: StateFlow<SessionBridgeState> = _state.asStateFlow()
 
@@ -190,7 +205,7 @@ class SessionBridgeRepository(
     }
 
     fun updateMemoryRegionPreset(regionPreset: MemoryRegionPreset) {
-        discardMemorySearchSnapshot()
+        memorySearchCoordinator.discardSnapshot()
         _state.update { current ->
             current.copy(
                 memorySearch = current.memorySearch.copy(
@@ -203,11 +218,11 @@ class SessionBridgeRepository(
     }
 
     suspend fun connect() {
-        runOperation { unsafeOps.connect() }
+        operationRunner.run { unsafeOps.connect() }
     }
 
     suspend fun openSession() {
-        runOperation {
+        operationRunner.run {
             if (state.value.hello == null)
                 unsafeOps.connect()
             unsafeOps.openSession()
@@ -218,7 +233,7 @@ class SessionBridgeRepository(
     }
 
     suspend fun refreshStatus() {
-        runOperation { unsafeOps.refreshStatus() }
+        operationRunner.run { unsafeOps.refreshStatus() }
     }
 
     suspend fun attachTarget() {
@@ -230,208 +245,97 @@ class SessionBridgeRepository(
             return
         }
 
-        runOperation {
-            ensureSessionReadyUnsafe()
-            unsafeOps.attachTarget(targetPid)
-            unsafeOps.refreshThreads()
-            unsafeOps.refreshVmas()
-            unsafeOps.refreshImages()
-            unsafeOps.refreshEvents(timeoutMs = 0, maxEvents = 16)
+        operationRunner.run {
+            attachTargetUnsafe(targetPid)
         }
     }
 
     suspend fun refreshProcesses() {
-        runOperation {
+        operationRunner.run {
             unsafeOps.refreshProcesses()
         }
     }
 
     suspend fun refreshThreads() {
-        runOperation {
+        operationRunner.run {
             if (!hasActiveTarget()) {
-                clearThreadState()
-                updateMessage(appContext.getString(R.string.thread_error_no_target))
-                return@runOperation
+                threadController.clearSelection()
+                operationRunner.updateMessage(appContext.getString(R.string.thread_error_no_target))
+                return@run
             }
             unsafeOps.refreshThreads()
         }
     }
 
     suspend fun refreshThreadRegisters(tid: Int) {
-        runOperation {
-            val reply = client.getRegisters(tid)
-            _state.update { current ->
-                current.copy(
-                    selectedThreadTid = tid,
-                    selectedThreadRegisters = reply,
-                    lastMessage = reply.message.ifBlank {
-                        appContext.getString(R.string.thread_message_registers, tid)
-                    },
-                )
-            }
-        }
+        operationRunner.run { threadController.refreshRegisters(tid) }
     }
 
     suspend fun refreshEvents(timeoutMs: Int = 0, maxEvents: Int = 16) {
-        runOperation {
+        operationRunner.run {
             if (!state.value.snapshot.sessionOpen) {
-                updateMessage(appContext.getString(R.string.event_error_no_session))
-                return@runOperation
+                operationRunner.updateMessage(appContext.getString(R.string.event_error_no_session))
+                return@run
             }
             unsafeOps.refreshEvents(timeoutMs, maxEvents)
         }
     }
 
     suspend fun refreshImages() {
-        runOperation {
+        operationRunner.run {
             if (!hasActiveTarget()) {
                 _state.update { current -> current.copy(images = emptyList()) }
-                updateMessage(appContext.getString(R.string.memory_error_no_target))
-                return@runOperation
+                operationRunner.updateMessage(appContext.getString(R.string.memory_error_no_target))
+                return@run
             }
             unsafeOps.refreshImages()
         }
     }
 
     suspend fun refreshVmas() {
-        runOperation {
+        operationRunner.run {
             if (!hasActiveTarget()) {
                 _state.update { current -> current.copy(vmas = emptyList()) }
-                updateMessage(appContext.getString(R.string.memory_error_no_target))
-                return@runOperation
+                operationRunner.updateMessage(appContext.getString(R.string.memory_error_no_target))
+                return@run
             }
             unsafeOps.refreshVmas()
         }
     }
 
     suspend fun runMemorySearch() {
-        runOperation {
+        operationRunner.run {
             if (!hasActiveTarget()) {
-                updateMessage(appContext.getString(R.string.memory_error_no_target))
-                return@runOperation
+                operationRunner.updateMessage(appContext.getString(R.string.memory_error_no_target))
+                return@run
             }
-            if (state.value.vmas.isEmpty())
-                unsafeOps.refreshVmas()
-
-            val search = state.value.memorySearch
-            if (search.refineMode != MemorySearchRefineMode.Exact) {
-                captureMemorySearchSnapshotUnsafe(search.regionPreset, search.valueType)
-                return@runOperation
-            }
-
-            discardMemorySearchSnapshot()
-            val outcome = searchEngine.search(
-                vmas = state.value.vmas,
-                preset = search.regionPreset,
-                valueType = search.valueType,
-                query = search.query,
-            )
-            val summary = appContext.getString(
-                R.string.memory_search_summary,
-                outcome.results.size,
-                outcome.searchedVmaCount,
-                outcome.scannedBytes.toString(),
-            )
-            _state.update { current ->
-                current.copy(
-                    memorySearch = current.memorySearch.copy(
-                        snapshotReady = false,
-                        summary = summary,
-                        results = outcome.results,
-                    ),
-                    lastMessage = summary,
-                )
-            }
+            memorySearchCoordinator.runSearch(refreshVmas = { unsafeOps.refreshVmas() })
         }
     }
 
     suspend fun refineMemorySearch() {
-        runOperation {
+        operationRunner.run {
             if (!hasActiveTarget()) {
-                updateMessage(appContext.getString(R.string.memory_error_no_target))
-                return@runOperation
+                operationRunner.updateMessage(appContext.getString(R.string.memory_error_no_target))
+                return@run
             }
-            val currentResults = state.value.memorySearch.results
-            if (state.value.vmas.isEmpty())
-                unsafeOps.refreshVmas()
-
-            val search = state.value.memorySearch
-            if (currentResults.isEmpty()) {
-                if (search.refineMode != MemorySearchRefineMode.Exact &&
-                    search.snapshotReady
-                ) {
-                    val outcome = refineMemorySearchSnapshotUnsafe(
-                        search.regionPreset,
-                        search.valueType,
-                        search.refineMode,
-                    )
-                    val summary = appContext.getString(
-                        R.string.memory_search_fuzzy_summary,
-                        outcome.results.size,
-                        outcome.searchedVmaCount,
-                        outcome.scannedBytes.toString(),
-                    )
-                    _state.update { current ->
-                        current.copy(
-                            memorySearch = current.memorySearch.copy(
-                                summary = summary,
-                                results = outcome.results,
-                            ),
-                            lastMessage = summary,
-                        )
-                    }
-                    return@runOperation
-                }
-                updateMessage(appContext.getString(R.string.memory_search_refine_empty))
-                return@runOperation
-            }
-
-            val outcome = searchEngine.refine(
-                vmas = state.value.vmas,
-                sourceResults = currentResults,
-                valueType = search.valueType,
-                refineMode = search.refineMode,
-                query = search.query,
-                reader = { address, length ->
-                    val reply = client.readMemory(address, length)
-                    if (reply.status != 0) {
-                        ByteArray(0)
-                    } else {
-                        reply.data.copyOf(reply.bytesDone.toInt())
-                    }
-                },
-            )
-            val summary = appContext.getString(
-                R.string.memory_search_refine_summary,
-                outcome.results.size,
-                currentResults.size,
-                outcome.scannedBytes.toString(),
-            )
-            _state.update { current ->
-                current.copy(
-                    memorySearch = current.memorySearch.copy(
-                        summary = summary,
-                        results = outcome.results,
-                    ),
-                    lastMessage = summary,
-                )
-            }
+            memorySearchCoordinator.refineSearch(refreshVmas = { unsafeOps.refreshVmas() })
         }
     }
 
     suspend fun openMemoryPage(remoteAddr: ULong) {
-        runOperation {
+        operationRunner.run {
             memoryEditor.openPage(remoteAddr)
         }
     }
 
     suspend fun previewSelectedPc() {
-        runOperation {
+        operationRunner.run {
             val pc = state.value.selectedThreadRegisters?.pc
                 ?: state.value.threads.firstOrNull()?.userPc
             if (pc == null || pc == 0uL) {
-                updateMessage(appContext.getString(R.string.memory_error_no_pc))
-                return@runOperation
+                operationRunner.updateMessage(appContext.getString(R.string.memory_error_no_pc))
+                return@run
             }
             memoryEditor.openPage(pc)
         }
@@ -440,21 +344,21 @@ class SessionBridgeRepository(
     suspend fun jumpToMemoryAddress() {
         val address = memoryEditor.parseAddressInput(state.value.memoryAddressInput)
         if (address == null) {
-            updateMessage(appContext.getString(R.string.memory_error_invalid_address))
+            operationRunner.updateMessage(appContext.getString(R.string.memory_error_invalid_address))
             return
         }
         openMemoryPage(address)
     }
 
     suspend fun stepMemoryPage(direction: Int) {
-        runOperation {
+        operationRunner.run {
             val current = state.value.memoryPage
             if (current == null) {
-                updateMessage(appContext.getString(R.string.memory_error_no_page))
-                return@runOperation
+                operationRunner.updateMessage(appContext.getString(R.string.memory_error_no_page))
+                return@run
             }
             if (direction == 0)
-                return@runOperation
+                return@run
 
             val delta = current.pageSize.toULong()
             val nextFocus = if (direction < 0) {
@@ -470,62 +374,57 @@ class SessionBridgeRepository(
     }
 
     suspend fun loadSelectionIntoHexSearch() {
-        runOperation {
+        operationRunner.run {
             memoryEditor.loadSelectionIntoHexSearch()
         }
     }
 
     suspend fun loadSelectionIntoAsciiSearch() {
-        runOperation {
+        operationRunner.run {
             memoryEditor.loadSelectionIntoAsciiSearch()
         }
     }
 
     suspend fun loadSelectionIntoEditors() {
-        runOperation {
+        operationRunner.run {
             memoryEditor.loadSelectionIntoEditors()
         }
     }
 
     suspend fun assembleArm64ToEditors() {
-        runOperation {
+        operationRunner.run {
             memoryEditor.assembleArm64ToEditors()
         }
     }
 
     suspend fun assembleArm64AndWrite() {
-        runOperation {
+        operationRunner.run {
             memoryEditor.assembleArm64AndWrite()
         }
     }
 
     suspend fun writeHexAtFocus() {
-        runOperation {
+        operationRunner.run {
             memoryEditor.writeHexAtFocus()
         }
     }
 
     suspend fun writeAsciiAtFocus() {
-        runOperation {
+        operationRunner.run {
             memoryEditor.writeAsciiAtFocus()
         }
     }
 
     suspend fun selectMemoryAddress(remoteAddr: ULong) {
-        runOperation {
+        operationRunner.run {
             memoryEditor.selectAddress(remoteAddr)
         }
     }
 
     suspend fun attachProcess(targetPid: Int): Boolean =
-        runOperation {
+        operationRunner.run {
             _state.update { current -> current.copy(targetPidInput = targetPid.toString()) }
-            ensureSessionReadyUnsafe()
-            unsafeOps.attachTarget(targetPid)
-            unsafeOps.refreshThreads()
-            unsafeOps.refreshVmas()
-            unsafeOps.refreshImages()
-            unsafeOps.refreshEvents(timeoutMs = 0, maxEvents = 16)
+            attachTargetUnsafe(targetPid)
             true
         } ?: false
 
@@ -539,132 +438,12 @@ class SessionBridgeRepository(
         unsafeOps.refreshStatus()
     }
 
-    private suspend fun captureMemorySearchSnapshotUnsafe(
-        regionPreset: MemoryRegionPreset,
-        valueType: MemorySearchValueType,
-    ) {
-        if (!memorySearchSnapshotController.supportsUnknownInitial(valueType)) {
-            updateMessage(appContext.getString(R.string.memory_search_fuzzy_requires_numeric))
-            return
-        }
-
-        val matchingVmas = state.value.vmas.filter(regionPreset::matches)
-        if (matchingVmas.isEmpty()) {
-            updateMessage(appContext.getString(R.string.memory_ranges_empty))
-            return
-        }
-
-        memorySearchSnapshotController.discard()
-        val captured = memorySearchSnapshotController.capture(
-            targetPid = state.value.snapshot.targetPid,
-            regionPreset = regionPreset,
-            matchingVmas = matchingVmas,
-            readMemory = client::readMemory,
-        )
-        val summary = appContext.getString(
-            R.string.memory_search_snapshot_captured,
-            captured.rangeCount,
-            captured.totalBytes.toString(),
-        )
-        _state.update { current ->
-            current.copy(
-                memorySearch = current.memorySearch.copy(
-                    snapshotReady = true,
-                    summary = summary,
-                    results = emptyList(),
-                ),
-                lastMessage = summary,
-            )
-        }
-    }
-
-    private suspend fun refineMemorySearchSnapshotUnsafe(
-        regionPreset: MemoryRegionPreset,
-        valueType: MemorySearchValueType,
-        refineMode: MemorySearchRefineMode,
-    ): MemorySearchOutcome {
-        if (!memorySearchSnapshotController.supportsUnknownInitial(valueType)) {
-            throw IllegalStateException(appContext.getString(R.string.memory_search_fuzzy_requires_numeric))
-        }
-        return try {
-            memorySearchSnapshotController.refine(
-                targetPid = state.value.snapshot.targetPid,
-                regionPreset = regionPreset,
-                valueType = valueType,
-                refineMode = refineMode,
-                vmas = state.value.vmas,
-                readMemory = client::readMemory,
-            )
-        } catch (e: IllegalStateException) {
-            if (e.message == "missing snapshot") {
-                memorySearchSnapshotController.discard()
-                throw IllegalStateException(appContext.getString(R.string.memory_search_snapshot_missing))
-            }
-            throw e
-        }
-    }
-
-    private fun discardMemorySearchSnapshot() {
-        memorySearchSnapshotController.discard()
-        _state.update { current ->
-            current.copy(
-                memorySearch = current.memorySearch.copy(
-                    snapshotReady = false,
-                ),
-            )
-        }
-    }
-
-    private fun clearThreadState() {
-        _state.update { current ->
-            current.copy(
-                threads = emptyList(),
-                selectedThreadTid = null,
-                selectedThreadRegisters = null,
-            )
-        }
-    }
-
-    private fun updateMessage(message: String) {
-        _state.update { current -> current.copy(lastMessage = message) }
-    }
-
-    private suspend fun <T> runOperation(block: suspend () -> T): T? {
-        _state.update { current -> current.copy(busy = true) }
-        try {
-            return block()
-        } catch (e: IOException) {
-            _state.update { current ->
-                current.copy(
-                    lastMessage = appContext.getString(
-                        R.string.session_error_io,
-                        e.message ?: appContext.getString(R.string.session_error_unknown),
-                    ),
-                )
-            }
-            return null
-        } catch (e: IllegalStateException) {
-            _state.update { current ->
-                current.copy(
-                    lastMessage = appContext.getString(
-                        R.string.session_error_bridge,
-                        e.message ?: appContext.getString(R.string.session_error_unknown),
-                    ),
-                )
-            }
-            return null
-        } catch (e: RuntimeException) {
-            _state.update { current ->
-                current.copy(
-                    lastMessage = appContext.getString(
-                        R.string.session_error_bridge,
-                        e.message ?: appContext.getString(R.string.session_error_unknown),
-                    ),
-                )
-            }
-            return null
-        } finally {
-            _state.update { current -> current.copy(busy = false) }
-        }
+    private suspend fun attachTargetUnsafe(targetPid: Int) {
+        ensureSessionReadyUnsafe()
+        unsafeOps.attachTarget(targetPid)
+        unsafeOps.refreshThreads()
+        unsafeOps.refreshVmas()
+        unsafeOps.refreshImages()
+        unsafeOps.refreshEvents(timeoutMs = 0, maxEvents = 16)
     }
 }

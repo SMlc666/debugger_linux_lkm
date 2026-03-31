@@ -14,11 +14,8 @@ import com.smlc666.lkmdbg.CrashLogger
 import com.smlc666.lkmdbg.LkmdbgApplication
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.nativeui.NativeWorkspaceTextureView
-import com.smlc666.lkmdbg.nativeui.toNativeWorkspaceSnapshot
 import com.smlc666.lkmdbg.shell.AppIconLoader
-import com.smlc666.lkmdbg.shell.BridgeStatusFormatter
 import com.smlc666.lkmdbg.shell.SessionAutomationController
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -31,6 +28,7 @@ class LkmdbgOverlayService : LifecycleService() {
     private lateinit var headerController: OverlayHeaderController
     private lateinit var gestureController: OverlayGestureController
     private lateinit var processPickerController: OverlayProcessPickerController
+    private lateinit var stateBinder: OverlayStateBinder
     private var rootView: FrameLayout? = null
     private var workspaceView: NativeWorkspaceTextureView? = null
     private var overlayJob: Job? = null
@@ -64,6 +62,12 @@ class LkmdbgOverlayService : LifecycleService() {
                     action()
                 }
             }
+            stateBinder = OverlayStateBinder(
+                context = this,
+                repository = repository,
+                headerController = headerController,
+                processPickerController = processPickerController,
+            )
             automation.requestWarmStart(lifecycleScope)
             automation.startStatusLoop(lifecycleScope)
             createOverlay()
@@ -157,17 +161,11 @@ class LkmdbgOverlayService : LifecycleService() {
         layoutParams = params
         windowManager.addView(root, params)
         overlayJob?.cancel()
-        overlayJob = lifecycleScope.launch {
-            repository.state.collect { state ->
-                workspaceView?.updateSnapshot(
-                    state.toNativeWorkspaceSnapshot(this@LkmdbgOverlayService, expanded),
-                )
-                headerController.renderStatus(
-                    BridgeStatusFormatter.formatOverlayStatus(this@LkmdbgOverlayService, state),
-                )
-                processPickerController.render(state)
-            }
-        }
+        overlayJob = stateBinder.bind(
+            scope = lifecycleScope,
+            expanded = expanded,
+            workspaceView = { workspaceView },
+        )
     }
     private fun updateExpandedState(nextExpanded: Boolean) {
         if (expanded == nextExpanded)
