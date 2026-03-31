@@ -113,12 +113,9 @@ val buildBundledAgentDebug by tasks.registering(BuildBundledAgentTask::class) {
         layout.projectDirectory.file("../agent/CMakeLists.txt"),
         layout.projectDirectory.file("../../include/lkmdbg_ioctl.h"),
     )
-    cmakeExecutablePath.set(sdkRoot.map { "$it/cmake/3.22.1/bin/cmake" })
-    ninjaExecutablePath.set(sdkRoot.map { "$it/cmake/3.22.1/bin/ninja" })
-    toolchainFilePath.set(
-        sdkRoot.map { "$it/ndk/$androidNdkVersion/build/cmake/android.toolchain.cmake" },
-    )
-    outputDir.set(bundledAgentAssetRoot.map { it.dir("agent/arm64-v8a") })
+    sdkRootPath.set(sdkRoot)
+    ndkVersion.set(androidNdkVersion)
+    outputDir.set(layout.buildDirectory.dir("generated/assets/bundledAgent/main/agent/arm64-v8a"))
     configureDir.set(layout.buildDirectory.dir("intermediates/bundledAgent/debug/arm64-v8a"))
     description = "Builds the bundled Android root agent and stages it into debug assets."
     group = "build"

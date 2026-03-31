@@ -31,13 +31,10 @@ abstract class BuildBundledAgentTask @Inject constructor(
     abstract val sourceFiles: ConfigurableFileCollection
 
     @get:Input
-    abstract val cmakeExecutablePath: Property<String>
+    abstract val sdkRootPath: Property<String>
 
     @get:Input
-    abstract val ninjaExecutablePath: Property<String>
-
-    @get:Input
-    abstract val toolchainFilePath: Property<String>
+    abstract val ndkVersion: Property<String>
 
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
@@ -47,13 +44,16 @@ abstract class BuildBundledAgentTask @Inject constructor(
 
     @TaskAction
     fun buildBundledAgent() {
-        val cmakeBin = File(cmakeExecutablePath.get())
-        val ninjaBin = File(ninjaExecutablePath.get())
-        val toolchainFile = File(toolchainFilePath.get())
+        val sdkRoot = sdkRootPath.get()
+        val cmakeBin = File("$sdkRoot/cmake/3.22.1/bin/cmake")
+        val ninjaBin = File("$sdkRoot/cmake/3.22.1/bin/ninja")
+        val toolchainFile = File("$sdkRoot/ndk/${ndkVersion.get()}/build/cmake/android.toolchain.cmake")
         val configureDirFile = configureDir.get().asFile
         val outputDirFile = outputDir.get().asFile
         val agentSourceDirFile = agentSourceDir.get().asFile
 
+        if (sdkRoot.isBlank())
+            throw GradleException("ANDROID_SDK_ROOT or ANDROID_HOME is required")
         if (!cmakeBin.exists())
             throw GradleException("cmake not found at ${cmakeBin.absolutePath}")
         if (!ninjaBin.exists())
