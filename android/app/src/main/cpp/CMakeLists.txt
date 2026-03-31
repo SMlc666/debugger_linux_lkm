@@ -32,12 +32,14 @@ add_library(lkmdbg_native SHARED
 	nativeui/egl_window_context.cpp
 	nativeui/imgui_controls.cpp
 	nativeui/imgui_workspace_renderer.cpp
+	nativeui/ui_format.cpp
 	nativeui/workspace_layout.cpp
 	nativeui/native_workspace_jni.cpp)
-target_compile_definitions(lkmdbg_native PRIVATE CAPSTONE_STATIC)
+target_compile_definitions(lkmdbg_native PRIVATE CAPSTONE_STATIC FMT_HEADER_ONLY)
 target_include_directories(lkmdbg_native PRIVATE
 	${KEYSTONE_DIR}/include
 	${CMAKE_CURRENT_SOURCE_DIR}
+	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/fmt/include
 	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui
 	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui/backends)
 target_sources(lkmdbg_native PRIVATE

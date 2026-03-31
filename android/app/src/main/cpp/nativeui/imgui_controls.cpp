@@ -18,7 +18,9 @@ ImVec4 mix(const ImVec4 &base, const ImVec4 &accent, float t)
 void muted_text(const char *text)
 {
 	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.79f, 0.84f, 1.0f));
-	ImGui::TextWrapped("%s", text);
+	ImGui::PushTextWrapPos(0.0f);
+	ImGui::TextUnformatted(text);
+	ImGui::PopTextWrapPos();
 	ImGui::PopStyleColor();
 }
 
@@ -40,15 +42,15 @@ bool RailButton(const char *label, bool selected, float density, float highlight
 	return pressed;
 }
 
-void MetricPill(const char *label, const char *value, float density, float accent_mix)
+void MetricPill(const MetricItem &item, float density)
 {
 	const ImVec4 base(0.09f, 0.18f, 0.22f, 1.0f);
 	const ImVec4 accent(0.23f, 0.71f, 0.76f, 0.92f);
 
-	ImGui::PushStyleColor(ImGuiCol_Button, mix(base, accent, accent_mix));
+	ImGui::PushStyleColor(ImGuiCol_Button, mix(base, accent, item.accent_mix));
 	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, accent);
 	ImGui::PushStyleColor(ImGuiCol_ButtonActive, accent);
-	ImGui::Button((std::string(label) + ": " + value).c_str(), ImVec2(118.0f * density, 26.0f * density));
+	ImGui::Button(item.text.c_str(), ImVec2(118.0f * density, 26.0f * density));
 	ImGui::PopStyleColor(3);
 }
 
@@ -97,38 +99,33 @@ int SectionRail(const char *title, const SectionItem *items, int count, float de
 
 void SectionHeader(const char *title, const char *subtitle)
 {
-	ImGui::Text("%s", title);
+	ImGui::TextUnformatted(title);
 	muted_text(subtitle);
 }
 
-void MetricStrip(const char *left_label, const char *left_value,
-		 const char *mid_label, const char *mid_value,
-		 const char *right_label, const char *right_value,
-		 float density, float left_mix, float mid_mix, float right_mix)
+void MetricStrip(const MetricItem &left, const MetricItem &mid,
+		 const MetricItem &right, float density)
 {
 	ImGui::BeginChild("metric_strip", ImVec2(0.0f, 74.0f * density), ImGuiChildFlags_Borders);
-	MetricPill(left_label, left_value, density, left_mix);
+	MetricPill(left, density);
 	ImGui::SameLine();
-	MetricPill(mid_label, mid_value, density, mid_mix);
+	MetricPill(mid, density);
 	ImGui::SameLine();
-	MetricPill(right_label, right_value, density, right_mix);
+	MetricPill(right, density);
 	ImGui::EndChild();
 }
 
-void StatLine(const char *label, const char *value)
+void StatLine(const StatItem &item)
 {
-	ImGui::BulletText("%s: %s", label, value);
-}
-
-void StatLineValue(const char *label, int value)
-{
-	ImGui::BulletText("%s: %d", label, value);
+	ImGui::Bullet();
+	ImGui::SameLine();
+	ImGui::TextUnformatted(item.text.c_str());
 }
 
 void InfoCard(const char *title, const char *body, float height)
 {
 	ImGui::BeginChild(title, ImVec2(0.0f, height), ImGuiChildFlags_Borders);
-	ImGui::Text("%s", title);
+	ImGui::TextUnformatted(title);
 	ImGui::Spacing();
 	muted_text(body);
 	ImGui::EndChild();

@@ -3,10 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdio>
+#include <string>
 
 #include "imgui.h"
 #include "nativeui/imgui_controls.h"
+#include "nativeui/ui_format.h"
 
 namespace lkmdbg::nativeui {
 
@@ -147,25 +148,24 @@ void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labe
 	}
 
 	ImGui::BeginChild("main_workspace", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None);
-	char workspace_title[192];
-	snprintf(workspace_title, sizeof(workspace_title), "%s · %s",
-		 labels.title.c_str(), SectionTitle(labels, selected_section_));
-	controls::SectionHeader(workspace_title,
+	const std::string workspace_title =
+		ui_format::JoinTitle(labels.title, SectionTitle(labels, selected_section_));
+	controls::SectionHeader(workspace_title.c_str(),
 				SectionSubtitle(labels, selected_section_));
 	ImGui::Spacing();
 
-	char hook_value[16];
-	snprintf(hook_value, sizeof(hook_value), "%d", state.hook_active);
-	controls::MetricStrip(labels.connected.c_str(),
-			      BoolText(labels, state.connected),
-			      labels.session_open.c_str(),
-			      BoolText(labels, state.session_open),
-			      labels.hook.c_str(),
-			      hook_value,
-			      density,
-			      status_mix_.value(),
-			      status_mix_.value(),
-			      hook_mix_.value());
+	const std::string connected_metric =
+		ui_format::KeyValue(labels.connected, BoolText(labels, state.connected));
+	const std::string session_metric =
+		ui_format::KeyValue(labels.session_open,
+				   BoolText(labels, state.session_open));
+	const std::string hook_metric =
+		ui_format::KeyValue(labels.hook, state.hook_active);
+	controls::MetricStrip(
+		controls::MetricItem{connected_metric, status_mix_.value()},
+		controls::MetricItem{session_metric, status_mix_.value()},
+		controls::MetricItem{hook_metric, hook_mix_.value()},
+		density);
 
 	ImGui::Spacing();
 	ImGui::BeginChild("section_body", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders);
@@ -175,12 +175,24 @@ void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labe
 
 	switch (selected_section_) {
 	case Section::Session:
-		controls::StatLine(labels.connected.c_str(),
-				   BoolText(labels, state.connected));
-		controls::StatLine(labels.session_open.c_str(),
-				   BoolText(labels, state.session_open));
-		controls::StatLineValue(labels.hook.c_str(), state.hook_active);
-		controls::StatLineValue(labels.process_count.c_str(), state.process_count);
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.connected,
+						    BoolText(labels, state.connected)),
+			});
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.session_open,
+						    BoolText(labels, state.session_open)),
+			});
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.hook, state.hook_active),
+			});
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.process_count, state.process_count),
+			});
 		ImGui::Spacing();
 		controls::InfoCard(labels.session.c_str(),
 				   SectionSubtitle(labels, selected_section_),
@@ -191,10 +203,19 @@ void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labe
 				   92.0f * density);
 		break;
 	case Section::Processes:
-		controls::StatLineValue(labels.process_count.c_str(), state.process_count);
-		controls::StatLineValue(labels.thread_count.c_str(), state.thread_count);
-		controls::StatLine(labels.session_open.c_str(),
-				   BoolText(labels, state.session_open));
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.process_count, state.process_count),
+			});
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.thread_count, state.thread_count),
+			});
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.session_open,
+						    BoolText(labels, state.session_open)),
+			});
 		ImGui::Spacing();
 		controls::InfoCard(labels.processes.c_str(),
 				   SectionSubtitle(labels, selected_section_),
@@ -205,10 +226,19 @@ void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labe
 				   92.0f * density);
 		break;
 	case Section::Memory:
-		controls::StatLine(labels.session_open.c_str(),
-				   BoolText(labels, state.session_open));
-		controls::StatLineValue(labels.process_count.c_str(), state.process_count);
-		controls::StatLineValue(labels.thread_count.c_str(), state.thread_count);
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.session_open,
+						    BoolText(labels, state.session_open)),
+			});
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.process_count, state.process_count),
+			});
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.thread_count, state.thread_count),
+			});
 		ImGui::Spacing();
 		controls::InfoCard(labels.memory.c_str(),
 				   SectionSubtitle(labels, selected_section_),
@@ -219,10 +249,19 @@ void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labe
 				   92.0f * density);
 		break;
 	case Section::Threads:
-		controls::StatLineValue(labels.thread_count.c_str(), state.thread_count);
-		controls::StatLineValue(labels.event_count.c_str(), state.event_count);
-		controls::StatLine(labels.session_open.c_str(),
-				   BoolText(labels, state.session_open));
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.thread_count, state.thread_count),
+			});
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.event_count, state.event_count),
+			});
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.session_open,
+						    BoolText(labels, state.session_open)),
+			});
 		ImGui::Spacing();
 		controls::InfoCard(labels.threads.c_str(),
 				   SectionSubtitle(labels, selected_section_),
@@ -234,10 +273,19 @@ void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labe
 		break;
 	case Section::Events:
 	default:
-		controls::StatLineValue(labels.event_count.c_str(), state.event_count);
-		controls::StatLineValue(labels.process_count.c_str(), state.process_count);
-		controls::StatLine(labels.session_open.c_str(),
-				   BoolText(labels, state.session_open));
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.event_count, state.event_count),
+			});
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.process_count, state.process_count),
+			});
+		controls::StatLine(
+			controls::StatItem{
+				ui_format::KeyValue(labels.session_open,
+						    BoolText(labels, state.session_open)),
+			});
 		ImGui::Spacing();
 		controls::InfoCard(labels.events.c_str(),
 				   SectionSubtitle(labels, selected_section_),
