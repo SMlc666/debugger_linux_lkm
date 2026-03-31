@@ -1,13 +1,11 @@
 #include "nativeui/workspace_layout.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
-#include <string>
 
 #include "imgui.h"
-#include "nativeui/imgui_controls.h"
-#include "nativeui/ui_format.h"
+#include "nativeui/ui_tree.h"
+#include "nativeui/workspace_view_model.h"
 
 namespace lkmdbg::nativeui {
 
@@ -15,61 +13,9 @@ namespace {
 
 constexpr int kSectionCount = 5;
 
-using Section = WorkspaceLayoutManager::Section;
-
-const char *BoolText(const WorkspaceLabels &labels, bool value)
+WorkspaceSectionId ToSectionId(WorkspaceLayoutManager::Section section)
 {
-	return value ? labels.bool_yes.c_str() : labels.bool_no.c_str();
-}
-
-const char *SectionTitle(const WorkspaceLabels &labels, Section section)
-{
-	switch (section) {
-	case Section::Session:
-		return labels.session.c_str();
-	case Section::Processes:
-		return labels.processes.c_str();
-	case Section::Memory:
-		return labels.memory.c_str();
-	case Section::Threads:
-		return labels.threads.c_str();
-	case Section::Events:
-	default:
-		return labels.events.c_str();
-	}
-}
-
-const char *SectionSubtitle(const WorkspaceLabels &labels, Section section)
-{
-	switch (section) {
-	case Section::Session:
-		return labels.session_subtitle.c_str();
-	case Section::Processes:
-		return labels.processes_subtitle.c_str();
-	case Section::Memory:
-		return labels.memory_subtitle.c_str();
-	case Section::Threads:
-		return labels.threads_subtitle.c_str();
-	case Section::Events:
-	default:
-		return labels.events_subtitle.c_str();
-	}
-}
-
-std::array<controls::SectionItem, kSectionCount>
-BuildSectionItems(const std::array<const char *, kSectionCount> &labels,
-		  const std::array<AnimatedFloat, kSectionCount> &highlights,
-		  Section selected)
-{
-	std::array<controls::SectionItem, kSectionCount> items{};
-	for (int i = 0; i < kSectionCount; ++i) {
-		items[i] = controls::SectionItem{
-			.label = labels[i],
-			.selected = i == static_cast<int>(selected),
-			.highlight_mix = highlights[i].value(),
-		};
-	}
-	return items;
+	return static_cast<WorkspaceSectionId>(static_cast<int>(section));
 }
 
 } // namespace
@@ -109,9 +55,9 @@ void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labe
 						     const WorkspaceState &state,
 						     float density, float delta_time)
 {
-	StepRailAnimations(delta_time);
-	status_mix_.StepToward(state.connected ? 1.0f : 0.2f, 7.5f, delta_time);
-	hook_mix_.StepToward(state.hook_active > 0 ? 1.0f : 0.1f, 7.5f, delta_time);
+	animation_manager_.Advance(state.expanded, state.connected, state.session_open,
+				   state.hook_active,
+				   static_cast<int>(selected_section_), delta_time);
 
 	ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
 	ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
@@ -120,193 +66,18 @@ void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labe
 				 ImGuiWindowFlags_NoSavedSettings;
 	ImGui::Begin("lkmdbg_workspace", nullptr, flags);
 
-	const std::array<const char *, 5> rail_labels = {
-		labels.session.c_str(),
-		labels.processes.c_str(),
-		labels.memory.c_str(),
-		labels.threads.c_str(),
-		labels.events.c_str(),
-	};
-
 	const ImVec2 display = ImGui::GetIO().DisplaySize;
 	const bool portrait = display.x < display.y;
-	const auto section_items =
-		BuildSectionItems(rail_labels, rail_highlights_, selected_section_);
-
-	if (portrait) {
-		const int pressed = controls::SectionTabs(section_items.data(), kSectionCount, density);
-		if (pressed >= 0)
-			selected_section_ = static_cast<Section>(pressed);
-		ImGui::Spacing();
-	} else {
-		const int pressed =
-			controls::SectionRail(labels.title.c_str(), section_items.data(),
-					      kSectionCount, density);
-		if (pressed >= 0)
-			selected_section_ = static_cast<Section>(pressed);
-		ImGui::SameLine();
+	const WorkspaceViewModel model = BuildWorkspaceViewModel(
+		labels, state, ToSectionId(selected_section_),
+		animation_manager_.Snapshot(), portrait, density);
+	const WorkspaceUiResult ui_result = RenderWorkspaceUi(model, density);
+	if (ui_result.selected_section >= 0 &&
+	    ui_result.selected_section < kSectionCount) {
+		selected_section_ = static_cast<Section>(ui_result.selected_section);
 	}
 
-	ImGui::BeginChild("main_workspace", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None);
-	const std::string workspace_title =
-		ui_format::JoinTitle(labels.title, SectionTitle(labels, selected_section_));
-	controls::SectionHeader(workspace_title.c_str(),
-				SectionSubtitle(labels, selected_section_));
-	ImGui::Spacing();
-
-	const std::string connected_metric =
-		ui_format::KeyValue(labels.connected, BoolText(labels, state.connected));
-	const std::string session_metric =
-		ui_format::KeyValue(labels.session_open,
-				   BoolText(labels, state.session_open));
-	const std::string hook_metric =
-		ui_format::KeyValue(labels.hook, state.hook_active);
-	controls::MetricStrip(
-		controls::MetricItem{connected_metric, status_mix_.value()},
-		controls::MetricItem{session_metric, status_mix_.value()},
-		controls::MetricItem{hook_metric, hook_mix_.value()},
-		density);
-
-	ImGui::Spacing();
-	ImGui::BeginChild("section_body", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders);
-	controls::SectionHeader(SectionTitle(labels, selected_section_),
-				SectionSubtitle(labels, selected_section_));
-	ImGui::Separator();
-
-	switch (selected_section_) {
-	case Section::Session:
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.connected,
-						    BoolText(labels, state.connected)),
-			});
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.session_open,
-						    BoolText(labels, state.session_open)),
-			});
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.hook, state.hook_active),
-			});
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.process_count, state.process_count),
-			});
-		ImGui::Spacing();
-		controls::InfoCard(labels.session.c_str(),
-				   SectionSubtitle(labels, selected_section_),
-				   92.0f * density);
-		ImGui::Spacing();
-		controls::InfoCard(labels.events.c_str(),
-				   SectionSubtitle(labels, Section::Events),
-				   92.0f * density);
-		break;
-	case Section::Processes:
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.process_count, state.process_count),
-			});
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.thread_count, state.thread_count),
-			});
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.session_open,
-						    BoolText(labels, state.session_open)),
-			});
-		ImGui::Spacing();
-		controls::InfoCard(labels.processes.c_str(),
-				   SectionSubtitle(labels, selected_section_),
-				   92.0f * density);
-		ImGui::Spacing();
-		controls::InfoCard(labels.session.c_str(),
-				   SectionSubtitle(labels, Section::Session),
-				   92.0f * density);
-		break;
-	case Section::Memory:
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.session_open,
-						    BoolText(labels, state.session_open)),
-			});
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.process_count, state.process_count),
-			});
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.thread_count, state.thread_count),
-			});
-		ImGui::Spacing();
-		controls::InfoCard(labels.memory.c_str(),
-				   SectionSubtitle(labels, selected_section_),
-				   96.0f * density);
-		ImGui::Spacing();
-		controls::InfoCard(labels.processes.c_str(),
-				   SectionSubtitle(labels, Section::Processes),
-				   92.0f * density);
-		break;
-	case Section::Threads:
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.thread_count, state.thread_count),
-			});
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.event_count, state.event_count),
-			});
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.session_open,
-						    BoolText(labels, state.session_open)),
-			});
-		ImGui::Spacing();
-		controls::InfoCard(labels.threads.c_str(),
-				   SectionSubtitle(labels, selected_section_),
-				   92.0f * density);
-		ImGui::Spacing();
-		controls::InfoCard(labels.memory.c_str(),
-				   SectionSubtitle(labels, Section::Memory),
-				   92.0f * density);
-		break;
-	case Section::Events:
-	default:
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.event_count, state.event_count),
-			});
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.process_count, state.process_count),
-			});
-		controls::StatLine(
-			controls::StatItem{
-				ui_format::KeyValue(labels.session_open,
-						    BoolText(labels, state.session_open)),
-			});
-		ImGui::Spacing();
-		controls::InfoCard(labels.events.c_str(),
-				   SectionSubtitle(labels, selected_section_),
-				   92.0f * density);
-		ImGui::Spacing();
-		controls::InfoCard(labels.session.c_str(),
-				   SectionSubtitle(labels, Section::Session),
-				   92.0f * density);
-		break;
-	}
-
-	ImGui::EndChild();
 	ImGui::End();
-}
-
-void WorkspaceLayoutManager::StepRailAnimations(float delta_time)
-{
-	for (int i = 0; i < static_cast<int>(rail_highlights_.size()); ++i) {
-		const float target = (i == static_cast<int>(selected_section_)) ? 1.0f : 0.0f;
-		rail_highlights_[i].StepToward(target, 8.0f, delta_time);
-	}
 }
 
 } // namespace lkmdbg::nativeui

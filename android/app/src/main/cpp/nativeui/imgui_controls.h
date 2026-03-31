@@ -7,7 +7,7 @@
 namespace lkmdbg::nativeui::controls {
 
 struct SectionItem {
-	const char *label;
+	std::string label;
 	bool selected;
 	float highlight_mix;
 };

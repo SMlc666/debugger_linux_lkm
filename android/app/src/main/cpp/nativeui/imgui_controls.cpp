@@ -73,7 +73,8 @@ int SectionTabs(const SectionItem *items, int count, float density)
 		if (i > 0)
 			ImGui::SameLine();
 		ImGui::PushID(i);
-		if (RailButton(items[i].label, items[i].selected, density, items[i].highlight_mix))
+		if (RailButton(items[i].label.c_str(), items[i].selected, density,
+			       items[i].highlight_mix))
 			pressed = i;
 		ImGui::PopID();
 	}
@@ -90,7 +91,8 @@ int SectionRail(const char *title, const SectionItem *items, int count, float de
 		ImGui::Separator();
 	}
 	for (int i = 0; i < count; ++i) {
-		if (RailButton(items[i].label, items[i].selected, density, items[i].highlight_mix))
+		if (RailButton(items[i].label.c_str(), items[i].selected, density,
+			       items[i].highlight_mix))
 			pressed = i;
 	}
 	ImGui::EndChild();

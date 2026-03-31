@@ -1,8 +1,6 @@
 #pragma once
 
-#include <array>
-
-#include "nativeui/ui_animation.h"
+#include "nativeui/workspace_animation.h"
 #include "nativeui/workspace_state.h"
 
 namespace lkmdbg::nativeui {
@@ -22,21 +20,11 @@ public:
 
 private:
 	void RenderCollapsedBall(float density, float time_seconds);
-	void RenderExpandedWorkspace(const WorkspaceLabels &labels,
-				     const WorkspaceState &state,
+	void RenderExpandedWorkspace(const WorkspaceLabels &labels, const WorkspaceState &state,
 				     float density, float delta_time);
-	void StepRailAnimations(float delta_time);
 
 	Section selected_section_ = Section::Session;
-	std::array<AnimatedFloat, 5> rail_highlights_ = {
-		AnimatedFloat(1.0f),
-		AnimatedFloat(0.0f),
-		AnimatedFloat(0.0f),
-		AnimatedFloat(0.0f),
-		AnimatedFloat(0.0f),
-	};
-	AnimatedFloat status_mix_{0.0f};
-	AnimatedFloat hook_mix_{0.0f};
+	WorkspaceAnimationManager animation_manager_{};
 };
 
 } // namespace lkmdbg::nativeui
