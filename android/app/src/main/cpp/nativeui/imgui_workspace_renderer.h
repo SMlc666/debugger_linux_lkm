@@ -22,8 +22,8 @@ public:
 
 	void SetSurface(ANativeWindow *window);
 	void Resize(int width, int height, float density);
-	void UpdateState(bool expanded, bool busy, bool connected, bool session_open,
-			 int hook_active, int target_pid, int target_tid,
+	void UpdateState(bool expanded, bool busy, int selected_section, bool connected,
+			 bool session_open, int hook_active, int target_pid, int target_tid,
 			 int event_queue_depth, int process_count, int thread_count,
 			 int event_count, int image_count, int vma_count,
 			 std::string session_primary, std::string session_secondary,
@@ -31,10 +31,18 @@ public:
 			 std::string memory_primary, std::string memory_secondary,
 			 std::string thread_primary, std::string thread_secondary,
 			 std::string event_primary, std::string event_secondary,
+			 std::vector<WorkspaceActionChip> process_action_chips,
+			 std::vector<WorkspaceListEntry> process_entries,
+			 std::vector<WorkspaceActionChip> memory_action_chips,
+			 std::vector<WorkspaceActionChip> memory_page_action_chips,
+			 std::vector<WorkspaceListEntry> memory_result_entries,
+			 std::vector<WorkspaceListEntry> memory_page_entries,
+			 std::vector<std::string> memory_scalar_entries,
 			 std::string footer_message);
 	void UpdateLabels(const WorkspaceLabels &labels);
 	void UpdateFontPaths(std::vector<std::string> font_paths);
 	void OnTouch(int action, float x, float y);
+	std::string ConsumeAction();
 	void Render();
 
 private:
@@ -53,6 +61,7 @@ private:
 	WorkspaceLabels labels_;
 	WorkspaceLayoutManager layout_;
 	std::vector<std::string> font_paths_;
+	std::vector<std::string> pending_actions_;
 	float density_ = 1.0f;
 	double last_frame_time_ = 0.0;
 	bool imgui_ready_ = false;

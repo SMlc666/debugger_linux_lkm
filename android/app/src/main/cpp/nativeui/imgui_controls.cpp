@@ -26,6 +26,19 @@ void muted_text(const char *text)
 
 } // namespace
 
+bool ActionChipButton(const char *label, bool active, float density)
+{
+	const ImVec4 cold(0.10f, 0.19f, 0.24f, 1.0f);
+	const ImVec4 warm(0.23f, 0.71f, 0.76f, 0.92f);
+	const ImVec4 fill = active ? warm : mix(cold, warm, 0.25f);
+	ImGui::PushStyleColor(ImGuiCol_Button, fill);
+	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, warm);
+	ImGui::PushStyleColor(ImGuiCol_ButtonActive, warm);
+	const bool pressed = ImGui::Button(label, ImVec2(-1.0f, 28.0f * density));
+	ImGui::PopStyleColor(3);
+	return pressed;
+}
+
 bool RailButton(const char *label, bool selected, float density, float highlight_mix)
 {
 	const ImVec4 base(0.10f, 0.19f, 0.24f, 1.0f);
@@ -54,15 +67,16 @@ void MetricPill(const MetricItem &item, float density)
 	ImGui::PopStyleColor(3);
 }
 
-void FillLaneButton(const char *label, bool hot, float density, float mix_value)
+bool FillLaneButton(const char *label, bool hot, float density, float mix_value)
 {
 	const ImVec4 cold(0.10f, 0.19f, 0.24f, 1.0f);
 	const ImVec4 warm(0.23f, 0.71f, 0.76f, 0.92f);
 	ImGui::PushStyleColor(ImGuiCol_Button, mix(cold, warm, hot ? mix_value : mix_value * 0.25f));
 	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, warm);
 	ImGui::PushStyleColor(ImGuiCol_ButtonActive, warm);
-	ImGui::Button(label, ImVec2(-1.0f, 24.0f * density));
+	const bool pressed = ImGui::Button(label, ImVec2(-1.0f, 24.0f * density));
 	ImGui::PopStyleColor(3);
+	return pressed;
 }
 
 int SectionTabs(const SectionItem *items, int count, float density)
@@ -131,6 +145,35 @@ void InfoCard(const char *title, const char *body, float height)
 	ImGui::Spacing();
 	muted_text(body);
 	ImGui::EndChild();
+}
+
+bool ListEntryCard(const char *title, const char *subtitle, const char *badge,
+		   bool selected, float density, float height)
+{
+	const ImVec4 cold(0.08f, 0.15f, 0.19f, 0.92f);
+	const ImVec4 warm(0.23f, 0.71f, 0.76f, selected ? 0.92f : 0.28f);
+	const ImVec4 fill = selected ? warm : cold;
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, fill);
+	ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.20f, 0.41f, 0.47f, 0.72f));
+	ImGui::BeginChild(title, ImVec2(0.0f, height), ImGuiChildFlags_Borders);
+	ImGui::PushID(title);
+	const bool pressed = ImGui::InvisibleButton("entry", ImVec2(-1.0f, height - 8.0f * density));
+	ImGui::SetCursorPosY(ImGui::GetCursorPosY() - (height - 8.0f * density));
+	ImGui::TextUnformatted(title);
+	if (badge && badge[0] != '\0') {
+		ImGui::SameLine();
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.61f, 0.92f, 0.88f, 1.0f));
+		ImGui::TextUnformatted(badge);
+		ImGui::PopStyleColor();
+	}
+	if (subtitle && subtitle[0] != '\0') {
+		ImGui::Spacing();
+		muted_text(subtitle);
+	}
+	ImGui::PopID();
+	ImGui::EndChild();
+	ImGui::PopStyleColor(2);
+	return pressed;
 }
 
 } // namespace lkmdbg::nativeui::controls

@@ -65,6 +65,23 @@ WorkspaceCardViewModel MakeCard(std::string title, std::string body, float heigh
 	return card;
 }
 
+WorkspaceActionViewModel MakeAction(const WorkspaceActionChip &chip)
+{
+	return WorkspaceActionViewModel{chip.action_key, chip.label, chip.active};
+}
+
+WorkspaceListItemViewModel MakeListItem(const WorkspaceListEntry &entry, float height)
+{
+	return WorkspaceListItemViewModel{
+		entry.action_key,
+		entry.title,
+		entry.subtitle,
+		entry.badge,
+		entry.selected,
+		height,
+	};
+}
+
 void AddSharedPanelCards(const WorkspaceLabels &labels, SectionId selected_section,
 			 const WorkspaceState &state, float density,
 			 WorkspacePanelViewModel &panel)
@@ -77,12 +94,25 @@ void AddSharedPanelCards(const WorkspaceLabels &labels, SectionId selected_secti
 					       92.0f * density));
 		break;
 	case SectionId::Processes:
+		for (const auto &chip : state.process_action_chips)
+			panel.primary_actions.push_back(MakeAction(chip));
+		for (const auto &entry : state.process_entries)
+			panel.list_entries.push_back(MakeListItem(entry, 72.0f * density));
 		panel.cards.push_back(MakeCard(labels.processes, state.process_primary,
 					       92.0f * density));
 		panel.cards.push_back(MakeCard(labels.session, state.process_secondary,
 					       92.0f * density));
 		break;
 	case SectionId::Memory:
+		for (const auto &chip : state.memory_action_chips)
+			panel.primary_actions.push_back(MakeAction(chip));
+		for (const auto &chip : state.memory_page_action_chips)
+			panel.secondary_actions.push_back(MakeAction(chip));
+		for (const auto &entry : state.memory_result_entries)
+			panel.list_entries.push_back(MakeListItem(entry, 74.0f * density));
+		for (const auto &entry : state.memory_page_entries)
+			panel.detail_entries.push_back(MakeListItem(entry, 66.0f * density));
+		panel.detail_lines = state.memory_scalar_entries;
 		panel.cards.push_back(MakeCard(labels.memory, state.memory_primary,
 					       96.0f * density));
 		panel.cards.push_back(MakeCard(labels.processes, state.memory_secondary,

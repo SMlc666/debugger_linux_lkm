@@ -34,6 +34,7 @@ data class MemorySearchUiState(
 data class SessionBridgeState(
     val busy: Boolean = false,
     val agentPath: String,
+    val workspaceSection: WorkspaceSection = WorkspaceSection.Memory,
     val targetPidInput: String = "",
     val hello: BridgeHelloReply? = null,
     val snapshot: BridgeStatusSnapshot = BridgeStatusSnapshot(
@@ -144,8 +145,19 @@ class SessionBridgeRepository(
         }
     }
 
+    fun updateWorkspaceSection(section: WorkspaceSection) {
+        _state.update { current -> current.copy(workspaceSection = section) }
+    }
+
     fun updateProcessFilter(filter: ProcessFilter) {
         _state.update { current -> current.copy(processFilter = filter) }
+    }
+
+    fun cycleProcessFilter() {
+        val values = ProcessFilter.entries
+        _state.update { current ->
+            current.copy(processFilter = values[(current.processFilter.ordinal + 1) % values.size])
+        }
     }
 
     fun updateMemorySearchQuery(value: String) {
@@ -192,6 +204,13 @@ class SessionBridgeRepository(
         }
     }
 
+    fun cycleMemorySearchValueType() {
+        val values = MemorySearchValueType.entries
+        updateMemorySearchValueType(
+            values[(state.value.memorySearch.valueType.ordinal + 1) % values.size],
+        )
+    }
+
     fun updateMemorySearchRefineMode(refineMode: MemorySearchRefineMode) {
         _state.update { current ->
             current.copy(
@@ -202,6 +221,13 @@ class SessionBridgeRepository(
                 ),
             )
         }
+    }
+
+    fun cycleMemorySearchRefineMode() {
+        val values = MemorySearchRefineMode.entries
+        updateMemorySearchRefineMode(
+            values[(state.value.memorySearch.refineMode.ordinal + 1) % values.size],
+        )
     }
 
     fun updateMemoryRegionPreset(regionPreset: MemoryRegionPreset) {
@@ -215,6 +241,13 @@ class SessionBridgeRepository(
                 ),
             )
         }
+    }
+
+    fun cycleMemoryRegionPreset() {
+        val values = MemoryRegionPreset.entries
+        updateMemoryRegionPreset(
+            values[(state.value.memorySearch.regionPreset.ordinal + 1) % values.size],
+        )
     }
 
     suspend fun connect() {

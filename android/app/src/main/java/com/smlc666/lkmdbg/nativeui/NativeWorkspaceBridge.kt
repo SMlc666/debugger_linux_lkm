@@ -15,6 +15,7 @@ internal object NativeWorkspaceBridge {
         handle: Long,
         expanded: Boolean,
         busy: Boolean,
+        selectedSection: Int,
         connected: Boolean,
         sessionOpen: Boolean,
         hookActive: Int,
@@ -36,6 +37,13 @@ internal object NativeWorkspaceBridge {
         threadSecondary: String,
         eventPrimary: String,
         eventSecondary: String,
+        processActionChips: Array<String>,
+        processEntries: Array<String>,
+        memoryActionChips: Array<String>,
+        memoryPageActionChips: Array<String>,
+        memoryResultEntries: Array<String>,
+        memoryPageEntries: Array<String>,
+        memoryScalarEntries: Array<String>,
         footerMessage: String,
     )
     external fun nativeUpdateStrings(
@@ -62,5 +70,6 @@ internal object NativeWorkspaceBridge {
     )
     external fun nativeUpdateFontPaths(handle: Long, fontPaths: Array<String>)
     external fun nativeOnTouch(handle: Long, action: Int, x: Float, y: Float)
+    external fun nativeConsumeAction(handle: Long): String?
     external fun nativeRender(handle: Long)
 }

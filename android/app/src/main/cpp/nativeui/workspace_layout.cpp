@@ -13,22 +13,17 @@ namespace {
 
 constexpr int kSectionCount = 5;
 
-WorkspaceSectionId ToSectionId(WorkspaceLayoutManager::Section section)
-{
-	return static_cast<WorkspaceSectionId>(static_cast<int>(section));
-}
-
 } // namespace
 
-void WorkspaceLayoutManager::Render(const WorkspaceLabels &labels,
-				    const WorkspaceState &state, float density,
-				    float delta_time, float time_seconds)
+std::string WorkspaceLayoutManager::Render(const WorkspaceLabels &labels,
+					   const WorkspaceState &state, float density,
+					   float delta_time, float time_seconds)
 {
 	if (!state.expanded) {
 		RenderCollapsedBall(density, time_seconds);
-		return;
+		return {};
 	}
-	RenderExpandedWorkspace(labels, state, density, delta_time);
+	return RenderExpandedWorkspace(labels, state, density, delta_time);
 }
 
 void WorkspaceLayoutManager::RenderCollapsedBall(float density, float time_seconds)
@@ -51,13 +46,15 @@ void WorkspaceLayoutManager::RenderCollapsedBall(float density, float time_secon
 			   IM_COL32(255, 255, 255, 255), "DBG");
 }
 
-void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labels,
-						     const WorkspaceState &state,
-						     float density, float delta_time)
+std::string WorkspaceLayoutManager::RenderExpandedWorkspace(
+	const WorkspaceLabels &labels, const WorkspaceState &state,
+	float density, float delta_time)
 {
+	const int clamped_section =
+		std::clamp(state.selected_section, 0, kSectionCount - 1);
 	animation_manager_.Advance(state.expanded, state.connected, state.session_open,
 				   state.hook_active,
-				   static_cast<int>(selected_section_), delta_time);
+				   clamped_section, delta_time);
 
 	ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
 	ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
@@ -69,15 +66,12 @@ void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labe
 	const ImVec2 display = ImGui::GetIO().DisplaySize;
 	const bool portrait = display.x < display.y;
 	const WorkspaceViewModel model = BuildWorkspaceViewModel(
-		labels, state, ToSectionId(selected_section_),
+		labels, state, static_cast<WorkspaceSectionId>(clamped_section),
 		animation_manager_.Snapshot(), portrait, density);
 	const WorkspaceUiResult ui_result = RenderWorkspaceUi(model, density);
-	if (ui_result.selected_section >= 0 &&
-	    ui_result.selected_section < kSectionCount) {
-		selected_section_ = static_cast<Section>(ui_result.selected_section);
-	}
 
 	ImGui::End();
+	return ui_result.action_key;
 }
 
 } // namespace lkmdbg::nativeui

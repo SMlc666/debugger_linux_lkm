@@ -12,6 +12,10 @@ internal class NativeWorkspaceTextureView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
 ) : TextureView(context, attrs), TextureView.SurfaceTextureListener {
+    companion object {
+        private const val FIELD_SEPARATOR = '\u001f'
+    }
+
     private var nativeHandle: Long = NativeWorkspaceBridge.nativeCreateRenderer()
     private var surface: Surface? = null
     private var density: Float = resources.displayMetrics.density
@@ -21,8 +25,10 @@ internal class NativeWorkspaceTextureView @JvmOverloads constructor(
         override fun doFrame(frameTimeNanos: Long) {
             if (!renderLoopRunning)
                 return
-            if (nativeHandle != 0L && surface != null && isAvailable)
+            if (nativeHandle != 0L && surface != null && isAvailable) {
                 NativeWorkspaceBridge.nativeRender(nativeHandle)
+                deliverPendingActions()
+            }
             Choreographer.getInstance().postFrameCallback(this)
         }
     }
@@ -32,6 +38,7 @@ internal class NativeWorkspaceTextureView @JvmOverloads constructor(
         connected = false,
         sessionOpen = false,
         hookActive = 0,
+        selectedSection = 2,
         targetPid = 0,
         targetTid = 0,
         eventQueueDepth = 0,
@@ -50,8 +57,16 @@ internal class NativeWorkspaceTextureView @JvmOverloads constructor(
         threadSecondary = "",
         eventPrimary = "",
         eventSecondary = "",
+        processActionChips = emptyList(),
+        processEntries = emptyList(),
+        memoryActionChips = emptyList(),
+        memoryPageActionChips = emptyList(),
+        memoryResultEntries = emptyList(),
+        memoryPageEntries = emptyList(),
+        memoryScalarEntries = emptyList(),
         footerMessage = "",
     )
+    private var onWorkspaceAction: ((NativeWorkspaceAction) -> Unit)? = null
 
     init {
         isOpaque = false
@@ -96,6 +111,7 @@ internal class NativeWorkspaceTextureView @JvmOverloads constructor(
             nativeHandle,
             snapshot.expanded,
             snapshot.busy,
+            snapshot.selectedSection,
             snapshot.connected,
             snapshot.sessionOpen,
             snapshot.hookActive,
@@ -117,17 +133,30 @@ internal class NativeWorkspaceTextureView @JvmOverloads constructor(
             snapshot.threadSecondary,
             snapshot.eventPrimary,
             snapshot.eventSecondary,
+            snapshot.processActionChips.map(::serializeActionChip).toTypedArray(),
+            snapshot.processEntries.map(::serializeEntry).toTypedArray(),
+            snapshot.memoryActionChips.map(::serializeActionChip).toTypedArray(),
+            snapshot.memoryPageActionChips.map(::serializeActionChip).toTypedArray(),
+            snapshot.memoryResultEntries.map(::serializeEntry).toTypedArray(),
+            snapshot.memoryPageEntries.map(::serializeEntry).toTypedArray(),
+            snapshot.memoryScalarEntries.toTypedArray(),
             snapshot.footerMessage,
         )
         requestRender()
+    }
+
+    fun setOnWorkspaceActionListener(listener: ((NativeWorkspaceAction) -> Unit)?) {
+        onWorkspaceAction = listener
     }
 
     fun requestRender() {
         if (nativeHandle == 0L || surface == null || !isAvailable)
             return
         post {
-            if (nativeHandle != 0L && surface != null && isAvailable)
+            if (nativeHandle != 0L && surface != null && isAvailable) {
                 NativeWorkspaceBridge.nativeRender(nativeHandle)
+                deliverPendingActions()
+            }
         }
     }
 
@@ -198,4 +227,29 @@ internal class NativeWorkspaceTextureView @JvmOverloads constructor(
         renderLoopRunning = false
         Choreographer.getInstance().removeFrameCallback(frameCallback)
     }
+
+    private fun deliverPendingActions() {
+        val listener = onWorkspaceAction ?: return
+        while (true) {
+            val raw = NativeWorkspaceBridge.nativeConsumeAction(nativeHandle) ?: break
+            val action = NativeWorkspaceAction.parse(raw) ?: continue
+            listener(action)
+        }
+    }
+
+    private fun serializeActionChip(chip: NativeWorkspaceActionChipSnapshot): String =
+        listOf(
+            chip.actionKey,
+            chip.label,
+            if (chip.active) "1" else "0",
+        ).joinToString(FIELD_SEPARATOR.toString())
+
+    private fun serializeEntry(entry: NativeWorkspaceListEntrySnapshot): String =
+        listOf(
+            entry.actionKey,
+            entry.title,
+            entry.subtitle,
+            entry.badge,
+            if (entry.selected) "1" else "0",
+        ).joinToString(FIELD_SEPARATOR.toString())
 }

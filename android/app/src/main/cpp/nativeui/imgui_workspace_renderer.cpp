@@ -32,8 +32,8 @@ void ImGuiWorkspaceRenderer::Resize(int width, int height, float density)
 	fonts_dirty_ = true;
 }
 
-void ImGuiWorkspaceRenderer::UpdateState(bool expanded, bool busy, bool connected,
-					  bool session_open, int hook_active,
+void ImGuiWorkspaceRenderer::UpdateState(bool expanded, bool busy, int selected_section,
+					  bool connected, bool session_open, int hook_active,
 					  int target_pid, int target_tid,
 					  int event_queue_depth, int process_count,
 					  int thread_count, int event_count,
@@ -48,11 +48,19 @@ void ImGuiWorkspaceRenderer::UpdateState(bool expanded, bool busy, bool connecte
 					  std::string thread_secondary,
 					  std::string event_primary,
 					  std::string event_secondary,
+					  std::vector<WorkspaceActionChip> process_action_chips,
+					  std::vector<WorkspaceListEntry> process_entries,
+					  std::vector<WorkspaceActionChip> memory_action_chips,
+					  std::vector<WorkspaceActionChip> memory_page_action_chips,
+					  std::vector<WorkspaceListEntry> memory_result_entries,
+					  std::vector<WorkspaceListEntry> memory_page_entries,
+					  std::vector<std::string> memory_scalar_entries,
 					  std::string footer_message)
 {
 	std::scoped_lock lock(mutex_);
 	state_.expanded = expanded;
 	state_.busy = busy;
+	state_.selected_section = selected_section;
 	state_.connected = connected;
 	state_.session_open = session_open;
 	state_.hook_active = hook_active;
@@ -74,6 +82,13 @@ void ImGuiWorkspaceRenderer::UpdateState(bool expanded, bool busy, bool connecte
 	state_.thread_secondary = std::move(thread_secondary);
 	state_.event_primary = std::move(event_primary);
 	state_.event_secondary = std::move(event_secondary);
+	state_.process_action_chips = std::move(process_action_chips);
+	state_.process_entries = std::move(process_entries);
+	state_.memory_action_chips = std::move(memory_action_chips);
+	state_.memory_page_action_chips = std::move(memory_page_action_chips);
+	state_.memory_result_entries = std::move(memory_result_entries);
+	state_.memory_page_entries = std::move(memory_page_entries);
+	state_.memory_scalar_entries = std::move(memory_scalar_entries);
 	state_.footer_message = std::move(footer_message);
 }
 
@@ -131,6 +146,16 @@ void ImGuiWorkspaceRenderer::Render()
 	glClear(GL_COLOR_BUFFER_BIT);
 	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 	egl_.SwapBuffers();
+}
+
+std::string ImGuiWorkspaceRenderer::ConsumeAction()
+{
+	std::scoped_lock lock(mutex_);
+	if (pending_actions_.empty())
+		return {};
+	std::string action = std::move(pending_actions_.front());
+	pending_actions_.erase(pending_actions_.begin());
+	return action;
 }
 
 double ImGuiWorkspaceRenderer::MonotonicSeconds()
@@ -243,8 +268,11 @@ void ImGuiWorkspaceRenderer::UpdateIoLocked()
 
 void ImGuiWorkspaceRenderer::BuildUiLocked()
 {
-	layout_.Render(labels_, state_, density_, ImGui::GetIO().DeltaTime,
-		      static_cast<float>(last_frame_time_));
+	const std::string action = layout_.Render(labels_, state_, density_,
+					    ImGui::GetIO().DeltaTime,
+					    static_cast<float>(last_frame_time_));
+	if (!action.empty())
+		pending_actions_.push_back(action);
 }
 
 } // namespace lkmdbg::nativeui

@@ -1,11 +1,13 @@
 #pragma once
 
+#include <string>
+
 #include "nativeui/workspace_view_model.h"
 
 namespace lkmdbg::nativeui {
 
 struct WorkspaceUiResult {
-	int selected_section = -1;
+	std::string action_key;
 };
 
 WorkspaceUiResult RenderWorkspaceUi(const WorkspaceViewModel &model, float density);

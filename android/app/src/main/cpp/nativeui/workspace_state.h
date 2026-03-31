@@ -1,8 +1,23 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace lkmdbg::nativeui {
+
+struct WorkspaceActionChip {
+	std::string action_key;
+	std::string label;
+	bool active = false;
+};
+
+struct WorkspaceListEntry {
+	std::string action_key;
+	std::string title;
+	std::string subtitle;
+	std::string badge;
+	bool selected = false;
+};
 
 struct WorkspaceLabels {
 	std::string title = "lkmdbg";
@@ -29,6 +44,7 @@ struct WorkspaceLabels {
 struct WorkspaceState {
 	bool expanded = false;
 	bool busy = false;
+	int selected_section = 2;
 	bool connected = false;
 	bool session_open = false;
 	int hook_active = 0;
@@ -50,6 +66,13 @@ struct WorkspaceState {
 	std::string thread_secondary;
 	std::string event_primary;
 	std::string event_secondary;
+	std::vector<WorkspaceActionChip> process_action_chips;
+	std::vector<WorkspaceListEntry> process_entries;
+	std::vector<WorkspaceActionChip> memory_action_chips;
+	std::vector<WorkspaceActionChip> memory_page_action_chips;
+	std::vector<WorkspaceListEntry> memory_result_entries;
+	std::vector<WorkspaceListEntry> memory_page_entries;
+	std::vector<std::string> memory_scalar_entries;
 	std::string footer_message;
 	float touch_x = 0.0f;
 	float touch_y = 0.0f;

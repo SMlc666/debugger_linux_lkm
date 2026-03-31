@@ -28,6 +28,8 @@ class LkmdbgOverlayService : LifecycleService() {
     private lateinit var headerController: OverlayHeaderController
     private lateinit var gestureController: OverlayGestureController
     private lateinit var processPickerController: OverlayProcessPickerController
+    private lateinit var memoryToolboxController: OverlayMemoryToolboxController
+    private lateinit var workspaceActionController: OverlayWorkspaceActionController
     private lateinit var stateBinder: OverlayStateBinder
     private var rootView: FrameLayout? = null
     private var workspaceView: NativeWorkspaceTextureView? = null
@@ -62,11 +64,27 @@ class LkmdbgOverlayService : LifecycleService() {
                     action()
                 }
             }
+            memoryToolboxController = OverlayMemoryToolboxController(
+                context = this,
+                repository = repository,
+            ) { action ->
+                lifecycleScope.launch {
+                    action()
+                }
+            }
+            workspaceActionController = OverlayWorkspaceActionController(
+                repository = repository,
+            ) { action ->
+                lifecycleScope.launch {
+                    action()
+                }
+            }
             stateBinder = OverlayStateBinder(
                 context = this,
                 repository = repository,
                 headerController = headerController,
                 processPickerController = processPickerController,
+                memoryToolboxController = memoryToolboxController,
             )
             automation.requestWarmStart(lifecycleScope)
             automation.startStatusLoop(lifecycleScope)
@@ -120,6 +138,9 @@ class LkmdbgOverlayService : LifecycleService() {
             ).apply {
                 topMargin = workspaceTopInset
             }
+            setOnWorkspaceActionListener { action ->
+                workspaceActionController.dispatch(action)
+            }
             setOnTouchListener { _: View, event: MotionEvent ->
                 if (expanded)
                     return@setOnTouchListener dispatchNativeTouch(event)
@@ -154,6 +175,7 @@ class LkmdbgOverlayService : LifecycleService() {
                 ),
             )
             root.addView(processPickerController.build(density))
+            root.addView(memoryToolboxController.build(density))
         }
 
         workspaceView = nativeView
@@ -193,6 +215,8 @@ class LkmdbgOverlayService : LifecycleService() {
             headerController.clear()
         if (::processPickerController.isInitialized)
             processPickerController.clear()
+        if (::memoryToolboxController.isInitialized)
+            memoryToolboxController.clear()
     }
 
     companion object {

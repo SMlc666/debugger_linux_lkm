@@ -24,10 +24,30 @@ struct WorkspaceCardViewModel {
 	float height = 0.0f;
 };
 
+struct WorkspaceActionViewModel {
+	std::string key;
+	std::string label;
+	bool active = false;
+};
+
+struct WorkspaceListItemViewModel {
+	std::string key;
+	std::string title;
+	std::string subtitle;
+	std::string badge;
+	bool selected = false;
+	float height = 0.0f;
+};
+
 struct WorkspacePanelViewModel {
 	std::string title;
 	std::string subtitle;
 	std::vector<controls::StatItem> stats;
+	std::vector<WorkspaceActionViewModel> primary_actions;
+	std::vector<WorkspaceActionViewModel> secondary_actions;
+	std::vector<WorkspaceListItemViewModel> list_entries;
+	std::vector<WorkspaceListItemViewModel> detail_entries;
+	std::vector<std::string> detail_lines;
 	std::vector<WorkspaceCardViewModel> cards;
 };
 

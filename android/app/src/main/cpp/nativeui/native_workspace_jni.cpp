@@ -5,13 +5,18 @@
 
 #include <string>
 #include <vector>
+#include <sstream>
 
 #include "nativeui/imgui_workspace_renderer.h"
 
 namespace {
 
 using lkmdbg::nativeui::ImGuiWorkspaceRenderer;
+using lkmdbg::nativeui::WorkspaceActionChip;
 using lkmdbg::nativeui::WorkspaceLabels;
+using lkmdbg::nativeui::WorkspaceListEntry;
+
+constexpr char kFieldSeparator = '\x1f';
 
 ImGuiWorkspaceRenderer *from_handle(jlong handle)
 {
@@ -26,6 +31,67 @@ std::string jstring_to_string(JNIEnv *env, jstring value)
 	std::string out = chars ? chars : "";
 	if (chars)
 		env->ReleaseStringUTFChars(value, chars);
+	return out;
+}
+
+std::vector<std::string> split_fields(const std::string &value)
+{
+	std::vector<std::string> fields;
+	std::stringstream stream(value);
+	std::string field;
+	while (std::getline(stream, field, kFieldSeparator))
+		fields.push_back(field);
+	return fields;
+}
+
+std::vector<WorkspaceActionChip> decode_action_chips(JNIEnv *env, jobjectArray items)
+{
+	std::vector<WorkspaceActionChip> out;
+	if (!items)
+		return out;
+	jsize count = env->GetArrayLength(items);
+	out.reserve(static_cast<size_t>(count));
+	for (jsize i = 0; i < count; ++i) {
+		jstring item = static_cast<jstring>(env->GetObjectArrayElement(items, i));
+		const auto fields = split_fields(jstring_to_string(env, item));
+		env->DeleteLocalRef(item);
+		if (fields.size() < 3)
+			continue;
+		out.push_back(WorkspaceActionChip{fields[0], fields[1], fields[2] == "1"});
+	}
+	return out;
+}
+
+std::vector<WorkspaceListEntry> decode_list_entries(JNIEnv *env, jobjectArray items)
+{
+	std::vector<WorkspaceListEntry> out;
+	if (!items)
+		return out;
+	jsize count = env->GetArrayLength(items);
+	out.reserve(static_cast<size_t>(count));
+	for (jsize i = 0; i < count; ++i) {
+		jstring item = static_cast<jstring>(env->GetObjectArrayElement(items, i));
+		const auto fields = split_fields(jstring_to_string(env, item));
+		env->DeleteLocalRef(item);
+		if (fields.size() < 5)
+			continue;
+		out.push_back(WorkspaceListEntry{fields[0], fields[1], fields[2], fields[3], fields[4] == "1"});
+	}
+	return out;
+}
+
+std::vector<std::string> decode_string_array(JNIEnv *env, jobjectArray items)
+{
+	std::vector<std::string> out;
+	if (!items)
+		return out;
+	jsize count = env->GetArrayLength(items);
+	out.reserve(static_cast<size_t>(count));
+	for (jsize i = 0; i < count; ++i) {
+		jstring item = static_cast<jstring>(env->GetObjectArrayElement(items, i));
+		out.push_back(jstring_to_string(env, item));
+		env->DeleteLocalRef(item);
+	}
 	return out;
 }
 
@@ -74,7 +140,7 @@ Java_com_smlc666_lkmdbg_nativeui_NativeWorkspaceBridge_nativeResize(
 extern "C" JNIEXPORT void JNICALL
 Java_com_smlc666_lkmdbg_nativeui_NativeWorkspaceBridge_nativeUpdateState(
 	JNIEnv *env, jobject, jlong handle, jboolean expanded, jboolean busy,
-	jboolean connected, jboolean session_open, jint hook_active,
+	jint selected_section, jboolean connected, jboolean session_open, jint hook_active,
 	jint target_pid, jint target_tid, jint event_queue_depth,
 	jint process_count, jint thread_count, jint event_count,
 	jint image_count, jint vma_count, jstring session_primary,
@@ -82,14 +148,19 @@ Java_com_smlc666_lkmdbg_nativeui_NativeWorkspaceBridge_nativeUpdateState(
 	jstring process_secondary, jstring memory_primary,
 	jstring memory_secondary, jstring thread_primary,
 	jstring thread_secondary, jstring event_primary,
-	jstring event_secondary, jstring footer_message)
+	jstring event_secondary, jobjectArray process_action_chips,
+	jobjectArray process_entries, jobjectArray memory_action_chips,
+	jobjectArray memory_page_action_chips, jobjectArray memory_result_entries,
+	jobjectArray memory_page_entries, jobjectArray memory_scalar_entries,
+	jstring footer_message)
 {
 	ImGuiWorkspaceRenderer *renderer = from_handle(handle);
 	if (!renderer)
 		return;
 	renderer->UpdateState(
-		expanded, busy, connected, session_open, hook_active, target_pid,
-		target_tid, event_queue_depth, process_count, thread_count, event_count,
+		expanded, busy, selected_section, connected, session_open,
+		hook_active, target_pid, target_tid, event_queue_depth,
+		process_count, thread_count, event_count,
 		image_count, vma_count, jstring_to_string(env, session_primary),
 		jstring_to_string(env, session_secondary),
 		jstring_to_string(env, process_primary),
@@ -100,6 +171,13 @@ Java_com_smlc666_lkmdbg_nativeui_NativeWorkspaceBridge_nativeUpdateState(
 		jstring_to_string(env, thread_secondary),
 		jstring_to_string(env, event_primary),
 		jstring_to_string(env, event_secondary),
+		decode_action_chips(env, process_action_chips),
+		decode_list_entries(env, process_entries),
+		decode_action_chips(env, memory_action_chips),
+		decode_action_chips(env, memory_page_action_chips),
+		decode_list_entries(env, memory_result_entries),
+		decode_list_entries(env, memory_page_entries),
+		decode_string_array(env, memory_scalar_entries),
 		jstring_to_string(env, footer_message));
 }
 
@@ -167,6 +245,19 @@ Java_com_smlc666_lkmdbg_nativeui_NativeWorkspaceBridge_nativeOnTouch(
 	if (!renderer)
 		return;
 	renderer->OnTouch(action, x, y);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_smlc666_lkmdbg_nativeui_NativeWorkspaceBridge_nativeConsumeAction(
+	JNIEnv *env, jobject, jlong handle)
+{
+	ImGuiWorkspaceRenderer *renderer = from_handle(handle);
+	if (!renderer)
+		return nullptr;
+	const std::string action = renderer->ConsumeAction();
+	if (action.empty())
+		return nullptr;
+	return env->NewStringUTF(action.c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL

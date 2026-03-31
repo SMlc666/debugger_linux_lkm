@@ -15,6 +15,7 @@ internal class OverlayStateBinder(
     private val repository: SessionBridgeRepository,
     private val headerController: OverlayHeaderController,
     private val processPickerController: OverlayProcessPickerController,
+    private val memoryToolboxController: OverlayMemoryToolboxController,
 ) {
     fun bind(
         scope: CoroutineScope,
@@ -30,6 +31,7 @@ internal class OverlayStateBinder(
                     BridgeStatusFormatter.formatOverlayStatus(context, state),
                 )
                 processPickerController.render(state)
+                memoryToolboxController.render(state)
             }
         }
 }
