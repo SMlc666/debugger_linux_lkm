@@ -3,15 +3,11 @@ package com.smlc666.lkmdbg.overlay
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
-import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.smlc666.lkmdbg.CrashLogger
@@ -26,17 +22,16 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.roundToInt
 
 class LkmdbgOverlayService : LifecycleService() {
     private lateinit var windowManager: WindowManager
     private lateinit var windowController: OverlayWindowController
     private lateinit var repository: SessionBridgeRepository
     private lateinit var automation: SessionAutomationController
+    private lateinit var headerController: OverlayHeaderController
     private lateinit var processPickerController: OverlayProcessPickerController
     private var rootView: FrameLayout? = null
     private var workspaceView: NativeWorkspaceTextureView? = null
-    private var statusView: TextView? = null
     private var overlayJob: Job? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var expanded = false
@@ -51,6 +46,11 @@ class LkmdbgOverlayService : LifecycleService() {
             automation = SessionAutomationController(repository)
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             windowController = OverlayWindowController(resources, windowManager)
+            headerController = OverlayHeaderController(this) { action ->
+                lifecycleScope.launch {
+                    action()
+                }
+            }
             processPickerController = OverlayProcessPickerController(
                 context = this,
                 repository = repository,
@@ -153,82 +153,26 @@ class LkmdbgOverlayService : LifecycleService() {
         }
         root.addView(nativeView)
 
-        var overlayStatusView: TextView? = null
         if (expanded) {
-            val header = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    Gravity.TOP,
-                )
-                setPadding((14f * density).toInt(), (14f * density).toInt(), (14f * density).toInt(), (14f * density).toInt())
-            }
-            val statusRow = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                )
-            }
-            overlayStatusView = TextView(this).apply {
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                textSize = 13f
-            }
-            val collapseButton = Button(this).apply {
-                text = getString(com.smlc666.lkmdbg.R.string.overlay_action_collapse)
-                setOnClickListener { updateExpandedState(false) }
-            }
-            val closeButton = Button(this).apply {
-                text = getString(com.smlc666.lkmdbg.R.string.overlay_action_close)
-                setOnClickListener { stopSelf() }
-            }
-            statusRow.addView(overlayStatusView)
-            statusRow.addView(collapseButton)
-            statusRow.addView(closeButton)
-            val actionRowTop = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                )
-                setPadding(0, (8f * density).toInt(), 0, 0)
-            }
-            val actionRowBottom = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                )
-                setPadding(0, (6f * density).toInt(), 0, 0)
-            }
-            actionRowTop.addView(makeActionButton(com.smlc666.lkmdbg.R.string.session_action_connect) {
-                repository.connect()
-            })
-            actionRowTop.addView(makeActionButton(com.smlc666.lkmdbg.R.string.session_action_open_session) {
-                repository.openSession()
-            })
-            actionRowTop.addView(makeActionButton(com.smlc666.lkmdbg.R.string.session_action_refresh) {
-                repository.refreshStatus()
-            })
-            actionRowBottom.addView(makeActionButton(com.smlc666.lkmdbg.R.string.process_action_refresh) {
-                repository.refreshProcesses()
-            })
-            actionRowBottom.addView(makeActionButton(com.smlc666.lkmdbg.R.string.process_action_attach) {
-                processPickerController.toggle(repository.state.value)
-            })
-            actionRowBottom.addView(makeActionButton(com.smlc666.lkmdbg.R.string.event_action_refresh) {
-                repository.refreshEvents(timeoutMs = 0, maxEvents = 16)
-            })
-            header.addView(statusRow)
-            header.addView(actionRowTop)
-            header.addView(actionRowBottom)
-            root.addView(header)
+            root.addView(
+                headerController.build(
+                    density = density,
+                    onCollapse = { updateExpandedState(false) },
+                    onClose = { stopSelf() },
+                    onConnect = { repository.connect() },
+                    onOpenSession = { repository.openSession() },
+                    onRefreshStatus = { repository.refreshStatus() },
+                    onRefreshProcesses = { repository.refreshProcesses() },
+                    onToggleProcessPicker = {
+                        processPickerController.toggle(repository.state.value)
+                    },
+                    onRefreshEvents = { repository.refreshEvents(timeoutMs = 0, maxEvents = 16) },
+                ),
+            )
             root.addView(processPickerController.build(density))
         }
 
         workspaceView = nativeView
-        statusView = overlayStatusView
         rootView = root
         layoutParams = params
         windowManager.addView(root, params)
@@ -238,29 +182,13 @@ class LkmdbgOverlayService : LifecycleService() {
                 workspaceView?.updateSnapshot(
                     state.toNativeWorkspaceSnapshot(this@LkmdbgOverlayService, expanded),
                 )
-                statusView?.text = BridgeStatusFormatter.formatOverlayStatus(this@LkmdbgOverlayService, state)
+                headerController.renderStatus(
+                    BridgeStatusFormatter.formatOverlayStatus(this@LkmdbgOverlayService, state),
+                )
                 processPickerController.render(state)
             }
         }
     }
-
-    private fun makeActionButton(textRes: Int, action: suspend () -> Unit): Button =
-        Button(this).apply {
-            text = getString(textRes)
-            textSize = 12f
-            layoutParams = LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                1f,
-            ).apply {
-                marginEnd = (6f * resources.displayMetrics.density).roundToInt()
-            }
-            setOnClickListener {
-                lifecycleScope.launch {
-                    action()
-                }
-            }
-        }
 
     private var lastTouchRawX = 0f
     private var lastTouchRawY = 0f
@@ -276,7 +204,6 @@ class LkmdbgOverlayService : LifecycleService() {
         }
         rootView = null
         workspaceView = null
-        statusView = null
         layoutParams = null
         mountOverlay(expanded)
     }
@@ -288,8 +215,9 @@ class LkmdbgOverlayService : LifecycleService() {
         }
         rootView = null
         workspaceView = null
-        statusView = null
         layoutParams = null
+        if (::headerController.isInitialized)
+            headerController.clear()
         if (::processPickerController.isInitialized)
             processPickerController.clear()
     }
