@@ -88,8 +88,11 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_smlc666_lkmdbg_nativeui_NativeWorkspaceBridge_nativeUpdateStrings(
 	JNIEnv *env, jobject, jlong handle, jstring title, jstring session,
 	jstring processes, jstring memory, jstring threads, jstring events,
-	jstring connected, jstring session_open, jstring hook,
-	jstring process_count, jstring thread_count, jstring event_count)
+	jstring session_subtitle, jstring processes_subtitle,
+	jstring memory_subtitle, jstring threads_subtitle,
+	jstring events_subtitle, jstring connected, jstring session_open,
+	jstring hook, jstring process_count, jstring thread_count,
+	jstring event_count, jstring bool_yes, jstring bool_no)
 {
 	ImGuiWorkspaceRenderer *renderer = from_handle(handle);
 	WorkspaceLabels labels;
@@ -102,12 +105,19 @@ Java_com_smlc666_lkmdbg_nativeui_NativeWorkspaceBridge_nativeUpdateStrings(
 	labels.memory = jstring_to_string(env, memory);
 	labels.threads = jstring_to_string(env, threads);
 	labels.events = jstring_to_string(env, events);
+	labels.session_subtitle = jstring_to_string(env, session_subtitle);
+	labels.processes_subtitle = jstring_to_string(env, processes_subtitle);
+	labels.memory_subtitle = jstring_to_string(env, memory_subtitle);
+	labels.threads_subtitle = jstring_to_string(env, threads_subtitle);
+	labels.events_subtitle = jstring_to_string(env, events_subtitle);
 	labels.connected = jstring_to_string(env, connected);
 	labels.session_open = jstring_to_string(env, session_open);
 	labels.hook = jstring_to_string(env, hook);
 	labels.process_count = jstring_to_string(env, process_count);
 	labels.thread_count = jstring_to_string(env, thread_count);
 	labels.event_count = jstring_to_string(env, event_count);
+	labels.bool_yes = jstring_to_string(env, bool_yes);
+	labels.bool_no = jstring_to_string(env, bool_no);
 	renderer->UpdateLabels(labels);
 }
 

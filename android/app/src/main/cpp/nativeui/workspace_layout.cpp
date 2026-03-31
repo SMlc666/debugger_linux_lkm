@@ -10,6 +10,69 @@
 
 namespace lkmdbg::nativeui {
 
+namespace {
+
+constexpr int kSectionCount = 5;
+
+using Section = WorkspaceLayoutManager::Section;
+
+const char *BoolText(const WorkspaceLabels &labels, bool value)
+{
+	return value ? labels.bool_yes.c_str() : labels.bool_no.c_str();
+}
+
+const char *SectionTitle(const WorkspaceLabels &labels, Section section)
+{
+	switch (section) {
+	case Section::Session:
+		return labels.session.c_str();
+	case Section::Processes:
+		return labels.processes.c_str();
+	case Section::Memory:
+		return labels.memory.c_str();
+	case Section::Threads:
+		return labels.threads.c_str();
+	case Section::Events:
+	default:
+		return labels.events.c_str();
+	}
+}
+
+const char *SectionSubtitle(const WorkspaceLabels &labels, Section section)
+{
+	switch (section) {
+	case Section::Session:
+		return labels.session_subtitle.c_str();
+	case Section::Processes:
+		return labels.processes_subtitle.c_str();
+	case Section::Memory:
+		return labels.memory_subtitle.c_str();
+	case Section::Threads:
+		return labels.threads_subtitle.c_str();
+	case Section::Events:
+	default:
+		return labels.events_subtitle.c_str();
+	}
+}
+
+std::array<controls::SectionItem, kSectionCount>
+BuildSectionItems(const std::array<const char *, kSectionCount> &labels,
+		  const std::array<AnimatedFloat, kSectionCount> &highlights,
+		  Section selected)
+{
+	std::array<controls::SectionItem, kSectionCount> items{};
+	for (int i = 0; i < kSectionCount; ++i) {
+		items[i] = controls::SectionItem{
+			.label = labels[i],
+			.selected = i == static_cast<int>(selected),
+			.highlight_mix = highlights[i].value(),
+		};
+	}
+	return items;
+}
+
+} // namespace
+
 void WorkspaceLayoutManager::Render(const WorkspaceLabels &labels,
 				    const WorkspaceState &state, float density,
 				    float delta_time, float time_seconds)
@@ -48,9 +111,6 @@ void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labe
 	StepRailAnimations(delta_time);
 	status_mix_.StepToward(state.connected ? 1.0f : 0.2f, 7.5f, delta_time);
 	hook_mix_.StepToward(state.hook_active > 0 ? 1.0f : 0.1f, 7.5f, delta_time);
-	for (int i = 0; i < static_cast<int>(lane_highlights_.size()); ++i) {
-		lane_highlights_[i].StepToward(i < state.process_count ? 1.0f : 0.0f, 9.0f, delta_time);
-	}
 
 	ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
 	ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
@@ -58,11 +118,6 @@ void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labe
 				 ImGuiWindowFlags_NoMove |
 				 ImGuiWindowFlags_NoSavedSettings;
 	ImGui::Begin("lkmdbg_workspace", nullptr, flags);
-
-	const float rail_width = 132.0f * density;
-	ImGui::BeginChild("left_rail", ImVec2(rail_width, 0.0f), ImGuiChildFlags_Borders);
-	ImGui::TextUnformatted(labels.title.c_str());
-	ImGui::Separator();
 
 	const std::array<const char *, 5> rail_labels = {
 		labels.session.c_str(),
@@ -72,49 +127,128 @@ void WorkspaceLayoutManager::RenderExpandedWorkspace(const WorkspaceLabels &labe
 		labels.events.c_str(),
 	};
 
-	for (int i = 0; i < static_cast<int>(rail_labels.size()); ++i) {
-		if (controls::RailButton(rail_labels[i],
-					 i == static_cast<int>(selected_section_),
-					 density,
-					 rail_highlights_[i].value())) {
-			selected_section_ = static_cast<Section>(i);
-		}
-	}
-	ImGui::EndChild();
+	const ImVec2 display = ImGui::GetIO().DisplaySize;
+	const bool portrait = display.x < display.y;
+	const auto section_items =
+		BuildSectionItems(rail_labels, rail_highlights_, selected_section_);
 
-	ImGui::SameLine();
+	if (portrait) {
+		const int pressed = controls::SectionTabs(section_items.data(), kSectionCount, density);
+		if (pressed >= 0)
+			selected_section_ = static_cast<Section>(pressed);
+		ImGui::Spacing();
+	} else {
+		const int pressed =
+			controls::SectionRail(labels.title.c_str(), section_items.data(),
+					      kSectionCount, density);
+		if (pressed >= 0)
+			selected_section_ = static_cast<Section>(pressed);
+		ImGui::SameLine();
+	}
+
 	ImGui::BeginChild("main_workspace", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None);
-	ImGui::Text("%s", labels.title.c_str());
+	char workspace_title[192];
+	snprintf(workspace_title, sizeof(workspace_title), "%s · %s",
+		 labels.title.c_str(), SectionTitle(labels, selected_section_));
+	controls::SectionHeader(workspace_title,
+				SectionSubtitle(labels, selected_section_));
 	ImGui::Spacing();
 
-	ImGui::BeginChild("summary_row", ImVec2(0.0f, 118.0f * density), ImGuiChildFlags_Borders);
-	controls::MetricPill(labels.connected.c_str(), state.connected ? "on" : "off",
-			     density, status_mix_.value());
-	ImGui::SameLine();
-	controls::MetricPill(labels.session_open.c_str(), state.session_open ? "on" : "off",
-			     density, status_mix_.value());
-	ImGui::SameLine();
 	char hook_value[16];
 	snprintf(hook_value, sizeof(hook_value), "%d", state.hook_active);
-	controls::MetricPill(labels.hook.c_str(), hook_value, density, hook_mix_.value());
-	ImGui::EndChild();
+	controls::MetricStrip(labels.connected.c_str(),
+			      BoolText(labels, state.connected),
+			      labels.session_open.c_str(),
+			      BoolText(labels, state.session_open),
+			      labels.hook.c_str(),
+			      hook_value,
+			      density,
+			      status_mix_.value(),
+			      status_mix_.value(),
+			      hook_mix_.value());
 
 	ImGui::Spacing();
-	ImGui::BeginChild("counts_row", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders);
-	ImGui::Text("%s", rail_labels[static_cast<int>(selected_section_)]);
+	ImGui::BeginChild("section_body", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders);
+	controls::SectionHeader(SectionTitle(labels, selected_section_),
+				SectionSubtitle(labels, selected_section_));
 	ImGui::Separator();
-	ImGui::BulletText("%s: %d", labels.process_count.c_str(), state.process_count);
-	ImGui::BulletText("%s: %d", labels.thread_count.c_str(), state.thread_count);
-	ImGui::BulletText("%s: %d", labels.event_count.c_str(), state.event_count);
-	ImGui::Spacing();
-	for (int i = 0; i < static_cast<int>(lane_highlights_.size()); ++i) {
-		const bool hot = i < state.process_count;
-		ImGui::PushID(i);
-		controls::FillLaneButton(hot ? "process lane" : "empty lane",
-					 hot, density, lane_highlights_[i].value());
-		ImGui::PopID();
+
+	switch (selected_section_) {
+	case Section::Session:
+		controls::StatLine(labels.connected.c_str(),
+				   BoolText(labels, state.connected));
+		controls::StatLine(labels.session_open.c_str(),
+				   BoolText(labels, state.session_open));
+		controls::StatLineValue(labels.hook.c_str(), state.hook_active);
+		controls::StatLineValue(labels.process_count.c_str(), state.process_count);
+		ImGui::Spacing();
+		controls::InfoCard(labels.session.c_str(),
+				   SectionSubtitle(labels, selected_section_),
+				   92.0f * density);
+		ImGui::Spacing();
+		controls::InfoCard(labels.events.c_str(),
+				   SectionSubtitle(labels, Section::Events),
+				   92.0f * density);
+		break;
+	case Section::Processes:
+		controls::StatLineValue(labels.process_count.c_str(), state.process_count);
+		controls::StatLineValue(labels.thread_count.c_str(), state.thread_count);
+		controls::StatLine(labels.session_open.c_str(),
+				   BoolText(labels, state.session_open));
+		ImGui::Spacing();
+		controls::InfoCard(labels.processes.c_str(),
+				   SectionSubtitle(labels, selected_section_),
+				   92.0f * density);
+		ImGui::Spacing();
+		controls::InfoCard(labels.session.c_str(),
+				   SectionSubtitle(labels, Section::Session),
+				   92.0f * density);
+		break;
+	case Section::Memory:
+		controls::StatLine(labels.session_open.c_str(),
+				   BoolText(labels, state.session_open));
+		controls::StatLineValue(labels.process_count.c_str(), state.process_count);
+		controls::StatLineValue(labels.thread_count.c_str(), state.thread_count);
+		ImGui::Spacing();
+		controls::InfoCard(labels.memory.c_str(),
+				   SectionSubtitle(labels, selected_section_),
+				   96.0f * density);
+		ImGui::Spacing();
+		controls::InfoCard(labels.processes.c_str(),
+				   SectionSubtitle(labels, Section::Processes),
+				   92.0f * density);
+		break;
+	case Section::Threads:
+		controls::StatLineValue(labels.thread_count.c_str(), state.thread_count);
+		controls::StatLineValue(labels.event_count.c_str(), state.event_count);
+		controls::StatLine(labels.session_open.c_str(),
+				   BoolText(labels, state.session_open));
+		ImGui::Spacing();
+		controls::InfoCard(labels.threads.c_str(),
+				   SectionSubtitle(labels, selected_section_),
+				   92.0f * density);
+		ImGui::Spacing();
+		controls::InfoCard(labels.memory.c_str(),
+				   SectionSubtitle(labels, Section::Memory),
+				   92.0f * density);
+		break;
+	case Section::Events:
+	default:
+		controls::StatLineValue(labels.event_count.c_str(), state.event_count);
+		controls::StatLineValue(labels.process_count.c_str(), state.process_count);
+		controls::StatLine(labels.session_open.c_str(),
+				   BoolText(labels, state.session_open));
+		ImGui::Spacing();
+		controls::InfoCard(labels.events.c_str(),
+				   SectionSubtitle(labels, selected_section_),
+				   92.0f * density);
+		ImGui::Spacing();
+		controls::InfoCard(labels.session.c_str(),
+				   SectionSubtitle(labels, Section::Session),
+				   92.0f * density);
+		break;
 	}
-	ImGui::EndChild();
+
 	ImGui::EndChild();
 	ImGui::End();
 }

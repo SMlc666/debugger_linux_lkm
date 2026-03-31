@@ -110,11 +110,14 @@ class LkmdbgOverlayService : LifecycleService() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
             )
         }
+        val workspaceTopInset = if (expanded) expandedWorkspaceTopInsetPx() else 0
         val nativeView = NativeWorkspaceTextureView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
-            )
+            ).apply {
+                topMargin = workspaceTopInset
+            }
             setOnTouchListener { _: View, event: MotionEvent ->
                 if (expanded)
                     return@setOnTouchListener dispatchNativeTouch(event)
@@ -514,6 +517,17 @@ class LkmdbgOverlayService : LifecycleService() {
 
     private fun expandedWindowFlags(): Int =
         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+
+    private fun expandedWorkspaceTopInsetPx(): Int {
+        val density = resources.displayMetrics.density
+        val metrics = resources.displayMetrics
+        val portrait = metrics.heightPixels >= metrics.widthPixels
+        return if (portrait) {
+            (132f * density).roundToInt()
+        } else {
+            (92f * density).roundToInt()
+        }
+    }
 
     private fun removeOverlay() {
         overlayJob?.cancel()
