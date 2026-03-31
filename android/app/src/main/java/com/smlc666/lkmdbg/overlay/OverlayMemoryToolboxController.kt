@@ -67,9 +67,9 @@ internal class OverlayMemoryToolboxController(
                 Gravity.END,
             ).apply {
                 marginStart = (12f * density).roundToInt()
-                marginTop = (8f * density).roundToInt()
+                topMargin = (8f * density).roundToInt()
                 marginEnd = (8f * density).roundToInt()
-                marginBottom = (8f * density).roundToInt()
+                bottomMargin = (8f * density).roundToInt()
             }
             setPadding(
                 (12f * density).roundToInt(),
