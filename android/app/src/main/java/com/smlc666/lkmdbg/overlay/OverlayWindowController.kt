@@ -35,17 +35,6 @@ internal class OverlayWindowController(
             y = if (expanded) 0 else collapsedY
         }
 
-    fun expandedWorkspaceTopInsetPx(): Int {
-        val density = resources.displayMetrics.density
-        val metrics = resources.displayMetrics
-        val portrait = metrics.heightPixels >= metrics.widthPixels
-        return if (portrait) {
-            (132f * density).roundToInt()
-        } else {
-            (92f * density).roundToInt()
-        }
-    }
-
     fun moveCollapsed(view: View, params: WindowManager.LayoutParams, deltaX: Float, deltaY: Float) {
         collapsedX += deltaX.roundToInt()
         collapsedY += deltaY.roundToInt()

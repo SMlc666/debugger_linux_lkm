@@ -36,4 +36,20 @@ class NativeWorkspaceActionTest {
     fun ignoresUnknownAction() {
         assertTrue(NativeWorkspaceAction.parse("nope") == null)
     }
+
+    @Test
+    fun parsesMemoryUiActions() {
+        assertEquals(
+            NativeWorkspaceAction.ToggleMemoryTools,
+            NativeWorkspaceAction.parse("memory:toggle_tools"),
+        )
+        assertEquals(
+            NativeWorkspaceAction.ShowMemoryResults,
+            NativeWorkspaceAction.parse("memory:show_results"),
+        )
+        assertEquals(
+            NativeWorkspaceAction.ShowMemoryPage,
+            NativeWorkspaceAction.parse("memory:show_page"),
+        )
+    }
 }

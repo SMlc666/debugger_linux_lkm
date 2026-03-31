@@ -14,6 +14,9 @@ internal sealed class NativeWorkspaceAction {
     data object CycleMemoryType : NativeWorkspaceAction()
     data object CycleMemoryMode : NativeWorkspaceAction()
     data object CycleMemoryRegion : NativeWorkspaceAction()
+    data object ToggleMemoryTools : NativeWorkspaceAction()
+    data object ShowMemoryResults : NativeWorkspaceAction()
+    data object ShowMemoryPage : NativeWorkspaceAction()
     data object PreviousMemoryPage : NativeWorkspaceAction()
     data object NextMemoryPage : NativeWorkspaceAction()
     data object PreviewSelectedPc : NativeWorkspaceAction()
@@ -38,6 +41,9 @@ internal sealed class NativeWorkspaceAction {
                 raw == "memory:type_next" -> CycleMemoryType
                 raw == "memory:mode_next" -> CycleMemoryMode
                 raw == "memory:region_next" -> CycleMemoryRegion
+                raw == "memory:toggle_tools" -> ToggleMemoryTools
+                raw == "memory:show_results" -> ShowMemoryResults
+                raw == "memory:show_page" -> ShowMemoryPage
                 raw == "memory:prev_page" -> PreviousMemoryPage
                 raw == "memory:next_page" -> NextMemoryPage
                 raw == "memory:preview_pc" -> PreviewSelectedPc

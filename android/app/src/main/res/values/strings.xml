@@ -108,6 +108,15 @@
     <string name="memory_action_ranges">Ranges</string>
     <string name="memory_action_refresh_images">Refresh images</string>
     <string name="memory_action_preview_pc">Preview selected PC</string>
+    <string name="memory_action_tools">Tools</string>
+    <string name="memory_action_tools_summary">Tools · %1$s</string>
+    <string name="memory_action_show_results_count">Results · %1$d</string>
+    <string name="memory_action_show_page">Page</string>
+    <string name="memory_tools_title">Memory tools</string>
+    <string name="memory_tools_close">Close</string>
+    <string name="memory_tools_section_search">Search</string>
+    <string name="memory_tools_section_jump">Navigation</string>
+    <string name="memory_tools_section_write">Patch</string>
     <string name="memory_error_no_target">No active target. Attach a process first.</string>
     <string name="memory_error_no_pc">No selected PC yet. Refresh threads first.</string>
     <string name="memory_error_invalid_address">Enter a valid address first.</string>

@@ -1,13 +1,14 @@
 package com.smlc666.lkmdbg.overlay
 
 import android.content.Context
-import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
-import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.google.android.material.button.MaterialButton
 import com.smlc666.lkmdbg.R
+import com.smlc666.lkmdbg.data.SessionBridgeState
+import com.smlc666.lkmdbg.data.WorkspaceSection
 import com.smlc666.lkmdbg.ui.theme.LkmdbgButtonTone
 import com.smlc666.lkmdbg.ui.theme.loadLkmdbgColorRoles
 import com.smlc666.lkmdbg.ui.theme.styleBody
@@ -21,6 +22,7 @@ internal class OverlayHeaderController(
 ) {
     private val roles = loadLkmdbgColorRoles(context)
     private var statusView: TextView? = null
+    private var memoryToolsButton: MaterialButton? = null
 
     fun build(
         density: Float,
@@ -31,22 +33,22 @@ internal class OverlayHeaderController(
         onRefreshStatus: suspend () -> Unit,
         onRefreshProcesses: suspend () -> Unit,
         onToggleProcessPicker: () -> Unit,
+        onToggleMemoryTools: () -> Unit,
         onRefreshEvents: suspend () -> Unit,
     ): LinearLayout {
         val header = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = FrameLayout.LayoutParams(
+            layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP,
             )
             setPadding(
-                (14f * density).toInt(),
-                (14f * density).toInt(),
-                (14f * density).toInt(),
-                (14f * density).toInt(),
+                (10f * density).toInt(),
+                (10f * density).toInt(),
+                (10f * density).toInt(),
+                (10f * density).toInt(),
             )
-            styleSurface(this, roles, roles.surfaceContainerHigh, roles.outlineVariant, radiusDp = 28f)
+            styleSurface(this, roles, roles.surfaceContainerHigh, roles.outlineVariant, radiusDp = 24f)
         }
         val statusRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -79,7 +81,7 @@ internal class OverlayHeaderController(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             )
-            setPadding(0, (8f * density).toInt(), 0, 0)
+            setPadding(0, (6f * density).toInt(), 0, 0)
         }
         val actionRowBottom = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -87,7 +89,10 @@ internal class OverlayHeaderController(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             )
-            setPadding(0, (6f * density).toInt(), 0, 0)
+            setPadding(0, (4f * density).toInt(), 0, 0)
+        }
+        val newMemoryToolsButton = makeActionButton(R.string.memory_action_tools) {
+            onToggleMemoryTools()
         }
         actionRowTop.addView(makeActionButton(R.string.session_action_connect, onConnect))
         actionRowTop.addView(makeActionButton(R.string.session_action_open_session, onOpenSession))
@@ -98,28 +103,47 @@ internal class OverlayHeaderController(
                 onToggleProcessPicker()
             },
         )
+        actionRowBottom.addView(newMemoryToolsButton)
         actionRowBottom.addView(makeActionButton(R.string.event_action_refresh, onRefreshEvents))
 
         header.addView(statusRow)
         header.addView(actionRowTop)
         header.addView(actionRowBottom)
         statusView = newStatusView
+        memoryToolsButton = newMemoryToolsButton
         return header
     }
 
-    fun renderStatus(text: String) {
+    fun render(
+        state: SessionBridgeState,
+        text: String,
+        memoryToolsOpen: Boolean,
+    ) {
         statusView?.text = text
+        memoryToolsButton?.let { button ->
+            if (state.workspaceSection == WorkspaceSection.Memory) {
+                button.visibility = View.VISIBLE
+                styleButton(
+                    button,
+                    roles,
+                    if (memoryToolsOpen) LkmdbgButtonTone.Tonal else LkmdbgButtonTone.Outlined,
+                )
+            } else {
+                button.visibility = View.GONE
+            }
+        }
     }
 
     fun clear() {
         statusView = null
+        memoryToolsButton = null
     }
 
     private fun makeActionButton(textRes: Int, action: suspend () -> Unit): MaterialButton {
         return MaterialButton(context).apply {
             text = context.getString(textRes)
             styleButton(this, roles, LkmdbgButtonTone.Filled)
-            textSize = 12f
+            textSize = 11f
             layoutParams = LinearLayout.LayoutParams(
                 0,
                 ViewGroup.LayoutParams.WRAP_CONTENT,

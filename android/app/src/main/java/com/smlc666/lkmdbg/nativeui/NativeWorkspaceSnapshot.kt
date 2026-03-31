@@ -91,6 +91,8 @@ private fun sanitizeUiText(value: String): String =
 internal fun SessionBridgeState.toNativeWorkspaceSnapshot(
     context: Context,
     expanded: Boolean,
+    memoryViewMode: MemoryWorkspaceViewMode,
+    memoryToolsOpen: Boolean,
 ): NativeWorkspaceSnapshot {
     val selectedThread = selectedThreadTid?.let { tid -> threads.firstOrNull { it.tid == tid } }
         ?: threads.firstOrNull()
@@ -120,7 +122,16 @@ internal fun SessionBridgeState.toNativeWorkspaceSnapshot(
     )
     val processSecondary = firstProcess?.let(::processHeadline)
         ?: context.getString(R.string.process_empty)
-    val memoryPrimary = if (page != null) {
+    val memoryPrimary = if (memoryViewMode == MemoryWorkspaceViewMode.Results) {
+        if (memorySearch.results.isEmpty()) {
+            context.getString(R.string.memory_search_results_empty)
+        } else {
+            context.getString(
+                R.string.memory_action_show_results_count,
+                memorySearch.results.size,
+            )
+        }
+    } else if (page != null) {
         context.getString(
             R.string.workspace_memory_summary,
             hex64(page.focusAddress),
@@ -135,14 +146,28 @@ internal fun SessionBridgeState.toNativeWorkspaceSnapshot(
             images.size,
         )
     }
-    val memorySecondary = page?.region?.let { region ->
-        context.getString(
-            R.string.workspace_memory_region_summary,
-            region.name,
-            hex64(region.startAddr),
-            hex64(region.endAddr),
-        )
-    } ?: context.getString(R.string.memory_page_region_none)
+    val memorySecondary = if (memoryViewMode == MemoryWorkspaceViewMode.Results) {
+        buildString {
+            append(context.getString(memorySearch.valueType.labelRes))
+            append(" · ")
+            append(context.getString(memorySearch.refineMode.labelRes))
+            append(" · ")
+            append(context.getString(memorySearch.regionPreset.labelRes))
+            if (memorySearch.query.isNotBlank()) {
+                append(" · ")
+                append(memorySearch.query)
+            }
+        }
+    } else {
+        page?.region?.let { region ->
+            context.getString(
+                R.string.workspace_memory_region_summary,
+                region.name,
+                hex64(region.startAddr),
+                hex64(region.endAddr),
+            )
+        } ?: context.getString(R.string.memory_page_region_none)
+    }
     val processActionChips = buildList {
         add(
             NativeWorkspaceActionChipSnapshot(
@@ -178,46 +203,97 @@ internal fun SessionBridgeState.toNativeWorkspaceSnapshot(
             selected = process.pid == snapshot.targetPid,
         )
     }
-    val memoryActionChips = listOf(
-        NativeWorkspaceActionChipSnapshot(
-            actionKey = "memory:type_next",
-            label = context.getString(memorySearch.valueType.labelRes),
-            active = true,
-        ),
-        NativeWorkspaceActionChipSnapshot(
-            actionKey = "memory:mode_next",
-            label = context.getString(memorySearch.refineMode.labelRes),
-            active = memorySearch.refineMode != MemorySearchRefineMode.Exact,
-        ),
-        NativeWorkspaceActionChipSnapshot(
-            actionKey = "memory:region_next",
-            label = context.getString(memorySearch.regionPreset.labelRes),
-            active = true,
-        ),
-    )
-    val memoryPageActionChips = listOf(
-        NativeWorkspaceActionChipSnapshot(
-            actionKey = "memory:search",
-            label = context.getString(R.string.memory_action_search),
-        ),
-        NativeWorkspaceActionChipSnapshot(
-            actionKey = "memory:refine",
-            label = context.getString(R.string.memory_action_refine),
-        ),
-        NativeWorkspaceActionChipSnapshot(
-            actionKey = "memory:prev_page",
-            label = context.getString(R.string.memory_action_prev_page),
-        ),
-        NativeWorkspaceActionChipSnapshot(
-            actionKey = "memory:next_page",
-            label = context.getString(R.string.memory_action_next_page),
-        ),
-        NativeWorkspaceActionChipSnapshot(
-            actionKey = "memory:preview_pc",
-            label = context.getString(R.string.memory_action_preview_pc),
-        ),
-    )
-    val memoryResultEntries = memorySearch.results.take(16).map { result ->
+    val memoryActionChips = buildList {
+        add(
+            NativeWorkspaceActionChipSnapshot(
+                actionKey = "memory:toggle_tools",
+                label = if (memorySearch.query.isBlank()) {
+                    context.getString(R.string.memory_action_tools)
+                } else {
+                    context.getString(
+                        R.string.memory_action_tools_summary,
+                        memorySearch.query.take(18),
+                    )
+                },
+                active = memoryToolsOpen,
+            ),
+        )
+        add(
+            NativeWorkspaceActionChipSnapshot(
+                actionKey = "memory:type_next",
+                label = context.getString(memorySearch.valueType.labelRes),
+                active = true,
+            ),
+        )
+        add(
+            NativeWorkspaceActionChipSnapshot(
+                actionKey = "memory:mode_next",
+                label = context.getString(memorySearch.refineMode.labelRes),
+                active = memorySearch.refineMode != MemorySearchRefineMode.Exact,
+            ),
+        )
+        add(
+            NativeWorkspaceActionChipSnapshot(
+                actionKey = "memory:region_next",
+                label = context.getString(memorySearch.regionPreset.labelRes),
+                active = true,
+            ),
+        )
+    }
+    val memoryPageActionChips = buildList {
+        add(
+            NativeWorkspaceActionChipSnapshot(
+                actionKey = "memory:search",
+                label = context.getString(R.string.memory_action_search),
+            ),
+        )
+        if (memoryViewMode == MemoryWorkspaceViewMode.Results) {
+            add(
+                NativeWorkspaceActionChipSnapshot(
+                    actionKey = "memory:refine",
+                    label = context.getString(R.string.memory_action_refine),
+                ),
+            )
+            add(
+                NativeWorkspaceActionChipSnapshot(
+                    actionKey = "memory:show_page",
+                    label = context.getString(R.string.memory_action_show_page),
+                    active = true,
+                ),
+            )
+        } else {
+            if (memorySearch.results.isNotEmpty()) {
+                add(
+                    NativeWorkspaceActionChipSnapshot(
+                        actionKey = "memory:show_results",
+                        label = context.getString(
+                            R.string.memory_action_show_results_count,
+                            memorySearch.results.size,
+                        ),
+                    ),
+                )
+            }
+            add(
+                NativeWorkspaceActionChipSnapshot(
+                    actionKey = "memory:prev_page",
+                    label = context.getString(R.string.memory_action_prev_page),
+                ),
+            )
+            add(
+                NativeWorkspaceActionChipSnapshot(
+                    actionKey = "memory:next_page",
+                    label = context.getString(R.string.memory_action_next_page),
+                ),
+            )
+            add(
+                NativeWorkspaceActionChipSnapshot(
+                    actionKey = "memory:preview_pc",
+                    label = context.getString(R.string.memory_action_preview_pc),
+                ),
+            )
+        }
+    }
+    val resultEntries = memorySearch.results.take(16).map { result ->
         NativeWorkspaceListEntrySnapshot(
             actionKey = "memory:open:${result.address}",
             title = sanitizeUiText("${hex64(result.address)} · ${result.valueSummary}"),
@@ -234,7 +310,7 @@ internal fun SessionBridgeState.toNativeWorkspaceSnapshot(
             selected = page?.focusAddress == result.address,
         )
     }
-    val memoryPageEntries = page?.rows?.take(12)?.map { row ->
+    val pageEntries = page?.rows?.take(12)?.map { row ->
         val rowEndExclusive = row.address + row.byteValues.size.toUInt().toULong()
         NativeWorkspaceListEntrySnapshot(
             actionKey = "memory:focus:${row.address}",
@@ -246,7 +322,7 @@ internal fun SessionBridgeState.toNativeWorkspaceSnapshot(
                 focusedRowAddress < rowEndExclusive,
         )
     }.orEmpty()
-    val memoryScalarEntries = page?.scalars?.map { scalar ->
+    val scalarEntries = page?.scalars?.map { scalar ->
         sanitizeUiText("${scalar.label}: ${scalar.value}")
     }.orEmpty()
     val threadPrimary = selectedThread?.let { thread ->
@@ -308,9 +384,9 @@ internal fun SessionBridgeState.toNativeWorkspaceSnapshot(
         processEntries = processEntries,
         memoryActionChips = memoryActionChips,
         memoryPageActionChips = memoryPageActionChips,
-        memoryResultEntries = memoryResultEntries,
-        memoryPageEntries = memoryPageEntries,
-        memoryScalarEntries = memoryScalarEntries,
+        memoryResultEntries = if (memoryViewMode == MemoryWorkspaceViewMode.Results) resultEntries else emptyList(),
+        memoryPageEntries = if (memoryViewMode == MemoryWorkspaceViewMode.Page) pageEntries else emptyList(),
+        memoryScalarEntries = if (memoryViewMode == MemoryWorkspaceViewMode.Page) scalarEntries else emptyList(),
         footerMessage = lastMessage,
     )
 }

@@ -5,6 +5,35 @@
 
 namespace lkmdbg::nativeui {
 
+namespace {
+
+template <typename ActionItem, typename Renderer>
+void RenderActionFlow(const std::vector<ActionItem> &actions, float density,
+		      Renderer renderer, WorkspaceUiResult &result)
+{
+	float line_width = 0.0f;
+	const float max_width = ImGui::GetContentRegionAvail().x;
+	for (std::size_t i = 0; i < actions.size(); ++i) {
+		const float item_width =
+			ImGui::CalcTextSize(actions[i].label.c_str()).x + 34.0f * density;
+		if (i > 0) {
+			const float next_width = line_width + ImGui::GetStyle().ItemSpacing.x + item_width;
+			if (next_width < max_width) {
+				ImGui::SameLine();
+				line_width = next_width;
+			} else {
+				line_width = item_width;
+			}
+		} else {
+			line_width = item_width;
+		}
+		if (renderer(actions[i], item_width) && result.action_key.empty())
+			result.action_key = actions[i].key;
+	}
+}
+
+} // namespace
+
 WorkspaceUiResult RenderWorkspaceUi(const WorkspaceViewModel &model, float density)
 {
 	WorkspaceUiResult result{};
@@ -37,18 +66,23 @@ WorkspaceUiResult RenderWorkspaceUi(const WorkspaceViewModel &model, float densi
 		controls::StatLine(stat);
 	if (!model.panel.stats.empty())
 		ImGui::Spacing();
-	for (const auto &action : model.panel.primary_actions) {
-		if (controls::ActionChipButton(action.label.c_str(), action.active, density) &&
-		    result.action_key.empty())
-			result.action_key = action.key;
-	}
+	RenderActionFlow(
+		model.panel.primary_actions,
+		density,
+		[density](const WorkspaceActionViewModel &action, float width) {
+			return controls::ActionChipButton(action.label.c_str(), action.active, density, width);
+		},
+		result);
 	if (!model.panel.primary_actions.empty())
 		ImGui::Spacing();
-	for (const auto &action : model.panel.secondary_actions) {
-		if (controls::FillLaneButton(action.label.c_str(), action.active, density, 0.9f) &&
-		    result.action_key.empty())
-			result.action_key = action.key;
-	}
+	RenderActionFlow(
+		model.panel.secondary_actions,
+		density,
+		[density](const WorkspaceActionViewModel &action, float width) {
+			return controls::FillLaneButton(action.label.c_str(), action.active, density, 0.9f,
+							width);
+		},
+		result);
 	if (!model.panel.secondary_actions.empty())
 		ImGui::Spacing();
 	for (const auto &entry : model.panel.list_entries) {

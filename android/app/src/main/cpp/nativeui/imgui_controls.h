@@ -21,10 +21,11 @@ struct StatItem {
 	std::string text;
 };
 
-bool ActionChipButton(const char *label, bool active, float density);
+bool ActionChipButton(const char *label, bool active, float density, float width = 0.0f);
 bool RailButton(const char *label, bool selected, float density, float highlight_mix);
 void MetricPill(const MetricItem &item, float density);
-bool FillLaneButton(const char *label, bool hot, float density, float mix);
+bool FillLaneButton(const char *label, bool hot, float density, float mix,
+		    float width = 0.0f);
 int SectionTabs(const SectionItem *items, int count, float density);
 int SectionRail(const char *title, const SectionItem *items, int count, float density);
 void SectionHeader(const char *title, const char *subtitle);

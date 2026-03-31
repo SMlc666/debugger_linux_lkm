@@ -108,6 +108,15 @@
     <string name="memory_action_ranges">区域</string>
     <string name="memory_action_refresh_images">刷新映像</string>
     <string name="memory_action_preview_pc">预览当前 PC</string>
+    <string name="memory_action_tools">工具</string>
+    <string name="memory_action_tools_summary">工具 · %1$s</string>
+    <string name="memory_action_show_results_count">结果 · %1$d</string>
+    <string name="memory_action_show_page">内存页</string>
+    <string name="memory_tools_title">内存工具</string>
+    <string name="memory_tools_close">关闭</string>
+    <string name="memory_tools_section_search">搜索</string>
+    <string name="memory_tools_section_jump">跳转与定位</string>
+    <string name="memory_tools_section_write">写入与补丁</string>
     <string name="memory_error_no_target">当前没有活动目标，请先附加进程。</string>
     <string name="memory_error_no_pc">当前还没有可用 PC，请先刷新线程。</string>
     <string name="memory_error_invalid_address">请先输入有效地址。</string>

@@ -54,7 +54,7 @@ internal class OverlayProcessPickerController(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP or Gravity.CENTER_HORIZONTAL,
             ).apply {
-                topMargin = (92f * density).roundToInt()
+                topMargin = (12f * density).roundToInt()
                 marginStart = (14f * density).roundToInt()
                 marginEnd = (14f * density).roundToInt()
             }

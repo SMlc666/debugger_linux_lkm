@@ -113,10 +113,12 @@ void AddSharedPanelCards(const WorkspaceLabels &labels, SectionId selected_secti
 		for (const auto &entry : state.memory_page_entries)
 			panel.detail_entries.push_back(MakeListItem(entry, 66.0f * density));
 		panel.detail_lines = state.memory_scalar_entries;
-		panel.cards.push_back(MakeCard(labels.memory, state.memory_primary,
-					       96.0f * density));
-		panel.cards.push_back(MakeCard(labels.processes, state.memory_secondary,
+		if (panel.list_entries.empty() && panel.detail_entries.empty()) {
+			panel.cards.push_back(MakeCard(labels.memory, state.memory_primary,
 					       92.0f * density));
+			panel.cards.push_back(MakeCard(labels.events, state.memory_secondary,
+					       88.0f * density));
+		}
 		break;
 	case SectionId::Threads:
 		panel.cards.push_back(MakeCard(labels.threads, state.thread_primary,
@@ -132,7 +134,6 @@ void AddSharedPanelCards(const WorkspaceLabels &labels, SectionId selected_secti
 					       92.0f * density));
 		break;
 	}
-	panel.cards.push_back(MakeCard(labels.title, state.footer_message, 84.0f * density));
 }
 
 WorkspacePanelViewModel BuildPanel(const WorkspaceLabels &labels,
@@ -166,12 +167,8 @@ WorkspacePanelViewModel BuildPanel(const WorkspaceLabels &labels,
 		panel.stats.push_back(MakeStat(ui_format::KeyValue("target pid", state.target_pid)));
 		break;
 	case SectionId::Memory:
-		panel.stats.push_back(MakeStat(ui_format::KeyValue(
-			labels.session_open, BoolText(labels, state.session_open))));
-		panel.stats.push_back(MakeStat(ui_format::KeyValue(labels.process_count,
-							 state.process_count)));
-		panel.stats.push_back(MakeStat(ui_format::KeyValue(labels.thread_count,
-							 state.thread_count)));
+		panel.subtitle = state.memory_primary;
+		panel.stats.push_back(MakeStat(state.memory_secondary));
 		panel.stats.push_back(MakeStat(ui_format::KeyValue("vmas", state.vma_count)));
 		panel.stats.push_back(MakeStat(ui_format::KeyValue("images", state.image_count)));
 		break;
@@ -211,9 +208,8 @@ WorkspaceViewModel BuildWorkspaceViewModel(const WorkspaceLabels &labels,
 	WorkspaceViewModel model{
 	};
 	model.portrait = portrait;
-	model.rail_title = labels.title;
-	model.workspace_title =
-		ui_format::JoinTitle(labels.title, SectionTitle(labels, selected_section));
+	model.rail_title = "";
+	model.workspace_title = std::string(SectionTitle(labels, selected_section));
 	model.workspace_subtitle = std::string(SectionSubtitle(labels, selected_section));
 	model.panel = BuildPanel(labels, state, selected_section, density);
 

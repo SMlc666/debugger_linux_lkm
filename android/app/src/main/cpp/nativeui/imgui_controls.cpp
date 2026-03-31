@@ -20,7 +20,7 @@ void muted_text(const char *text)
 
 } // namespace
 
-bool ActionChipButton(const char *label, bool active, float density)
+bool ActionChipButton(const char *label, bool active, float density, float width)
 {
 	const WorkspaceTheme &theme = GetWorkspaceTheme();
 	const ImVec4 fill = active ? theme.primary_container :
@@ -31,7 +31,9 @@ bool ActionChipButton(const char *label, bool active, float density)
 	ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.primary);
 	ImGui::PushStyleColor(ImGuiCol_Text, active ? theme.on_primary_container :
 					     theme.on_surface);
-	const bool pressed = ImGui::Button(label, ImVec2(-1.0f, 28.0f * density));
+	const float resolved_width =
+		width > 0.0f ? width : ImGui::CalcTextSize(label).x + 28.0f * density;
+	const bool pressed = ImGui::Button(label, ImVec2(resolved_width, 30.0f * density));
 	ImGui::PopStyleColor(4);
 	return pressed;
 }
@@ -48,7 +50,7 @@ bool RailButton(const char *label, bool selected, float density, float highlight
 	ImGui::PushStyleColor(ImGuiCol_HeaderHovered, theme.primary);
 	ImGui::PushStyleColor(ImGuiCol_HeaderActive, theme.primary_container);
 	ImGui::PushStyleColor(ImGuiCol_Text, MixColor(text_base, text_accent, highlight_mix));
-	const bool pressed = ImGui::Selectable(label, selected, 0, ImVec2(-1.0f, 28.0f * density));
+	const bool pressed = ImGui::Selectable(label, selected, 0, ImVec2(-1.0f, 38.0f * density));
 	ImGui::PopStyleColor(4);
 	return pressed;
 }
@@ -68,7 +70,8 @@ void MetricPill(const MetricItem &item, float density)
 	ImGui::PopStyleColor(4);
 }
 
-bool FillLaneButton(const char *label, bool hot, float density, float mix_value)
+bool FillLaneButton(const char *label, bool hot, float density, float mix_value,
+		    float width)
 {
 	const WorkspaceTheme &theme = GetWorkspaceTheme();
 	ImGui::PushStyleColor(
@@ -77,7 +80,9 @@ bool FillLaneButton(const char *label, bool hot, float density, float mix_value)
 	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme.tertiary_container);
 	ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.tertiary);
 	ImGui::PushStyleColor(ImGuiCol_Text, hot ? theme.on_tertiary : theme.on_surface);
-	const bool pressed = ImGui::Button(label, ImVec2(-1.0f, 24.0f * density));
+	const float resolved_width =
+		width > 0.0f ? width : ImGui::CalcTextSize(label).x + 24.0f * density;
+	const bool pressed = ImGui::Button(label, ImVec2(resolved_width, 28.0f * density));
 	ImGui::PopStyleColor(4);
 	return pressed;
 }
@@ -85,7 +90,7 @@ bool FillLaneButton(const char *label, bool hot, float density, float mix_value)
 int SectionTabs(const SectionItem *items, int count, float density)
 {
 	int pressed = -1;
-	ImGui::BeginChild("section_tabs", ImVec2(0.0f, 46.0f * density), ImGuiChildFlags_Borders);
+	ImGui::BeginChild("section_tabs", ImVec2(0.0f, 54.0f * density), ImGuiChildFlags_Borders);
 	for (int i = 0; i < count; ++i) {
 		if (i > 0)
 			ImGui::SameLine();
@@ -102,7 +107,7 @@ int SectionTabs(const SectionItem *items, int count, float density)
 int SectionRail(const char *title, const SectionItem *items, int count, float density)
 {
 	int pressed = -1;
-	ImGui::BeginChild("section_rail", ImVec2(156.0f * density, 0.0f), ImGuiChildFlags_Borders);
+	ImGui::BeginChild("section_rail", ImVec2(188.0f * density, 0.0f), ImGuiChildFlags_Borders);
 	if (title && title[0] != '\0') {
 		ImGui::TextUnformatted(title);
 		ImGui::Separator();
