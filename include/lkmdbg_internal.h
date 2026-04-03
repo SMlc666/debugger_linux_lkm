@@ -333,6 +333,28 @@ extern bool bypass_cfi;
 extern struct lkmdbg_state lkmdbg_state;
 extern struct lkmdbg_symbols lkmdbg_symbols;
 
+enum lkmdbg_probe_stage {
+	LKMDBG_PROBE_STAGE_NONE = 0,
+	LKMDBG_PROBE_STAGE_INIT_ENTER,
+	LKMDBG_PROBE_STAGE_DEBUGFS_DIR_OK,
+	LKMDBG_PROBE_STAGE_DEBUGFS_STATUS_OK,
+	LKMDBG_PROBE_STAGE_DEBUGFS_HOOKS_OK,
+	LKMDBG_PROBE_STAGE_INIT_DEBUGFS_READY,
+	LKMDBG_PROBE_STAGE_INIT_SYMBOLS_READY,
+	LKMDBG_PROBE_STAGE_INIT_HOOKS_READY,
+	LKMDBG_PROBE_STAGE_TRANSPORT_ENTER,
+	LKMDBG_PROBE_STAGE_TRANSPORT_ACTIVE,
+	LKMDBG_PROBE_STAGE_INIT_TRANSPORT_READY,
+	LKMDBG_PROBE_STAGE_INIT_INPUT_READY,
+	LKMDBG_PROBE_STAGE_INIT_RUNTIME_HOOKS_READY,
+	LKMDBG_PROBE_STAGE_INIT_THREAD_CTRL_READY,
+	LKMDBG_PROBE_STAGE_INIT_LOADED,
+};
+
+void lkmdbg_probe_set_stage(enum lkmdbg_probe_stage stage);
+enum lkmdbg_probe_stage lkmdbg_probe_get_stage(void);
+const char *lkmdbg_probe_stage_name(enum lkmdbg_probe_stage stage);
+
 #define lkmdbg_pr_info(fmt, ...)                                              \
 	do {                                                                   \
 		if (READ_ONCE(enable_kmsg))                                    \

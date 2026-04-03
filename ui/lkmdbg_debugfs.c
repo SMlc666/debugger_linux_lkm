@@ -245,6 +245,7 @@ int lkmdbg_debugfs_init(void)
 		       lkmdbg_debugfs_dentry_err(lkmdbg_state.debugfs_dir));
 		return lkmdbg_debugfs_dentry_err(lkmdbg_state.debugfs_dir);
 	}
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_DEBUGFS_DIR_OK);
 	pr_err("lkmdbg: debugfs probe create_dir ok dir=%px\n",
 	       lkmdbg_state.debugfs_dir);
 
@@ -258,6 +259,7 @@ int lkmdbg_debugfs_init(void)
 		lkmdbg_state.debugfs_dir = NULL;
 		return ret;
 	}
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_DEBUGFS_STATUS_OK);
 	pr_err("lkmdbg: debugfs probe create_status ok dentry=%px\n",
 	       status_dentry);
 
@@ -271,6 +273,7 @@ int lkmdbg_debugfs_init(void)
 		lkmdbg_state.debugfs_dir = NULL;
 		return ret;
 	}
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_DEBUGFS_HOOKS_OK);
 	pr_err("lkmdbg: debugfs probe create_hooks ok dentry=%px\n",
 	       hooks_dentry);
 

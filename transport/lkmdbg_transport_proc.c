@@ -189,6 +189,7 @@ int lkmdbg_transport_init(void)
 
 	pr_err("lkmdbg: transport probe init hook_proc_version=%u\n",
 	       hook_proc_version);
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_TRANSPORT_ENTER);
 	if (!hook_proc_version)
 		return 0;
 
@@ -317,6 +318,7 @@ int lkmdbg_transport_init(void)
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.proc_version_hook_active = true;
 	mutex_unlock(&lkmdbg_state.lock);
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_TRANSPORT_ACTIVE);
 	pr_err("lkmdbg: transport probe active hook=%px orig_open=%px\n",
 	       proc_version_open_hook, proc_version_orig_open);
 

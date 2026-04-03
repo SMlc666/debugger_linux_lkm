@@ -57,6 +57,55 @@ struct lkmdbg_state lkmdbg_state = {
 struct lkmdbg_symbols lkmdbg_symbols;
 static struct lkmdbg_inline_hook *lkmdbg_selftest_hook;
 static u64 (*lkmdbg_selftest_orig)(u64 value);
+static enum lkmdbg_probe_stage lkmdbg_probe_stage;
+
+void lkmdbg_probe_set_stage(enum lkmdbg_probe_stage stage)
+{
+	WRITE_ONCE(lkmdbg_probe_stage, stage);
+}
+
+enum lkmdbg_probe_stage lkmdbg_probe_get_stage(void)
+{
+	return READ_ONCE(lkmdbg_probe_stage);
+}
+
+const char *lkmdbg_probe_stage_name(enum lkmdbg_probe_stage stage)
+{
+	switch (stage) {
+	case LKMDBG_PROBE_STAGE_NONE:
+		return "none";
+	case LKMDBG_PROBE_STAGE_INIT_ENTER:
+		return "init_enter";
+	case LKMDBG_PROBE_STAGE_DEBUGFS_DIR_OK:
+		return "debugfs_dir_ok";
+	case LKMDBG_PROBE_STAGE_DEBUGFS_STATUS_OK:
+		return "debugfs_status_ok";
+	case LKMDBG_PROBE_STAGE_DEBUGFS_HOOKS_OK:
+		return "debugfs_hooks_ok";
+	case LKMDBG_PROBE_STAGE_INIT_DEBUGFS_READY:
+		return "init_debugfs_ready";
+	case LKMDBG_PROBE_STAGE_INIT_SYMBOLS_READY:
+		return "init_symbols_ready";
+	case LKMDBG_PROBE_STAGE_INIT_HOOKS_READY:
+		return "init_hooks_ready";
+	case LKMDBG_PROBE_STAGE_TRANSPORT_ENTER:
+		return "transport_enter";
+	case LKMDBG_PROBE_STAGE_TRANSPORT_ACTIVE:
+		return "transport_active";
+	case LKMDBG_PROBE_STAGE_INIT_TRANSPORT_READY:
+		return "init_transport_ready";
+	case LKMDBG_PROBE_STAGE_INIT_INPUT_READY:
+		return "init_input_ready";
+	case LKMDBG_PROBE_STAGE_INIT_RUNTIME_HOOKS_READY:
+		return "init_runtime_hooks_ready";
+	case LKMDBG_PROBE_STAGE_INIT_THREAD_CTRL_READY:
+		return "init_thread_ctrl_ready";
+	case LKMDBG_PROBE_STAGE_INIT_LOADED:
+		return "init_loaded";
+	}
+
+	return "unknown";
+}
 
 static noinline __aligned(PAGE_SIZE) u64 lkmdbg_selftest_target(u64 value)
 {
@@ -247,6 +296,7 @@ static int __init lkmdbg_init(void)
 	int blacklist_patched;
 	int ret;
 
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_INIT_ENTER);
 	pr_err("lkmdbg: init probe begin enable_kmsg=%u enable_debugfs=%u hook_proc_version=%u hook_selftest_mode=%u hook_seq_read=%u\n",
 	       enable_kmsg, enable_debugfs, hook_proc_version,
 	       hook_selftest_mode, hook_seq_read);
@@ -258,6 +308,7 @@ static int __init lkmdbg_init(void)
 	       ret, lkmdbg_debugfs_is_active(), lkmdbg_state.debugfs_dir);
 	if (ret)
 		return ret;
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_INIT_DEBUGFS_READY);
 	lkmdbg_trace_stage("debugfs_ready");
 
 	ret = lkmdbg_symbols_init();
@@ -265,6 +316,7 @@ static int __init lkmdbg_init(void)
 		lkmdbg_debugfs_exit();
 		return ret;
 	}
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_INIT_SYMBOLS_READY);
 	lkmdbg_trace_stage("symbols_ready");
 
 	ret = lkmdbg_stealth_init();
@@ -281,6 +333,7 @@ static int __init lkmdbg_init(void)
 		lkmdbg_debugfs_exit();
 		return ret;
 	}
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_INIT_HOOKS_READY);
 	lkmdbg_trace_stage("hooks_ready");
 
 	blacklist_patched = 0;
@@ -320,6 +373,7 @@ static int __init lkmdbg_init(void)
 		lkmdbg_debugfs_exit();
 		return ret;
 	}
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_INIT_TRANSPORT_READY);
 	lkmdbg_trace_stage("transport_ready");
 
 	ret = lkmdbg_input_init();
@@ -331,6 +385,7 @@ static int __init lkmdbg_init(void)
 		lkmdbg_debugfs_exit();
 		return ret;
 	}
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_INIT_INPUT_READY);
 	lkmdbg_trace_stage("input_ready");
 
 	ret = lkmdbg_runtime_hooks_init();
@@ -343,6 +398,7 @@ static int __init lkmdbg_init(void)
 		lkmdbg_debugfs_exit();
 		return ret;
 	}
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_INIT_RUNTIME_HOOKS_READY);
 	lkmdbg_trace_stage("runtime_hooks_ready");
 
 	ret = lkmdbg_thread_ctrl_init();
@@ -356,8 +412,10 @@ static int __init lkmdbg_init(void)
 		lkmdbg_debugfs_exit();
 		return ret;
 	}
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_INIT_THREAD_CTRL_READY);
 	lkmdbg_trace_stage("thread_ctrl_ready");
 
+	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_INIT_LOADED);
 	pr_err("lkmdbg: init probe loaded debugfs_active=%u proc_hook_active=%u active_sessions=%llu\n",
 	       lkmdbg_debugfs_is_active(),
 	       READ_ONCE(lkmdbg_state.proc_version_hook_active),
@@ -370,9 +428,12 @@ static int __init lkmdbg_init(void)
 
 static void __exit lkmdbg_exit(void)
 {
-	pr_err("lkmdbg: exit probe enable_kmsg=%u enable_debugfs=%u debugfs_active=%u proc_hook_active=%u\n",
+	enum lkmdbg_probe_stage stage = lkmdbg_probe_get_stage();
+
+	pr_err("lkmdbg: exit probe enable_kmsg=%u enable_debugfs=%u debugfs_active=%u proc_hook_active=%u probe_stage=%u(%s)\n",
 	       enable_kmsg, enable_debugfs, lkmdbg_debugfs_is_active(),
-	       READ_ONCE(lkmdbg_state.proc_version_hook_active));
+	       READ_ONCE(lkmdbg_state.proc_version_hook_active),
+	       stage, lkmdbg_probe_stage_name(stage));
 	lkmdbg_stealth_exit();
 	lkmdbg_thread_ctrl_exit();
 	lkmdbg_runtime_hooks_exit();
