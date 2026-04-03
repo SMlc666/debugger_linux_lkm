@@ -27,6 +27,7 @@
 
 #define STATUS_PATH "/sys/kernel/debug/lkmdbg/status"
 #define HOOKS_PATH "/sys/kernel/debug/lkmdbg/hooks"
+#define MODULE_SYSFS_DIR "/sys/module/lkmdbg"
 #define MODULE_PATH "/lkmdbg.ko"
 #define MODULE_NAME "lkmdbg"
 #define OPEN_SESSION_TOOL "/lkmdbg_open_session"
@@ -520,6 +521,38 @@ static void qemu_expect_status_line(const char *needle)
 	qemu_check(strstr(buf, needle) != NULL, "missing_status_%s", needle);
 }
 
+static void qemu_report_module_sysfs_once(void)
+{
+	static bool reported;
+	static const char *const paths[] = {
+		MODULE_SYSFS_DIR "/initstate",
+		MODULE_SYSFS_DIR "/coresize",
+		MODULE_SYSFS_DIR "/initsize",
+		MODULE_SYSFS_DIR "/taint",
+		MODULE_SYSFS_DIR "/refcnt",
+		MODULE_SYSFS_DIR "/sections/.text",
+		MODULE_SYSFS_DIR "/sections/.init.text",
+	};
+	char buf[256];
+	size_t i;
+	int err;
+
+	if (reported)
+		return;
+	reported = true;
+
+	for (i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+		if (qemu_try_read_file_errno(paths[i], buf, sizeof(buf), &err)) {
+			printf("LKMDBG_QEMU_MODULE_SYSFS path=%s value=%s\n",
+			       paths[i], buf);
+		} else {
+			printf("LKMDBG_QEMU_MODULE_SYSFS path=%s errno=%d\n",
+			       paths[i], err);
+		}
+	}
+	fflush(stdout);
+}
+
 static unsigned long long qemu_read_status_u64(const char *key)
 {
 	char buf[8192];
@@ -539,6 +572,7 @@ static unsigned long long qemu_read_status_u64(const char *key)
 				fflush(stdout);
 				qemu_status_debugfs_reported = true;
 			}
+			qemu_report_module_sysfs_once();
 			return 0;
 		}
 		qemu_fail("open_%s errno=%d", STATUS_PATH, err);
