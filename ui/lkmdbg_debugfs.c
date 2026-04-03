@@ -239,8 +239,14 @@ int lkmdbg_debugfs_init(void)
 		return 0;
 
 	lkmdbg_state.debugfs_dir = debugfs_create_dir(LKMDBG_DIR_NAME, NULL);
-	if (IS_ERR_OR_NULL(lkmdbg_state.debugfs_dir))
+	if (IS_ERR_OR_NULL(lkmdbg_state.debugfs_dir)) {
+		pr_err("lkmdbg: debugfs probe create_dir failed dir=%px err=%d\n",
+		       lkmdbg_state.debugfs_dir,
+		       lkmdbg_debugfs_dentry_err(lkmdbg_state.debugfs_dir));
 		return lkmdbg_debugfs_dentry_err(lkmdbg_state.debugfs_dir);
+	}
+	pr_err("lkmdbg: debugfs probe create_dir ok dir=%px\n",
+	       lkmdbg_state.debugfs_dir);
 
 	status_dentry = debugfs_create_file("status", 0444,
 					    lkmdbg_state.debugfs_dir, NULL,
@@ -252,6 +258,8 @@ int lkmdbg_debugfs_init(void)
 		lkmdbg_state.debugfs_dir = NULL;
 		return ret;
 	}
+	pr_err("lkmdbg: debugfs probe create_status ok dentry=%px\n",
+	       status_dentry);
 
 	hooks_dentry = debugfs_create_file("hooks", 0444,
 					   lkmdbg_state.debugfs_dir, NULL,
@@ -263,6 +271,8 @@ int lkmdbg_debugfs_init(void)
 		lkmdbg_state.debugfs_dir = NULL;
 		return ret;
 	}
+	pr_err("lkmdbg: debugfs probe create_hooks ok dentry=%px\n",
+	       hooks_dentry);
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.debugfs_active = true;

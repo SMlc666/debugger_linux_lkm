@@ -187,6 +187,8 @@ int lkmdbg_transport_init(void)
 	void *orig_open = NULL;
 	int ret;
 
+	pr_err("lkmdbg: transport probe init hook_proc_version=%u\n",
+	       hook_proc_version);
 	if (!hook_proc_version)
 		return 0;
 
@@ -226,6 +228,15 @@ int lkmdbg_transport_init(void)
 #ifdef CONFIG_COMPAT
 	proc_version_orig_compat_ioctl = proc_version_orig_fops->compat_ioctl;
 #endif
+	pr_err("lkmdbg: transport probe target inode=%px fops=%px open=%px ioctl=%px compat=%px\n",
+	       inode, proc_version_orig_fops, proc_version_orig_open,
+	       proc_version_orig_ioctl,
+#ifdef CONFIG_COMPAT
+	       proc_version_orig_compat_ioctl
+#else
+	       NULL
+#endif
+	);
 	lkmdbg_pr_info("lkmdbg: transport proc target inode=%px fops=%px open=%px ioctl=%px compat=%px\n",
 		       inode, proc_version_orig_fops, proc_version_orig_open,
 		       proc_version_orig_ioctl,
@@ -306,6 +317,8 @@ int lkmdbg_transport_init(void)
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.proc_version_hook_active = true;
 	mutex_unlock(&lkmdbg_state.lock);
+	pr_err("lkmdbg: transport probe active hook=%px orig_open=%px\n",
+	       proc_version_open_hook, proc_version_orig_open);
 
 	return 0;
 }
