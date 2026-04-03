@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -14,34 +15,48 @@
 
 static int run_child(void)
 {
-	for (;;)
-		usleep(20000);
+	volatile uint64_t counter = 0;
+
+	for (;;) {
+		counter++;
+		if ((counter & 0x3ffULL) == 0)
+			(void)syscall(SYS_gettid);
+	}
 	return 0;
 }
 
-static int pick_parked_tid(int session_fd, pid_t *tid_out)
+static int pick_parked_tid(int session_fd, unsigned int attempts,
+			   useconds_t delay_us, pid_t *tid_out)
 {
 	struct lkmdbg_thread_entry entries[32];
-	struct lkmdbg_thread_query_request reply;
-	int32_t cursor = 0;
-	uint32_t i;
+	unsigned int attempt;
 
-	for (;;) {
-		memset(entries, 0, sizeof(entries));
-		memset(&reply, 0, sizeof(reply));
-		if (query_target_threads(session_fd, cursor, entries,
-					 (uint32_t)(sizeof(entries) / sizeof(entries[0])),
-					 &reply) < 0)
-			return -1;
-		for (i = 0; i < reply.entries_filled; i++) {
-			if (!(entries[i].flags & LKMDBG_THREAD_FLAG_FREEZE_PARKED))
-				continue;
-			*tid_out = entries[i].tid;
-			return 0;
+	for (attempt = 0; attempt < attempts; attempt++) {
+		struct lkmdbg_thread_query_request reply;
+		int32_t cursor = 0;
+		uint32_t i;
+
+		for (;;) {
+			memset(entries, 0, sizeof(entries));
+			memset(&reply, 0, sizeof(reply));
+			if (query_target_threads(session_fd, cursor, entries,
+						 (uint32_t)(sizeof(entries) /
+							    sizeof(entries[0])),
+						 &reply) < 0)
+				return -1;
+			for (i = 0; i < reply.entries_filled; i++) {
+				if (!(entries[i].flags & LKMDBG_THREAD_FLAG_FREEZE_PARKED))
+					continue;
+				*tid_out = entries[i].tid;
+				return 0;
+			}
+			if (reply.done)
+				break;
+			cursor = reply.next_tid;
 		}
-		if (reply.done)
-			break;
-		cursor = reply.next_tid;
+
+		if (attempt + 1 < attempts)
+			usleep(delay_us);
 	}
 
 	return -1;
@@ -70,7 +85,6 @@ int main(void)
 	uint64_t expect_v0_hi;
 	uint64_t expect_v1_lo;
 	uint64_t expect_v1_hi;
-	int parked_pick = 0;
 	int frozen = 0;
 	int status = 1;
 
@@ -93,22 +107,25 @@ int main(void)
 	if (freeze_target_threads(session_fd, 2000, &freeze_reply, 0) < 0)
 		goto out;
 	frozen = 1;
-	parked_pick = pick_parked_tid(session_fd, &tid);
-	if (parked_pick < 0) {
-		tid = child;
-		fprintf(stderr,
-			"example_regs_fp: no parked frozen thread, fallback tid=%d\n",
-			tid);
-	}
 
-	if (get_target_regs(session_fd, tid, &regs) < 0) {
-		if (parked_pick < 0 && errno == EBUSY) {
-			printf("example_regs_fp: skip unsupported frozen regs path (busy)\n");
-			status = 0;
-			goto out;
-		}
+	if (!freeze_reply.threads_parked) {
+		fprintf(stderr,
+			"example_regs_fp: freeze reported no parked threads total=%u settled=%u parked=%u\n",
+			freeze_reply.threads_total, freeze_reply.threads_settled,
+			freeze_reply.threads_parked);
 		goto out;
 	}
+
+	if (pick_parked_tid(session_fd, 50, 20000, &tid) < 0) {
+		fprintf(stderr,
+			"example_regs_fp: no parked frozen thread after freeze total=%u settled=%u parked=%u\n",
+			freeze_reply.threads_total, freeze_reply.threads_settled,
+			freeze_reply.threads_parked);
+		goto out;
+	}
+
+	if (get_target_regs(session_fd, tid, &regs) < 0)
+		goto out;
 	if (!(regs.regs.features & LKMDBG_REGS_ARM64_FEATURE_FP)) {
 		fprintf(stderr, "example_regs_fp: FP feature missing features=0x%x\n",
 			regs.regs.features);
@@ -141,14 +158,8 @@ int main(void)
 	regs.regs.vregs[0].hi = expect_v0_hi;
 	regs.regs.vregs[1].lo = expect_v1_lo;
 	regs.regs.vregs[1].hi = expect_v1_hi;
-	if (set_target_regs(session_fd, &regs) < 0) {
-		if (parked_pick < 0 && errno == EBUSY) {
-			printf("example_regs_fp: skip unsupported frozen setregs path (busy)\n");
-			status = 0;
-			goto out;
-		}
+	if (set_target_regs(session_fd, &regs) < 0)
 		goto out;
-	}
 
 	memset(&regs, 0, sizeof(regs));
 	if (get_target_regs(session_fd, tid, &regs) < 0)
