@@ -55,8 +55,21 @@ int main(void)
 	pid_t tid = 0;
 	int session_fd = -1;
 	uint64_t saved_x19;
+	uint64_t saved_x20;
 	uint32_t saved_fpsr;
+	uint32_t saved_fpcr;
 	uint64_t saved_v0_lo;
+	uint64_t saved_v0_hi;
+	uint64_t saved_v1_lo;
+	uint64_t saved_v1_hi;
+	uint64_t expect_x19;
+	uint64_t expect_x20;
+	uint32_t expect_fpsr;
+	uint32_t expect_fpcr;
+	uint64_t expect_v0_lo;
+	uint64_t expect_v0_hi;
+	uint64_t expect_v1_lo;
+	uint64_t expect_v1_hi;
 	int parked_pick = 0;
 	int frozen = 0;
 	int status = 1;
@@ -103,11 +116,31 @@ int main(void)
 	}
 
 	saved_x19 = regs.regs.regs[19];
+	saved_x20 = regs.regs.regs[20];
 	saved_fpsr = regs.regs.fpsr;
+	saved_fpcr = regs.regs.fpcr;
 	saved_v0_lo = regs.regs.vregs[0].lo;
-	regs.regs.regs[19] = saved_x19 ^ 0x5a5a5a5a5a5a5a5aULL;
-	regs.regs.fpsr = saved_fpsr ^ 0x1U;
-	regs.regs.vregs[0].lo = saved_v0_lo ^ 0x1ULL;
+	saved_v0_hi = regs.regs.vregs[0].hi;
+	saved_v1_lo = regs.regs.vregs[1].lo;
+	saved_v1_hi = regs.regs.vregs[1].hi;
+
+	expect_x19 = saved_x19 ^ 0x5a5a5a5a5a5a5a5aULL;
+	expect_x20 = saved_x20 ^ 0xa5a5a5a5a5a5a5a5ULL;
+	expect_fpsr = saved_fpsr ^ 0x1U;
+	expect_fpcr = saved_fpcr ^ 0x2U;
+	expect_v0_lo = saved_v0_lo ^ 0x1ULL;
+	expect_v0_hi = saved_v0_hi ^ 0x10ULL;
+	expect_v1_lo = saved_v1_lo ^ 0x100ULL;
+	expect_v1_hi = saved_v1_hi ^ 0x1000ULL;
+
+	regs.regs.regs[19] = expect_x19;
+	regs.regs.regs[20] = expect_x20;
+	regs.regs.fpsr = expect_fpsr;
+	regs.regs.fpcr = expect_fpcr;
+	regs.regs.vregs[0].lo = expect_v0_lo;
+	regs.regs.vregs[0].hi = expect_v0_hi;
+	regs.regs.vregs[1].lo = expect_v1_lo;
+	regs.regs.vregs[1].hi = expect_v1_hi;
 	if (set_target_regs(session_fd, &regs) < 0) {
 		if (parked_pick < 0 && errno == EBUSY) {
 			printf("example_regs_fp: skip unsupported frozen setregs path (busy)\n");
@@ -120,24 +153,69 @@ int main(void)
 	memset(&regs, 0, sizeof(regs));
 	if (get_target_regs(session_fd, tid, &regs) < 0)
 		goto out;
-	if (regs.regs.regs[19] != (saved_x19 ^ 0x5a5a5a5a5a5a5a5aULL) ||
-	    regs.regs.fpsr != (saved_fpsr ^ 0x1U) ||
-	    regs.regs.vregs[0].lo != (saved_v0_lo ^ 0x1ULL)) {
+	if (regs.regs.regs[19] != expect_x19 ||
+	    regs.regs.regs[20] != expect_x20 ||
+	    regs.regs.fpsr != expect_fpsr ||
+	    regs.regs.fpcr != expect_fpcr ||
+	    regs.regs.vregs[0].lo != expect_v0_lo ||
+	    regs.regs.vregs[0].hi != expect_v0_hi ||
+	    regs.regs.vregs[1].lo != expect_v1_lo ||
+	    regs.regs.vregs[1].hi != expect_v1_hi) {
 		fprintf(stderr,
-			"example_regs_fp: verify failed x19=0x%" PRIx64 " fpsr=0x%x v0_lo=0x%" PRIx64 "\n",
-			(uint64_t)regs.regs.regs[19], regs.regs.fpsr,
-			(uint64_t)regs.regs.vregs[0].lo);
+			"example_regs_fp: verify failed x19=0x%" PRIx64
+			" x20=0x%" PRIx64 " fpsr=0x%x fpcr=0x%x"
+			" v0=(0x%" PRIx64 ",0x%" PRIx64 ")"
+			" v1=(0x%" PRIx64 ",0x%" PRIx64 ")\n",
+			(uint64_t)regs.regs.regs[19],
+			(uint64_t)regs.regs.regs[20],
+			regs.regs.fpsr, regs.regs.fpcr,
+			(uint64_t)regs.regs.vregs[0].lo,
+			(uint64_t)regs.regs.vregs[0].hi,
+			(uint64_t)regs.regs.vregs[1].lo,
+			(uint64_t)regs.regs.vregs[1].hi);
 		goto out;
 	}
 
 	regs.regs.regs[19] = saved_x19;
+	regs.regs.regs[20] = saved_x20;
 	regs.regs.fpsr = saved_fpsr;
+	regs.regs.fpcr = saved_fpcr;
 	regs.regs.vregs[0].lo = saved_v0_lo;
+	regs.regs.vregs[0].hi = saved_v0_hi;
+	regs.regs.vregs[1].lo = saved_v1_lo;
+	regs.regs.vregs[1].hi = saved_v1_hi;
 	if (set_target_regs(session_fd, &regs) < 0)
 		goto out;
 
+	memset(&regs, 0, sizeof(regs));
+	if (get_target_regs(session_fd, tid, &regs) < 0)
+		goto out;
+	if (regs.regs.regs[19] != saved_x19 ||
+	    regs.regs.regs[20] != saved_x20 ||
+	    regs.regs.fpsr != saved_fpsr ||
+	    regs.regs.fpcr != saved_fpcr ||
+	    regs.regs.vregs[0].lo != saved_v0_lo ||
+	    regs.regs.vregs[0].hi != saved_v0_hi ||
+	    regs.regs.vregs[1].lo != saved_v1_lo ||
+	    regs.regs.vregs[1].hi != saved_v1_hi) {
+		fprintf(stderr,
+			"example_regs_fp: restore verify failed x19=0x%" PRIx64
+			" x20=0x%" PRIx64 " fpsr=0x%x fpcr=0x%x"
+			" v0=(0x%" PRIx64 ",0x%" PRIx64 ")"
+			" v1=(0x%" PRIx64 ",0x%" PRIx64 ")\n",
+			(uint64_t)regs.regs.regs[19],
+			(uint64_t)regs.regs.regs[20],
+			regs.regs.fpsr, regs.regs.fpcr,
+			(uint64_t)regs.regs.vregs[0].lo,
+			(uint64_t)regs.regs.vregs[0].hi,
+			(uint64_t)regs.regs.vregs[1].lo,
+			(uint64_t)regs.regs.vregs[1].hi);
+		goto out;
+	}
+
 	status = 0;
-	printf("example_regs_fp: ok tid=%d\n", tid);
+	printf("example_regs_fp: ok tid=%d fields=x19,x20,fpsr,fpcr,v0,v1\n",
+	       tid);
 
 out:
 	if (frozen)
