@@ -1017,14 +1017,15 @@ static void qemu_insmod(const char *params)
 		qemu_fail("open_module errno=%d", errno);
 
 	if (params && params[0]) {
-		if (snprintf(param_buf, sizeof(param_buf), "enable_debugfs=1 %s",
+		if (snprintf(param_buf, sizeof(param_buf),
+			     "enable_debugfs=1 enable_kmsg=1 %s",
 			     params) >= (int)sizeof(param_buf)) {
 			close(fd);
 			qemu_fail("module_params_too_long");
 		}
 		params = param_buf;
 	} else {
-		params = "enable_debugfs=1";
+		params = "enable_debugfs=1 enable_kmsg=1";
 	}
 
 	if (syscall(SYS_finit_module, fd, params, 0) != 0) {

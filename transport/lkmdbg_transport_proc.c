@@ -20,6 +20,7 @@ static int (*proc_version_orig_release)(struct inode *inode, struct file *file);
 static long (*proc_version_orig_ioctl)(struct file *file, unsigned int cmd,
 				       unsigned long arg);
 static atomic_t proc_version_open_inflight = ATOMIC_INIT(0);
+static atomic_t proc_version_debug_logs = ATOMIC_INIT(0);
 static DECLARE_WAIT_QUEUE_HEAD(proc_version_open_waitq);
 #ifdef CONFIG_COMPAT
 static long (*proc_version_orig_compat_ioctl)(struct file *file,
@@ -77,6 +78,8 @@ static long lkmdbg_bootstrap_ioctl(struct file *file, unsigned int cmd,
 	if (!capable(CAP_SYS_ADMIN))
 		return -ENOTTY;
 
+	lkmdbg_pr_info("lkmdbg: proc bootstrap ioctl file=%px cmd=0x%x arg=0x%lx\n",
+		       file, cmd, arg);
 	ret = lkmdbg_open_session(argp);
 	if (ret == -EPERM || ret == -EINVAL || ret == -EFAULT)
 		return -ENOTTY;
@@ -124,6 +127,10 @@ static int __nocfi lkmdbg_proc_version_open(struct inode *inode,
 	old_fops = file->f_op;
 	WRITE_ONCE(file->f_op, new_fops);
 	fops_put(old_fops);
+	if (atomic_inc_return(&proc_version_debug_logs) <= 8)
+		lkmdbg_pr_info("lkmdbg: proc_version_open match inode=%px file=%px old_fops=%px new_fops=%px path_valid=%u\n",
+			       inode, file, old_fops, new_fops,
+			       proc_version_path_valid);
 
 	mutex_lock(&lkmdbg_state.lock);
 	lkmdbg_state.proc_open_successes++;
@@ -219,6 +226,15 @@ int lkmdbg_transport_init(void)
 #ifdef CONFIG_COMPAT
 	proc_version_orig_compat_ioctl = proc_version_orig_fops->compat_ioctl;
 #endif
+	lkmdbg_pr_info("lkmdbg: transport proc target inode=%px fops=%px open=%px ioctl=%px compat=%px\n",
+		       inode, proc_version_orig_fops, proc_version_orig_open,
+		       proc_version_orig_ioctl,
+#ifdef CONFIG_COMPAT
+		       proc_version_orig_compat_ioctl
+#else
+		       NULL
+#endif
+	);
 
 	if (!proc_version_orig_open) {
 		kfree(proc_version_hook_fops);
