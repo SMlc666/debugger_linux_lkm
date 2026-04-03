@@ -15,6 +15,8 @@ static const struct file_operations *proc_version_orig_fops;
 static struct file_operations *proc_version_hook_fops;
 static struct lkmdbg_inline_hook *proc_version_open_hook;
 static struct lkmdbg_hook_registry_entry *proc_version_open_registry;
+static struct lkmdbg_inline_hook *proc_version_ioctl_hook;
+static struct lkmdbg_hook_registry_entry *proc_version_ioctl_registry;
 static int (*proc_version_orig_open)(struct inode *inode, struct file *file);
 static int (*proc_version_orig_release)(struct inode *inode, struct file *file);
 static long (*proc_version_orig_ioctl)(struct file *file, unsigned int cmd,
@@ -22,6 +24,8 @@ static long (*proc_version_orig_ioctl)(struct file *file, unsigned int cmd,
 static atomic_t proc_version_open_inflight = ATOMIC_INIT(0);
 static DECLARE_WAIT_QUEUE_HEAD(proc_version_open_waitq);
 #ifdef CONFIG_COMPAT
+static struct lkmdbg_inline_hook *proc_version_compat_ioctl_hook;
+static struct lkmdbg_hook_registry_entry *proc_version_compat_ioctl_registry;
 static long (*proc_version_orig_compat_ioctl)(struct file *file,
 					      unsigned int cmd,
 					      unsigned long arg);
@@ -82,6 +86,26 @@ static long lkmdbg_bootstrap_ioctl(struct file *file, unsigned int cmd,
 		return -ENOTTY;
 
 	return ret;
+}
+
+static long __nocfi lkmdbg_proc_version_direct_ioctl(struct file *file,
+						     unsigned int cmd,
+						     unsigned long arg)
+{
+	struct lkmdbg_hook_registry_entry *registry;
+
+	if (lkmdbg_proc_version_matches(file_inode(file), file)) {
+		registry = READ_ONCE(proc_version_ioctl_registry);
+		if (registry)
+			lkmdbg_hook_registry_note_hit(registry);
+		if (_IOC_TYPE(cmd) == LKMDBG_IOC_MAGIC)
+			return lkmdbg_bootstrap_ioctl(file, cmd, arg);
+	}
+
+	if (proc_version_orig_ioctl)
+		return proc_version_orig_ioctl(file, cmd, arg);
+
+	return -ENOTTY;
 }
 
 static int __nocfi lkmdbg_proc_version_open(struct inode *inode,
@@ -157,6 +181,28 @@ static long lkmdbg_proc_version_ioctl(struct file *file, unsigned int cmd,
 }
 
 #ifdef CONFIG_COMPAT
+static long __nocfi lkmdbg_proc_version_direct_compat_ioctl(
+	struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct lkmdbg_hook_registry_entry *registry;
+
+	if (lkmdbg_proc_version_matches(file_inode(file), file)) {
+		registry = READ_ONCE(proc_version_compat_ioctl_registry);
+		if (registry)
+			lkmdbg_hook_registry_note_hit(registry);
+		if (_IOC_TYPE(cmd) == LKMDBG_IOC_MAGIC)
+			return lkmdbg_bootstrap_ioctl(file, cmd, arg);
+	}
+
+	if (proc_version_orig_compat_ioctl)
+		return proc_version_orig_compat_ioctl(file, cmd, arg);
+
+	if (proc_version_orig_ioctl)
+		return proc_version_orig_ioctl(file, cmd, arg);
+
+	return -ENOTTY;
+}
+
 static long lkmdbg_proc_version_compat_ioctl(struct file *file,
 					     unsigned int cmd,
 					     unsigned long arg)
@@ -171,6 +217,84 @@ static long lkmdbg_proc_version_compat_ioctl(struct file *file,
 		return proc_version_orig_ioctl(file, cmd, arg);
 
 	return -ENOTTY;
+}
+#endif
+
+static void lkmdbg_transport_clear_proc_version_state(void)
+{
+	proc_version_inode = NULL;
+	proc_version_orig_fops = NULL;
+	proc_version_hook_fops = NULL;
+	proc_version_orig_open = NULL;
+	proc_version_orig_release = NULL;
+	proc_version_orig_ioctl = NULL;
+	proc_version_path_valid = false;
+#ifdef CONFIG_COMPAT
+	proc_version_orig_compat_ioctl = NULL;
+#endif
+}
+
+static int lkmdbg_transport_install_proc_version_ioctl_hook(void)
+{
+	void *orig_ioctl = NULL;
+	int ret;
+
+	if (!proc_version_orig_ioctl)
+		return 0;
+
+	proc_version_ioctl_registry = lkmdbg_hook_registry_register(
+		"proc_version_ioctl", proc_version_orig_ioctl,
+		lkmdbg_proc_version_direct_ioctl);
+	if (!proc_version_ioctl_registry)
+		return -ENOMEM;
+
+	ret = lkmdbg_hook_install((void *)proc_version_orig_ioctl,
+				  lkmdbg_proc_version_direct_ioctl,
+				  &proc_version_ioctl_hook, &orig_ioctl);
+	if (ret) {
+		lkmdbg_hook_registry_unregister(proc_version_ioctl_registry, ret);
+		proc_version_ioctl_registry = NULL;
+		return ret;
+	}
+
+	proc_version_orig_ioctl = orig_ioctl;
+	lkmdbg_hook_registry_mark_installed(proc_version_ioctl_registry,
+					    proc_version_orig_fops->unlocked_ioctl,
+					    orig_ioctl, 0);
+	return 0;
+}
+
+#ifdef CONFIG_COMPAT
+static int lkmdbg_transport_install_proc_version_compat_ioctl_hook(void)
+{
+	void *orig_ioctl = NULL;
+	int ret;
+
+	if (!proc_version_orig_compat_ioctl ||
+	    proc_version_orig_compat_ioctl == proc_version_orig_fops->unlocked_ioctl)
+		return 0;
+
+	proc_version_compat_ioctl_registry = lkmdbg_hook_registry_register(
+		"proc_version_compat_ioctl", proc_version_orig_compat_ioctl,
+		lkmdbg_proc_version_direct_compat_ioctl);
+	if (!proc_version_compat_ioctl_registry)
+		return -ENOMEM;
+
+	ret = lkmdbg_hook_install((void *)proc_version_orig_compat_ioctl,
+				  lkmdbg_proc_version_direct_compat_ioctl,
+				  &proc_version_compat_ioctl_hook, &orig_ioctl);
+	if (ret) {
+		lkmdbg_hook_registry_unregister(proc_version_compat_ioctl_registry,
+						ret);
+		proc_version_compat_ioctl_registry = NULL;
+		return ret;
+	}
+
+	proc_version_orig_compat_ioctl = orig_ioctl;
+	lkmdbg_hook_registry_mark_installed(proc_version_compat_ioctl_registry,
+					    proc_version_orig_fops->compat_ioctl,
+					    orig_ioctl, 0);
+	return 0;
 }
 #endif
 
@@ -220,18 +344,54 @@ int lkmdbg_transport_init(void)
 	proc_version_orig_compat_ioctl = proc_version_orig_fops->compat_ioctl;
 #endif
 
-	if (!proc_version_orig_open) {
+	ret = lkmdbg_transport_install_proc_version_ioctl_hook();
+	if (ret) {
 		kfree(proc_version_hook_fops);
-		proc_version_hook_fops = NULL;
 		lkmdbg_path_put_runtime(&proc_version_path);
-		proc_version_path_valid = false;
-		proc_version_inode = NULL;
-		proc_version_orig_fops = NULL;
-		proc_version_orig_release = NULL;
-		proc_version_orig_ioctl = NULL;
+		lkmdbg_transport_clear_proc_version_state();
+		return ret;
+	}
 #ifdef CONFIG_COMPAT
-		proc_version_orig_compat_ioctl = NULL;
+	ret = lkmdbg_transport_install_proc_version_compat_ioctl_hook();
+	if (ret) {
+		if (proc_version_ioctl_hook) {
+			lkmdbg_hook_destroy(proc_version_ioctl_hook);
+			proc_version_ioctl_hook = NULL;
+		}
+		if (proc_version_ioctl_registry) {
+			lkmdbg_hook_registry_unregister(proc_version_ioctl_registry,
+						       ret);
+			proc_version_ioctl_registry = NULL;
+		}
+		kfree(proc_version_hook_fops);
+		lkmdbg_path_put_runtime(&proc_version_path);
+		lkmdbg_transport_clear_proc_version_state();
+		return ret;
+	}
 #endif
+
+	if (!proc_version_orig_open) {
+		if (proc_version_compat_ioctl_hook) {
+			lkmdbg_hook_destroy(proc_version_compat_ioctl_hook);
+			proc_version_compat_ioctl_hook = NULL;
+		}
+		if (proc_version_compat_ioctl_registry) {
+			lkmdbg_hook_registry_unregister(proc_version_compat_ioctl_registry,
+						       -EOPNOTSUPP);
+			proc_version_compat_ioctl_registry = NULL;
+		}
+		if (proc_version_ioctl_hook) {
+			lkmdbg_hook_destroy(proc_version_ioctl_hook);
+			proc_version_ioctl_hook = NULL;
+		}
+		if (proc_version_ioctl_registry) {
+			lkmdbg_hook_registry_unregister(proc_version_ioctl_registry,
+						       -EOPNOTSUPP);
+			proc_version_ioctl_registry = NULL;
+		}
+		kfree(proc_version_hook_fops);
+		lkmdbg_path_put_runtime(&proc_version_path);
+		lkmdbg_transport_clear_proc_version_state();
 		return -EOPNOTSUPP;
 	}
 
@@ -246,18 +406,27 @@ int lkmdbg_transport_init(void)
 	proc_version_open_registry = lkmdbg_hook_registry_register(
 		"proc_version_open", proc_version_orig_open, lkmdbg_proc_version_open);
 	if (!proc_version_open_registry) {
+		if (proc_version_compat_ioctl_hook) {
+			lkmdbg_hook_destroy(proc_version_compat_ioctl_hook);
+			proc_version_compat_ioctl_hook = NULL;
+		}
+		if (proc_version_compat_ioctl_registry) {
+			lkmdbg_hook_registry_unregister(proc_version_compat_ioctl_registry,
+						       -ENOMEM);
+			proc_version_compat_ioctl_registry = NULL;
+		}
+		if (proc_version_ioctl_hook) {
+			lkmdbg_hook_destroy(proc_version_ioctl_hook);
+			proc_version_ioctl_hook = NULL;
+		}
+		if (proc_version_ioctl_registry) {
+			lkmdbg_hook_registry_unregister(proc_version_ioctl_registry,
+						       -ENOMEM);
+			proc_version_ioctl_registry = NULL;
+		}
 		kfree(proc_version_hook_fops);
-		proc_version_hook_fops = NULL;
 		lkmdbg_path_put_runtime(&proc_version_path);
-		proc_version_path_valid = false;
-		proc_version_inode = NULL;
-		proc_version_orig_fops = NULL;
-		proc_version_orig_open = NULL;
-		proc_version_orig_release = NULL;
-		proc_version_orig_ioctl = NULL;
-#ifdef CONFIG_COMPAT
-		proc_version_orig_compat_ioctl = NULL;
-#endif
+		lkmdbg_transport_clear_proc_version_state();
 		return -ENOMEM;
 	}
 
@@ -267,18 +436,27 @@ int lkmdbg_transport_init(void)
 	if (ret) {
 		lkmdbg_hook_registry_unregister(proc_version_open_registry, ret);
 		proc_version_open_registry = NULL;
+		if (proc_version_compat_ioctl_hook) {
+			lkmdbg_hook_destroy(proc_version_compat_ioctl_hook);
+			proc_version_compat_ioctl_hook = NULL;
+		}
+		if (proc_version_compat_ioctl_registry) {
+			lkmdbg_hook_registry_unregister(proc_version_compat_ioctl_registry,
+						       ret);
+			proc_version_compat_ioctl_registry = NULL;
+		}
+		if (proc_version_ioctl_hook) {
+			lkmdbg_hook_destroy(proc_version_ioctl_hook);
+			proc_version_ioctl_hook = NULL;
+		}
+		if (proc_version_ioctl_registry) {
+			lkmdbg_hook_registry_unregister(proc_version_ioctl_registry,
+						       ret);
+			proc_version_ioctl_registry = NULL;
+		}
 		kfree(proc_version_hook_fops);
-		proc_version_hook_fops = NULL;
 		lkmdbg_path_put_runtime(&proc_version_path);
-		proc_version_path_valid = false;
-		proc_version_inode = NULL;
-		proc_version_orig_fops = NULL;
-		proc_version_orig_open = NULL;
-		proc_version_orig_release = NULL;
-		proc_version_orig_ioctl = NULL;
-#ifdef CONFIG_COMPAT
-		proc_version_orig_compat_ioctl = NULL;
-#endif
+		lkmdbg_transport_clear_proc_version_state();
 		return ret;
 	}
 
@@ -297,6 +475,24 @@ int lkmdbg_transport_init(void)
 void lkmdbg_transport_exit(void)
 {
 	long remaining = 1;
+
+	if (proc_version_compat_ioctl_hook) {
+		lkmdbg_hook_destroy(proc_version_compat_ioctl_hook);
+		proc_version_compat_ioctl_hook = NULL;
+	}
+	if (proc_version_compat_ioctl_registry) {
+		lkmdbg_hook_registry_unregister(proc_version_compat_ioctl_registry,
+					       0);
+		proc_version_compat_ioctl_registry = NULL;
+	}
+	if (proc_version_ioctl_hook) {
+		lkmdbg_hook_destroy(proc_version_ioctl_hook);
+		proc_version_ioctl_hook = NULL;
+	}
+	if (proc_version_ioctl_registry) {
+		lkmdbg_hook_registry_unregister(proc_version_ioctl_registry, 0);
+		proc_version_ioctl_registry = NULL;
+	}
 
 	if (proc_version_open_hook) {
 		if (!lkmdbg_hook_deactivate(proc_version_open_hook)) {
@@ -326,17 +522,7 @@ void lkmdbg_transport_exit(void)
 
 	if (proc_version_path_valid) {
 		lkmdbg_path_put_runtime(&proc_version_path);
-		proc_version_path_valid = false;
 	}
 
-	if (proc_version_inode)
-		proc_version_inode = NULL;
-
-	proc_version_orig_fops = NULL;
-	proc_version_orig_open = NULL;
-	proc_version_orig_release = NULL;
-	proc_version_orig_ioctl = NULL;
-#ifdef CONFIG_COMPAT
-	proc_version_orig_compat_ioctl = NULL;
-#endif
+	lkmdbg_transport_clear_proc_version_state();
 }
