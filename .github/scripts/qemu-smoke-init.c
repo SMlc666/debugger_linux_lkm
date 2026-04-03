@@ -234,13 +234,21 @@ static bool qemu_run_proc_exposure_phase(const char *phase,
 					 struct qemu_proc_exposure_stats *stats)
 {
 	int ready_pipe[2];
+	int stop_pipe[2];
 	pid_t child;
 	int status = 0;
 	unsigned char ready_code = 0xff;
 	bool hide_enabled = false;
+	unsigned int sample_rounds;
+	unsigned int round;
 
 	if (pipe(ready_pipe) != 0)
 		qemu_fail("pipe_proc_exposure_%s errno=%d", phase, errno);
+	if (pipe(stop_pipe) != 0) {
+		close(ready_pipe[0]);
+		close(ready_pipe[1]);
+		qemu_fail("pipe_proc_exposure_stop_%s errno=%d", phase, errno);
+	}
 
 	child = fork();
 	if (child < 0)
@@ -255,6 +263,7 @@ static bool qemu_run_proc_exposure_phase(const char *phase,
 		uint32_t old_flags = 0;
 
 		close(ready_pipe[0]);
+		close(stop_pipe[1]);
 		if (comm_name)
 			prctl(PR_SET_NAME, comm_name, 0, 0, 0);
 
@@ -285,7 +294,17 @@ static bool qemu_run_proc_exposure_phase(const char *phase,
 
 		ready_code = 0;
 		(void)write(ready_pipe[1], &ready_code, 1);
-		usleep(QEMU_PROC_EXPOSURE_LIFETIME_US);
+		for (;;) {
+			unsigned char stop_code;
+			ssize_t nr;
+
+			nr = read(stop_pipe[0], &stop_code, 1);
+			if (nr > 0 || nr == 0)
+				break;
+			if (errno == EINTR)
+				continue;
+			break;
+		}
 
 		if (hide_enabled) {
 			req.flags = old_flags;
@@ -293,17 +312,21 @@ static bool qemu_run_proc_exposure_phase(const char *phase,
 			close(session_fd);
 		}
 		close(ready_pipe[1]);
+		close(stop_pipe[0]);
 		_exit(0);
 	}
 
 	close(ready_pipe[1]);
+	close(stop_pipe[0]);
 	if (read(ready_pipe[0], &ready_code, 1) != 1) {
 		close(ready_pipe[0]);
+		close(stop_pipe[1]);
 		qemu_fail("read_proc_exposure_ready_%s errno=%d", phase, errno);
 	}
 	close(ready_pipe[0]);
 
 	if (ready_code == 2) {
+		close(stop_pipe[1]);
 		if (waitpid(child, &status, 0) < 0)
 			qemu_fail("waitpid_proc_exposure_%s errno=%d", phase, errno);
 		qemu_check(WIFEXITED(status), "proc_exposure_signal_%s status=%d",
@@ -314,19 +337,19 @@ static bool qemu_run_proc_exposure_phase(const char *phase,
 		   (unsigned int)ready_code);
 
 	memset(stats, 0, sizeof(*stats));
-	for (;;) {
-		pid_t waited;
-
+	sample_rounds = QEMU_PROC_EXPOSURE_LIFETIME_US /
+			QEMU_PROC_EXPOSURE_SAMPLE_US;
+	if (sample_rounds == 0)
+		sample_rounds = 1;
+	for (round = 0; round < sample_rounds; round++) {
 		qemu_sample_proc_exposure(child, comm_name, "/init", stats);
-		usleep(QEMU_PROC_EXPOSURE_SAMPLE_US);
-
-		waited = waitpid(child, &status, WNOHANG);
-		if (waited < 0)
-			qemu_fail("waitpid_proc_exposure_%s errno=%d", phase, errno);
-		if (waited == child)
-			break;
+		if (round + 1 < sample_rounds)
+			usleep(QEMU_PROC_EXPOSURE_SAMPLE_US);
 	}
 
+	close(stop_pipe[1]);
+	if (waitpid(child, &status, 0) < 0)
+		qemu_fail("waitpid_proc_exposure_%s errno=%d", phase, errno);
 	qemu_check(WIFEXITED(status), "proc_exposure_child_signal_%s status=%d",
 		   phase, status);
 	qemu_check(WEXITSTATUS(status) == 0,

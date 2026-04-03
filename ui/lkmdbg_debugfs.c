@@ -1,4 +1,5 @@
 #include <linux/debugfs.h>
+#include <linux/err.h>
 #include <linux/module.h>
 #include <linux/seq_file.h>
 
@@ -210,58 +211,57 @@ static int lkmdbg_status_show(struct seq_file *m, void *unused)
 	return 0;
 }
 
-static int lkmdbg_status_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, lkmdbg_status_show, inode->i_private);
-}
+DEFINE_SHOW_ATTRIBUTE(lkmdbg_status);
 
 static int lkmdbg_hooks_show(struct seq_file *m, void *unused)
 {
 	return lkmdbg_hook_registry_debugfs_show(m);
 }
 
-static int lkmdbg_hooks_open(struct inode *inode, struct file *file)
+DEFINE_SHOW_ATTRIBUTE(lkmdbg_hooks);
+
+static int lkmdbg_debugfs_dentry_err(struct dentry *dentry)
 {
-	return single_open(file, lkmdbg_hooks_show, inode->i_private);
+	if (IS_ERR(dentry))
+		return PTR_ERR(dentry);
+	if (!dentry)
+		return -ENOMEM;
+	return 0;
 }
-
-static const struct file_operations lkmdbg_status_fops = {
-	.owner = THIS_MODULE,
-	.open = lkmdbg_status_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
-
-static const struct file_operations lkmdbg_hooks_fops = {
-	.owner = THIS_MODULE,
-	.open = lkmdbg_hooks_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
 
 int lkmdbg_debugfs_init(void)
 {
+	struct dentry *status_dentry;
+	struct dentry *hooks_dentry;
+	int ret;
+
 	if (lkmdbg_state.debugfs_dir)
 		return 0;
 
 	lkmdbg_state.debugfs_dir = debugfs_create_dir(LKMDBG_DIR_NAME, NULL);
 	if (IS_ERR_OR_NULL(lkmdbg_state.debugfs_dir))
-		return -ENOMEM;
+		return lkmdbg_debugfs_dentry_err(lkmdbg_state.debugfs_dir);
 
-	if (!debugfs_create_file("status", 0444, lkmdbg_state.debugfs_dir, NULL,
-				 &lkmdbg_status_fops)) {
+	status_dentry = debugfs_create_file("status", 0444,
+					    lkmdbg_state.debugfs_dir, NULL,
+					    &lkmdbg_status_fops);
+	ret = lkmdbg_debugfs_dentry_err(status_dentry);
+	if (ret) {
+		pr_err("lkmdbg: debugfs create status failed ret=%d\n", ret);
 		debugfs_remove_recursive(lkmdbg_state.debugfs_dir);
 		lkmdbg_state.debugfs_dir = NULL;
-		return -ENOMEM;
+		return ret;
 	}
 
-	if (!debugfs_create_file("hooks", 0444, lkmdbg_state.debugfs_dir, NULL,
-				 &lkmdbg_hooks_fops)) {
+	hooks_dentry = debugfs_create_file("hooks", 0444,
+					   lkmdbg_state.debugfs_dir, NULL,
+					   &lkmdbg_hooks_fops);
+	ret = lkmdbg_debugfs_dentry_err(hooks_dentry);
+	if (ret) {
+		pr_err("lkmdbg: debugfs create hooks failed ret=%d\n", ret);
 		debugfs_remove_recursive(lkmdbg_state.debugfs_dir);
 		lkmdbg_state.debugfs_dir = NULL;
-		return -ENOMEM;
+		return ret;
 	}
 
 	mutex_lock(&lkmdbg_state.lock);
