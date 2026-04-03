@@ -571,12 +571,30 @@ jobs:
             if grep -q 'LKMDBG_QEMU_INPUT_WAIT_HOST_KEY' "$LOG"; then
               break
             fi
+            if grep -q 'LKMDBG_QEMU_SMOKE_OK' "$LOG"; then
+              break
+            fi
             if ! kill -0 "$QEMU_PID" 2>/dev/null; then
-              wait "$QEMU_PID"
+              wait "$QEMU_PID" || true
+              break
             fi
             sleep 1
           done
           if ! grep -q 'LKMDBG_QEMU_INPUT_WAIT_HOST_KEY' "$LOG"; then
+            if grep -q 'LKMDBG_QEMU_SESSION_UNAVAILABLE' "$LOG"; then
+              wait "$QEMU_PID" || true
+              trap - EXIT
+              if ! grep -q 'LKMDBG_QEMU_SMOKE_OK' "$LOG"; then
+                echo "::group::QEMU smoke markers"
+                grep -a 'LKMDBG_QEMU_' "$LOG" || true
+                echo "::endgroup::"
+                echo "::group::QEMU smoke tail"
+                tail -n 200 "$LOG" || true
+                echo "::endgroup::"
+                exit 1
+              fi
+              exit 0
+            fi
             echo "::group::QEMU smoke markers"
             grep -a 'LKMDBG_QEMU_' "$LOG" || true
             echo "::endgroup::"
