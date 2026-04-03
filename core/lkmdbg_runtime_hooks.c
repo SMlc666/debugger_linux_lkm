@@ -31,6 +31,7 @@ static struct lkmdbg_hook_registry_entry *lkmdbg_proc_tgid_base_lookup_registry;
 static struct dentry *(*lkmdbg_proc_tgid_base_lookup_orig)(struct inode *dir,
 							   struct dentry *dentry,
 							   unsigned int flags);
+static struct task_struct *(*lkmdbg_get_proc_task_orig)(const struct inode *inode);
 static atomic_t lkmdbg_owner_proc_hide_inflight = ATOMIC_INIT(0);
 static DECLARE_WAIT_QUEUE_HEAD(lkmdbg_owner_proc_hide_waitq);
 static pid_t lkmdbg_owner_proc_hidden_tgid;
@@ -85,6 +86,11 @@ static void *lkmdbg_lookup_proc_pid_readdir(void)
 static void *lkmdbg_lookup_proc_tgid_base_lookup(void)
 {
 	return lkmdbg_lookup_runtime_symbol_variants("proc_tgid_base_lookup");
+}
+
+static void *lkmdbg_lookup_get_proc_task(void)
+{
+	return lkmdbg_lookup_runtime_symbol_variants("get_proc_task");
 }
 
 static bool lkmdbg_parse_proc_pid_name(const char *name, int len, pid_t *tgid)
@@ -374,6 +380,7 @@ static struct dentry *__nocfi lkmdbg_proc_tgid_base_lookup_replacement(
 	struct lkmdbg_hook_registry_entry *registry;
 	struct dentry *(*orig)(struct inode *dir, struct dentry *dentry,
 			       unsigned int flags);
+	struct task_struct *task = NULL;
 	struct dentry *ret;
 	pid_t tgid;
 
@@ -389,14 +396,25 @@ static struct dentry *__nocfi lkmdbg_proc_tgid_base_lookup_replacement(
 		goto out;
 	}
 
+	if (dir && lkmdbg_get_proc_task_orig)
+		task = lkmdbg_get_proc_task_orig(dir);
+	if (task && lkmdbg_should_hide_owner_proc(task_tgid_nr(task))) {
+		lkmdbg_owner_proc_d_drop(dentry);
+		ret = ERR_PTR(-ENOENT);
+		goto out_put_task;
+	}
+
 	if (lkmdbg_parse_proc_parent_tgid(dentry, &tgid) &&
 	    lkmdbg_should_hide_owner_proc(tgid)) {
 		lkmdbg_owner_proc_d_drop(dentry);
 		ret = ERR_PTR(-ENOENT);
-		goto out;
+		goto out_put_task;
 	}
 
 	ret = orig(dir, dentry, flags);
+out_put_task:
+	if (task)
+		put_task_struct(task);
 out:
 	if (atomic_dec_and_test(&lkmdbg_owner_proc_hide_inflight))
 		wake_up_all(&lkmdbg_owner_proc_hide_waitq);
@@ -415,6 +433,7 @@ static int lkmdbg_install_owner_proc_hide_hook(void)
 	void *target;
 	void *readdir_target;
 	void *tgid_base_lookup_target;
+	void *get_proc_task_target;
 	void *orig_fn = NULL;
 	void *readdir_orig_fn = NULL;
 	void *tgid_base_lookup_orig_fn = NULL;
@@ -428,8 +447,12 @@ static int lkmdbg_install_owner_proc_hide_hook(void)
 	target = lkmdbg_lookup_proc_pid_lookup();
 	readdir_target = lkmdbg_lookup_proc_pid_readdir();
 	tgid_base_lookup_target = lkmdbg_lookup_proc_tgid_base_lookup();
+	get_proc_task_target = lkmdbg_lookup_get_proc_task();
 	if (!target || !readdir_target || !tgid_base_lookup_target)
 		return -EOPNOTSUPP;
+
+	lkmdbg_get_proc_task_orig =
+		(struct task_struct *(*)(const struct inode *))get_proc_task_target;
 
 	lkmdbg_proc_pid_lookup_registry = lkmdbg_hook_registry_register(
 		"proc_pid_lookup", target, lkmdbg_proc_pid_lookup_replacement);
@@ -538,6 +561,7 @@ rollback_lookup:
 	}
 	lkmdbg_proc_pid_lookup_orig = NULL;
 	lkmdbg_proc_tgid_base_lookup_orig = NULL;
+	lkmdbg_get_proc_task_orig = NULL;
 	return ret;
 }
 
@@ -673,6 +697,7 @@ void lkmdbg_runtime_hooks_exit(void)
 	lkmdbg_proc_pid_lookup_orig = NULL;
 	lkmdbg_proc_pid_readdir_orig = NULL;
 	lkmdbg_proc_tgid_base_lookup_orig = NULL;
+	lkmdbg_get_proc_task_orig = NULL;
 
 	if (lkmdbg_seq_read_hook) {
 		if (!lkmdbg_hook_deactivate(lkmdbg_seq_read_hook)) {
