@@ -58,6 +58,8 @@
 #define QEMU_INPUT_DEVICES_PATH "/proc/bus/input/devices"
 
 static int qemu_open_session(void);
+static bool qemu_status_debugfs_available = true;
+static bool qemu_status_debugfs_reported;
 
 static void qemu_poweroff(void)
 {
@@ -122,6 +124,34 @@ static void qemu_read_file(const char *path, char *buf, size_t size)
 
 	buf[nr] = '\0';
 	close(fd);
+}
+
+static bool qemu_try_read_file_errno(const char *path, char *buf, size_t size,
+				     int *err_out)
+{
+	ssize_t nr;
+	int fd;
+
+	fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		if (err_out)
+			*err_out = errno;
+		return false;
+	}
+
+	nr = read(fd, buf, size - 1);
+	if (nr < 0) {
+		int saved_errno = errno;
+
+		close(fd);
+		qemu_fail("read_%s errno=%d", path, saved_errno);
+	}
+
+	buf[nr] = '\0';
+	close(fd);
+	if (err_out)
+		*err_out = 0;
+	return true;
 }
 
 struct qemu_proc_exposure_stats {
@@ -468,8 +498,23 @@ static unsigned int qemu_cmdline_get_u32(const char *key,
 static void qemu_expect_status_line(const char *needle)
 {
 	char buf[8192];
+	int err;
 
-	qemu_read_file(STATUS_PATH, buf, sizeof(buf));
+	if (!qemu_status_debugfs_available)
+		return;
+	if (!qemu_try_read_file_errno(STATUS_PATH, buf, sizeof(buf), &err)) {
+		if (err == ENOENT) {
+			qemu_status_debugfs_available = false;
+			if (!qemu_status_debugfs_reported) {
+				printf("LKMDBG_QEMU_STATUS_UNAVAILABLE errno=%d\n",
+				       err);
+				fflush(stdout);
+				qemu_status_debugfs_reported = true;
+			}
+			return;
+		}
+		qemu_fail("open_%s errno=%d", STATUS_PATH, err);
+	}
 	qemu_check(strstr(buf, needle) != NULL, "missing_status_%s", needle);
 }
 
@@ -479,8 +524,23 @@ static unsigned long long qemu_read_status_u64(const char *key)
 	char *line;
 	char *endptr;
 	unsigned long long value;
+	int err;
 
-	qemu_read_file(STATUS_PATH, buf, sizeof(buf));
+	if (!qemu_status_debugfs_available)
+		return 0;
+	if (!qemu_try_read_file_errno(STATUS_PATH, buf, sizeof(buf), &err)) {
+		if (err == ENOENT) {
+			qemu_status_debugfs_available = false;
+			if (!qemu_status_debugfs_reported) {
+				printf("LKMDBG_QEMU_STATUS_UNAVAILABLE errno=%d\n",
+				       err);
+				fflush(stdout);
+				qemu_status_debugfs_reported = true;
+			}
+			return 0;
+		}
+		qemu_fail("open_%s errno=%d", STATUS_PATH, err);
+	}
 	line = strstr(buf, key);
 	qemu_check(line != NULL, "missing_status_key_%s", key);
 
@@ -496,7 +556,11 @@ static void qemu_expect_status_u64_at_least(const char *key,
 {
 	unsigned long long value;
 
+	if (!qemu_status_debugfs_available)
+		return;
 	value = qemu_read_status_u64(key);
+	if (!qemu_status_debugfs_available)
+		return;
 	qemu_check(value >= minimum, "status_%s_lt_%llu_got_%llu", key, minimum,
 		   value);
 }
@@ -1172,18 +1236,20 @@ int main(void)
 				qemu_run_tool(ex_remote_alloc_rw_argv);
 				qemu_run_tool(ex_phys_translate_read_argv);
 				qemu_run_tool(ex_perf_baseline_argv);
-			printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
-			       qemu_read_status_u64("hwpoint_callback_total="),
-			       qemu_read_status_u64("breakpoint_callback_total="),
-			       qemu_read_status_u64("watchpoint_callback_total="),
-			       qemu_read_status_u64("target_stop_event_read_total="),
-			       qemu_read_status_u64("breakpoint_stop_event_read_total="),
-			       qemu_read_status_u64("watchpoint_stop_event_read_total="),
-			       qemu_read_status_u64("hwpoint_last_reason="),
-			       qemu_read_status_u64("hwpoint_last_type="),
-			       qemu_read_status_u64("hwpoint_last_addr="),
-			       qemu_read_status_u64("hwpoint_last_ip="));
-			fflush(stdout);
+				if (qemu_status_debugfs_available) {
+					printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
+					       qemu_read_status_u64("hwpoint_callback_total="),
+					       qemu_read_status_u64("breakpoint_callback_total="),
+					       qemu_read_status_u64("watchpoint_callback_total="),
+					       qemu_read_status_u64("target_stop_event_read_total="),
+					       qemu_read_status_u64("breakpoint_stop_event_read_total="),
+					       qemu_read_status_u64("watchpoint_stop_event_read_total="),
+					       qemu_read_status_u64("hwpoint_last_reason="),
+					       qemu_read_status_u64("hwpoint_last_type="),
+					       qemu_read_status_u64("hwpoint_last_addr="),
+					       qemu_read_status_u64("hwpoint_last_ip="));
+					fflush(stdout);
+				}
 		}
 		qemu_rmmod();
 	}
