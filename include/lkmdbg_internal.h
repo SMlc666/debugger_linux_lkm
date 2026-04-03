@@ -31,6 +31,7 @@ struct mm_struct;
 struct pt_regs;
 struct seq_file;
 struct task_struct;
+struct tracepoint;
 struct vm_area_struct;
 struct lkmdbg_freezer;
 struct perf_event;
@@ -140,6 +141,8 @@ struct lkmdbg_symbols {
 	unsigned long access_remote_vm_inner_sym;
 	unsigned long kern_path_sym;
 	unsigned long path_put_sym;
+	unsigned long d_drop_sym;
+	unsigned long unpin_user_pages_dirty_lock_sym;
 	unsigned long register_user_hw_breakpoint_sym;
 	unsigned long modify_user_hw_breakpoint_sym;
 	unsigned long unregister_hw_breakpoint_sym;
@@ -211,13 +214,45 @@ struct lkmdbg_syscall_control_state {
 
 int lkmdbg_disable_kprobe_blacklist(void);
 int lkmdbg_cfi_bypass(void);
+unsigned long __nocfi lkmdbg_kallsyms_lookup_name_runtime(const char *name);
+int __nocfi lkmdbg_aarch64_insn_write_runtime(void *addr, u32 insn);
+int __nocfi lkmdbg_aarch64_insn_patch_text_nosync_runtime(void *addr,
+							    u32 insn);
+int __nocfi lkmdbg_register_user_step_hook_runtime(void *hook);
+void __nocfi lkmdbg_unregister_user_step_hook_runtime(void *hook);
+void __nocfi lkmdbg_user_enable_single_step_runtime(struct task_struct *task);
+void __nocfi lkmdbg_user_disable_single_step_runtime(struct task_struct *task);
+void __nocfi lkmdbg_perf_event_disable_local_runtime(struct perf_event *event);
+void __nocfi lkmdbg_for_each_kernel_tracepoint_runtime(
+	void (*fct)(struct tracepoint *tp, void *priv), void *priv);
+int __nocfi lkmdbg_tracepoint_probe_register_runtime(struct tracepoint *tp,
+						       void *probe,
+						       void *data);
+int __nocfi lkmdbg_tracepoint_probe_unregister_runtime(struct tracepoint *tp,
+							 void *probe,
+							 void *data);
 void lkmdbg_flush_icache_runtime(unsigned long start, unsigned long end);
 int lkmdbg_task_work_add_runtime(struct task_struct *task,
 				 struct callback_head *work,
 				 unsigned int notify);
+struct callback_head *__nocfi lkmdbg_task_work_cancel_match_runtime(
+	struct task_struct *task,
+	bool (*match)(struct callback_head *cb, void *data), void *data);
+struct callback_head *__nocfi lkmdbg_task_work_cancel_func_runtime(
+	struct task_struct *task, task_work_func_t func);
+#ifdef TWA_RESUME
+bool __nocfi lkmdbg_task_work_cancel_runtime(struct task_struct *task,
+					     struct callback_head *work);
+#else
+struct callback_head *__nocfi lkmdbg_task_work_cancel_runtime(
+	struct task_struct *task, task_work_func_t func);
+#endif
 int __nocfi lkmdbg_kern_path_runtime(const char *name, unsigned int flags,
 				     struct path *path);
 void __nocfi lkmdbg_path_put_runtime(const struct path *path);
+void __nocfi lkmdbg_d_drop_runtime(struct dentry *dentry);
+void __nocfi lkmdbg_unpin_user_pages_dirty_lock_runtime(
+	struct page **pages, unsigned long npages, bool make_dirty);
 bool lkmdbg_hw_breakpoint_runtime_available(void);
 struct perf_event *__nocfi lkmdbg_register_user_hw_breakpoint_runtime(
 	struct perf_event_attr *attr, void *triggered, void *context,
@@ -292,6 +327,7 @@ extern unsigned int hook_selftest_mode;
 extern bool hook_seq_read;
 extern bool enable_kmsg;
 extern bool enable_debugfs;
+extern bool enable_input_tracking;
 extern bool bypass_kprobe_blacklist;
 extern bool bypass_cfi;
 extern struct lkmdbg_state lkmdbg_state;

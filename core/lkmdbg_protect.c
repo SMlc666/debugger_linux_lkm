@@ -13,7 +13,7 @@ static int write_insn(void *target, u32 insn)
 	if (!lkmdbg_symbols.aarch64_insn_write || !lkmdbg_symbols.flush_icache_range)
 		return -ENOENT;
 
-	if (lkmdbg_symbols.aarch64_insn_write(target, insn))
+	if (lkmdbg_aarch64_insn_write_runtime(target, insn))
 		return -EIO;
 
 	lkmdbg_flush_icache_runtime((unsigned long)target,
@@ -31,7 +31,7 @@ int lkmdbg_disable_kprobe_blacklist(void)
 		return -ENOENT;
 
 	kprobe_blacklist = (struct list_head *)
-		lkmdbg_symbols.kallsyms_lookup_name("kprobe_blacklist");
+		lkmdbg_kallsyms_lookup_name_runtime("kprobe_blacklist");
 	if (!kprobe_blacklist)
 		return -ENOENT;
 
@@ -65,7 +65,8 @@ int lkmdbg_cfi_bypass(void)
 		return -ENOENT;
 
 	for (i = 0; i < ARRAY_SIZE(targets); i++) {
-		unsigned long addr = lkmdbg_symbols.kallsyms_lookup_name(targets[i]);
+		unsigned long addr =
+			lkmdbg_kallsyms_lookup_name_runtime(targets[i]);
 		if (!addr)
 			continue;
 		if (write_insn((void *)addr, AARCH64_RET_INSN) == 0)
@@ -73,7 +74,8 @@ int lkmdbg_cfi_bypass(void)
 	}
 
 	{
-		unsigned long addr = lkmdbg_symbols.kallsyms_lookup_name("report_cfi_failure");
+		unsigned long addr =
+			lkmdbg_kallsyms_lookup_name_runtime("report_cfi_failure");
 		if (addr) {
 			u32 seq[] = {AARCH64_MOV_X0_1, AARCH64_RET_INSN};
 			if (!write_insn((void *)addr, seq[0]) &&

@@ -3,12 +3,39 @@
 
 #include "lkmdbg_internal.h"
 
+typedef unsigned long (*lkmdbg_kallsyms_lookup_name_runtime_fn)(
+	const char *name);
+typedef void (*lkmdbg_register_user_step_hook_runtime_fn)(void *hook);
+typedef void (*lkmdbg_unregister_user_step_hook_runtime_fn)(void *hook);
+typedef void (*lkmdbg_user_single_step_runtime_fn)(struct task_struct *task);
 typedef int (*lkmdbg_task_work_add_runtime_fn)(struct task_struct *task,
 					       struct callback_head *work,
 					       unsigned int notify);
+typedef struct callback_head *(*lkmdbg_task_work_cancel_match_runtime_fn)(
+	struct task_struct *task,
+	bool (*match)(struct callback_head *cb, void *data), void *data);
+typedef struct callback_head *(*lkmdbg_task_work_cancel_func_runtime_fn)(
+	struct task_struct *task, task_work_func_t func);
+#ifdef TWA_RESUME
+typedef bool (*lkmdbg_task_work_cancel_runtime_fn)(struct task_struct *task,
+						   struct callback_head *work);
+#else
+typedef struct callback_head *(*lkmdbg_task_work_cancel_runtime_fn)(
+	struct task_struct *task, task_work_func_t func);
+#endif
+typedef void (*lkmdbg_for_each_kernel_tracepoint_runtime_fn)(
+	void (*fct)(struct tracepoint *tp, void *priv), void *priv);
+typedef int (*lkmdbg_tracepoint_probe_register_runtime_fn)(
+	struct tracepoint *tp, void *probe, void *data);
+typedef int (*lkmdbg_tracepoint_probe_unregister_runtime_fn)(
+	struct tracepoint *tp, void *probe, void *data);
 typedef int (*lkmdbg_kern_path_runtime_fn)(const char *name, unsigned int flags,
 					   struct path *path);
+typedef void (*lkmdbg_perf_event_disable_local_fn)(struct perf_event *event);
 typedef void (*lkmdbg_path_put_runtime_fn)(const struct path *path);
+typedef void (*lkmdbg_d_drop_runtime_fn)(struct dentry *dentry);
+typedef void (*lkmdbg_unpin_user_pages_dirty_lock_runtime_fn)(
+	struct page **pages, unsigned long npages, bool make_dirty);
 typedef struct perf_event *(*lkmdbg_register_user_hw_breakpoint_runtime_fn)(
 	struct perf_event_attr *attr, void *triggered, void *context,
 	struct task_struct *task);
@@ -16,6 +43,136 @@ typedef int (*lkmdbg_modify_user_hw_breakpoint_runtime_fn)(
 	struct perf_event *bp, struct perf_event_attr *attr);
 typedef void (*lkmdbg_unregister_hw_breakpoint_runtime_fn)(
 	struct perf_event *bp);
+
+unsigned long __nocfi lkmdbg_kallsyms_lookup_name_runtime(const char *name)
+{
+	lkmdbg_kallsyms_lookup_name_runtime_fn fn;
+
+	if (!name || !lkmdbg_symbols.kallsyms_lookup_name)
+		return 0;
+
+	fn = (lkmdbg_kallsyms_lookup_name_runtime_fn)
+		lkmdbg_symbols.kallsyms_lookup_name;
+	return fn(name);
+}
+
+int __nocfi lkmdbg_aarch64_insn_write_runtime(void *addr, u32 insn)
+{
+	if (!lkmdbg_symbols.aarch64_insn_write)
+		return -EOPNOTSUPP;
+
+	return lkmdbg_symbols.aarch64_insn_write(addr, insn);
+}
+
+int __nocfi lkmdbg_aarch64_insn_patch_text_nosync_runtime(void *addr, u32 insn)
+{
+	if (!lkmdbg_symbols.aarch64_insn_patch_text_nosync)
+		return -EOPNOTSUPP;
+
+	return lkmdbg_symbols.aarch64_insn_patch_text_nosync(addr, insn);
+}
+
+int __nocfi lkmdbg_register_user_step_hook_runtime(void *hook)
+{
+	lkmdbg_register_user_step_hook_runtime_fn fn;
+
+	if (!hook || !lkmdbg_symbols.register_user_step_hook_sym)
+		return -EOPNOTSUPP;
+
+	fn = (lkmdbg_register_user_step_hook_runtime_fn)
+		lkmdbg_symbols.register_user_step_hook_sym;
+	fn(hook);
+	return 0;
+}
+
+void __nocfi lkmdbg_unregister_user_step_hook_runtime(void *hook)
+{
+	lkmdbg_unregister_user_step_hook_runtime_fn fn;
+
+	if (!hook || !lkmdbg_symbols.unregister_user_step_hook_sym)
+		return;
+
+	fn = (lkmdbg_unregister_user_step_hook_runtime_fn)
+		lkmdbg_symbols.unregister_user_step_hook_sym;
+	fn(hook);
+}
+
+void __nocfi lkmdbg_user_enable_single_step_runtime(struct task_struct *task)
+{
+	lkmdbg_user_single_step_runtime_fn fn;
+
+	if (!task || !lkmdbg_symbols.user_enable_single_step_sym)
+		return;
+
+	fn = (lkmdbg_user_single_step_runtime_fn)
+		lkmdbg_symbols.user_enable_single_step_sym;
+	fn(task);
+}
+
+void __nocfi lkmdbg_user_disable_single_step_runtime(struct task_struct *task)
+{
+	lkmdbg_user_single_step_runtime_fn fn;
+
+	if (!task || !lkmdbg_symbols.user_disable_single_step_sym)
+		return;
+
+	fn = (lkmdbg_user_single_step_runtime_fn)
+		lkmdbg_symbols.user_disable_single_step_sym;
+	fn(task);
+}
+
+void __nocfi lkmdbg_perf_event_disable_local_runtime(struct perf_event *event)
+{
+	lkmdbg_perf_event_disable_local_fn fn;
+
+	if (!event || !lkmdbg_symbols.perf_event_disable_local_sym)
+		return;
+
+	fn = (lkmdbg_perf_event_disable_local_fn)
+		lkmdbg_symbols.perf_event_disable_local_sym;
+	fn(event);
+}
+
+void __nocfi lkmdbg_for_each_kernel_tracepoint_runtime(
+	void (*fct)(struct tracepoint *tp, void *priv), void *priv)
+{
+	lkmdbg_for_each_kernel_tracepoint_runtime_fn fn;
+
+	if (!fct || !lkmdbg_symbols.for_each_kernel_tracepoint_sym)
+		return;
+
+	fn = (lkmdbg_for_each_kernel_tracepoint_runtime_fn)
+		lkmdbg_symbols.for_each_kernel_tracepoint_sym;
+	fn(fct, priv);
+}
+
+int __nocfi lkmdbg_tracepoint_probe_register_runtime(struct tracepoint *tp,
+						       void *probe,
+						       void *data)
+{
+	lkmdbg_tracepoint_probe_register_runtime_fn fn;
+
+	if (!tp || !probe || !lkmdbg_symbols.tracepoint_probe_register_sym)
+		return -EOPNOTSUPP;
+
+	fn = (lkmdbg_tracepoint_probe_register_runtime_fn)
+		lkmdbg_symbols.tracepoint_probe_register_sym;
+	return fn(tp, probe, data);
+}
+
+int __nocfi lkmdbg_tracepoint_probe_unregister_runtime(struct tracepoint *tp,
+							 void *probe,
+							 void *data)
+{
+	lkmdbg_tracepoint_probe_unregister_runtime_fn fn;
+
+	if (!tp || !probe || !lkmdbg_symbols.tracepoint_probe_unregister_sym)
+		return -EOPNOTSUPP;
+
+	fn = (lkmdbg_tracepoint_probe_unregister_runtime_fn)
+		lkmdbg_symbols.tracepoint_probe_unregister_sym;
+	return fn(tp, probe, data);
+}
 
 static unsigned long lkmdbg_lookup_runtime_symbol(const char *name)
 {
@@ -25,7 +182,7 @@ static unsigned long lkmdbg_lookup_runtime_symbol(const char *name)
 	unsigned long addr = 0;
 
 	if (lkmdbg_symbols.kallsyms_lookup_name)
-		addr = lkmdbg_symbols.kallsyms_lookup_name(name);
+		addr = lkmdbg_kallsyms_lookup_name_runtime(name);
 	if (addr)
 		return addr;
 
@@ -68,83 +225,84 @@ static int lkmdbg_resolve_runtime_symbols(void)
 	if (!lkmdbg_symbols.kallsyms_lookup_name)
 		return -ENOENT;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("filp_open");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("filp_open");
 	if (!addr)
 		return -ENOENT;
 	lkmdbg_symbols.filp_open =
 		(struct file *(*)(const char *filename, int flags, umode_t mode))addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("filp_close");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("filp_close");
 	if (!addr)
 		return -ENOENT;
 	lkmdbg_symbols.filp_close =
 		(int (*)(struct file *file, fl_owner_t id))addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("aarch64_insn_write");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("aarch64_insn_write");
 	if (!addr)
 		return -ENOENT;
 	lkmdbg_symbols.aarch64_insn_write = (int (*)(void *, u32))addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("aarch64_insn_patch_text_nosync");
+	addr = lkmdbg_kallsyms_lookup_name_runtime(
+		"aarch64_insn_patch_text_nosync");
 	if (addr)
 		lkmdbg_symbols.aarch64_insn_patch_text_nosync =
 			(int (*)(void *, u32))addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("caches_clean_inval_pou");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("caches_clean_inval_pou");
 	if (!addr)
-		addr = lkmdbg_symbols.kallsyms_lookup_name("__flush_icache_range");
+		addr = lkmdbg_kallsyms_lookup_name_runtime("__flush_icache_range");
 	if (!addr)
 		return -ENOENT;
 	lkmdbg_symbols.flush_icache_range =
 		(void (*)(unsigned long, unsigned long))addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("set_memory_x");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("set_memory_x");
 	if (addr)
 		lkmdbg_symbols.set_memory_x =
 			(int (*)(unsigned long, int))addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("module_alloc");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("module_alloc");
 	if (addr)
 		lkmdbg_symbols.module_alloc =
 			(void *(*)(unsigned long size))addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("module_memfree");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("module_memfree");
 	if (addr)
 		lkmdbg_symbols.module_memfree = (void (*)(void *region))addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("init_mm");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("init_mm");
 	if (addr)
 		lkmdbg_symbols.init_mm = (struct mm_struct *)addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("task_work_add");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("task_work_add");
 	if (addr)
 		lkmdbg_symbols.task_work_add_sym = addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("task_work_cancel_match");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("task_work_cancel_match");
 	if (addr)
 		lkmdbg_symbols.task_work_cancel_match_sym = addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("task_work_cancel_func");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("task_work_cancel_func");
 	if (addr)
 		lkmdbg_symbols.task_work_cancel_func_sym = addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("task_work_cancel");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("task_work_cancel");
 	if (addr)
 		lkmdbg_symbols.task_work_cancel_sym = addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("register_user_step_hook");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("register_user_step_hook");
 	if (addr)
 		lkmdbg_symbols.register_user_step_hook_sym = addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("unregister_user_step_hook");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("unregister_user_step_hook");
 	if (addr)
 		lkmdbg_symbols.unregister_user_step_hook_sym = addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("user_enable_single_step");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("user_enable_single_step");
 	if (addr)
 		lkmdbg_symbols.user_enable_single_step_sym = addr;
 
-	addr = lkmdbg_symbols.kallsyms_lookup_name("user_disable_single_step");
+	addr = lkmdbg_kallsyms_lookup_name_runtime("user_disable_single_step");
 	if (addr)
 		lkmdbg_symbols.user_disable_single_step_sym = addr;
 
@@ -212,6 +370,14 @@ static int lkmdbg_resolve_runtime_symbols(void)
 	if (addr)
 		lkmdbg_symbols.path_put_sym = addr;
 
+	addr = lkmdbg_lookup_runtime_symbol("d_drop");
+	if (addr)
+		lkmdbg_symbols.d_drop_sym = addr;
+
+	addr = lkmdbg_lookup_runtime_symbol("unpin_user_pages_dirty_lock");
+	if (addr)
+		lkmdbg_symbols.unpin_user_pages_dirty_lock_sym = addr;
+
 	addr = lkmdbg_lookup_runtime_symbol("register_user_hw_breakpoint");
 	if (addr)
 		lkmdbg_symbols.register_user_hw_breakpoint_sym = addr;
@@ -253,6 +419,61 @@ int __nocfi lkmdbg_task_work_add_runtime(struct task_struct *task,
 	return fn(task, work, notify);
 }
 
+struct callback_head *__nocfi lkmdbg_task_work_cancel_match_runtime(
+	struct task_struct *task,
+	bool (*match)(struct callback_head *cb, void *data), void *data)
+{
+	lkmdbg_task_work_cancel_match_runtime_fn fn;
+
+	if (!task || !match || !lkmdbg_symbols.task_work_cancel_match_sym)
+		return NULL;
+
+	fn = (lkmdbg_task_work_cancel_match_runtime_fn)
+		lkmdbg_symbols.task_work_cancel_match_sym;
+	return fn(task, match, data);
+}
+
+struct callback_head *__nocfi lkmdbg_task_work_cancel_func_runtime(
+	struct task_struct *task, task_work_func_t func)
+{
+	lkmdbg_task_work_cancel_func_runtime_fn fn;
+
+	if (!task || !func || !lkmdbg_symbols.task_work_cancel_func_sym)
+		return NULL;
+
+	fn = (lkmdbg_task_work_cancel_func_runtime_fn)
+		lkmdbg_symbols.task_work_cancel_func_sym;
+	return fn(task, func);
+}
+
+#ifdef TWA_RESUME
+bool __nocfi lkmdbg_task_work_cancel_runtime(struct task_struct *task,
+					     struct callback_head *work)
+{
+	lkmdbg_task_work_cancel_runtime_fn fn;
+
+	if (!task || !work || !lkmdbg_symbols.task_work_cancel_sym)
+		return false;
+
+	fn = (lkmdbg_task_work_cancel_runtime_fn)
+		lkmdbg_symbols.task_work_cancel_sym;
+	return fn(task, work);
+}
+#else
+struct callback_head *__nocfi lkmdbg_task_work_cancel_runtime(
+	struct task_struct *task, task_work_func_t func)
+{
+	lkmdbg_task_work_cancel_runtime_fn fn;
+
+	if (!task || !func || !lkmdbg_symbols.task_work_cancel_sym)
+		return NULL;
+
+	fn = (lkmdbg_task_work_cancel_runtime_fn)
+		lkmdbg_symbols.task_work_cancel_sym;
+	return fn(task, func);
+}
+#endif
+
 int __nocfi lkmdbg_kern_path_runtime(const char *name, unsigned int flags,
 				     struct path *path)
 {
@@ -274,6 +495,52 @@ void __nocfi lkmdbg_path_put_runtime(const struct path *path)
 
 	fn = (lkmdbg_path_put_runtime_fn)lkmdbg_symbols.path_put_sym;
 	fn(path);
+}
+
+void __nocfi lkmdbg_d_drop_runtime(struct dentry *dentry)
+{
+	lkmdbg_d_drop_runtime_fn fn;
+
+	if (!dentry || !lkmdbg_symbols.d_drop_sym)
+		return;
+
+	fn = (lkmdbg_d_drop_runtime_fn)lkmdbg_symbols.d_drop_sym;
+	fn(dentry);
+}
+
+void __nocfi lkmdbg_unpin_user_pages_dirty_lock_runtime(
+	struct page **pages, unsigned long npages, bool make_dirty)
+{
+	unsigned long i;
+
+	if (!pages || !npages)
+		return;
+
+#ifdef FOLL_PIN
+	if (lkmdbg_symbols.unpin_user_pages_dirty_lock_sym) {
+		lkmdbg_unpin_user_pages_dirty_lock_runtime_fn fn;
+
+		fn = (lkmdbg_unpin_user_pages_dirty_lock_runtime_fn)
+			lkmdbg_symbols.unpin_user_pages_dirty_lock_sym;
+		fn(pages, npages, make_dirty);
+		return;
+	}
+
+	for (i = 0; i < npages; i++) {
+		if (!pages[i])
+			continue;
+		if (make_dirty)
+			set_page_dirty_lock(pages[i]);
+		unpin_user_page(pages[i]);
+	}
+#else
+	(void)make_dirty;
+	for (i = 0; i < npages; i++) {
+		if (!pages[i])
+			continue;
+		put_page(pages[i]);
+	}
+#endif
 }
 
 bool lkmdbg_hw_breakpoint_runtime_available(void)
@@ -358,6 +625,8 @@ void lkmdbg_symbols_exit(void)
 	lkmdbg_symbols.access_remote_vm_inner_sym = 0;
 	lkmdbg_symbols.kern_path_sym = 0;
 	lkmdbg_symbols.path_put_sym = 0;
+	lkmdbg_symbols.d_drop_sym = 0;
+	lkmdbg_symbols.unpin_user_pages_dirty_lock_sym = 0;
 	lkmdbg_symbols.register_user_hw_breakpoint_sym = 0;
 	lkmdbg_symbols.modify_user_hw_breakpoint_sym = 0;
 	lkmdbg_symbols.unregister_hw_breakpoint_sym = 0;

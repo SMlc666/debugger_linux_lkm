@@ -195,6 +195,12 @@ The hardening bypasses are now opt-in:
 sudo insmod lkmdbg.ko bypass_kprobe_blacklist=1 bypass_cfi=1
 ```
 
+Input tracking is optional and now disabled by default unless explicitly requested:
+
+```bash
+sudo insmod lkmdbg.ko hook_proc_version=1 enable_input_tracking=1
+```
+
 This stage is intentionally conservative:
 
 - normal `/proc/version` reads stay untouched
@@ -438,7 +444,7 @@ The GitHub Actions workflow in this repository now covers:
 
 - a host-side build against Ubuntu kernel headers
 - an Android common kernel arm64 QEMU matrix for `5.10`, `5.15`, `6.1`, `6.6`, `6.12`, and `6.18`
-- per-version smoke runs that exercise session bootstrap, memory/VMA/page/phys paths, runtime events, input injection, and userspace examples
+- per-version smoke runs that exercise session bootstrap, memory/VMA/page/phys paths, runtime events, input injection with `enable_input_tracking=1`, and userspace examples
 - per-version hook-soak runs that repeatedly load the module-local hook selftests
 
 Two CI compatibility notes are worth preserving:

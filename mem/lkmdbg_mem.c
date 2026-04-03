@@ -207,7 +207,7 @@ static void lkmdbg_mem_sync_exec_page(struct mm_struct *mm, struct page *page,
 	    (vma->vm_flags & VM_EXEC) && lkmdbg_symbols.flush_icache_range) {
 		start = (unsigned long)page_addr + page_offset;
 		end = start + length;
-		lkmdbg_symbols.flush_icache_range(start, end);
+		lkmdbg_flush_icache_runtime(start, end);
 	}
 	mmap_read_unlock(mm);
 }

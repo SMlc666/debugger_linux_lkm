@@ -12,20 +12,6 @@
 #define LKMDBG_FREEZE_DEFAULT_TIMEOUT_MS 1000U
 #define LKMDBG_TASK_WORK_NOTIFY_RESUME 1U
 
-typedef struct callback_head *(*lkmdbg_task_work_cancel_match_fn)(
-	struct task_struct *task,
-	bool (*match)(struct callback_head *cb, void *data), void *data);
-typedef struct callback_head *(*lkmdbg_task_work_cancel_func_fn)(
-	struct task_struct *task, task_work_func_t func);
-
-#ifdef TWA_RESUME
-typedef bool (*lkmdbg_task_work_cancel_cb_fn)(struct task_struct *task,
-					      struct callback_head *work);
-#else
-typedef struct callback_head *(*lkmdbg_task_work_cancel_cb_fn)(
-	struct task_struct *task, task_work_func_t func);
-#endif
-
 struct lkmdbg_freeze_thread {
 	struct list_head node;
 	struct callback_head work;
@@ -196,7 +182,7 @@ static void lkmdbg_freezer_finish_thread(struct lkmdbg_freeze_thread *entry)
 	mutex_unlock(&freezer->lock);
 }
 
-static void lkmdbg_freeze_task_work(struct callback_head *work)
+static void __nocfi lkmdbg_freeze_task_work(struct callback_head *work)
 {
 	struct lkmdbg_freeze_thread *entry =
 		container_of(work, struct lkmdbg_freeze_thread, work);
@@ -390,35 +376,27 @@ static int lkmdbg_freezer_expand_until_stable(struct lkmdbg_freezer *freezer,
 static struct callback_head *
 lkmdbg_freezer_cancel_pending_entry(struct lkmdbg_freeze_thread *entry)
 {
-	lkmdbg_task_work_cancel_match_fn cancel_match;
-	lkmdbg_task_work_cancel_func_fn cancel_func;
-	lkmdbg_task_work_cancel_cb_fn cancel_cb;
-
 	if (entry->callback_entered || entry->completed)
 		return NULL;
 
-	if (lkmdbg_symbols.task_work_cancel_match_sym) {
-		cancel_match = (lkmdbg_task_work_cancel_match_fn)
-			lkmdbg_symbols.task_work_cancel_match_sym;
-		return cancel_match(entry->task, lkmdbg_freeze_work_match,
-				    &entry->work);
-	}
+	if (lkmdbg_symbols.task_work_cancel_match_sym)
+		return lkmdbg_task_work_cancel_match_runtime(
+			entry->task, lkmdbg_freeze_work_match, &entry->work);
 
-	if (lkmdbg_symbols.task_work_cancel_func_sym) {
-		cancel_func = (lkmdbg_task_work_cancel_func_fn)
-			lkmdbg_symbols.task_work_cancel_func_sym;
-		return cancel_func(entry->task, lkmdbg_freeze_task_work);
-	}
+	if (lkmdbg_symbols.task_work_cancel_func_sym)
+		return lkmdbg_task_work_cancel_func_runtime(entry->task,
+							    lkmdbg_freeze_task_work);
 
 	if (!lkmdbg_symbols.task_work_cancel_sym)
 		return NULL;
 
-	cancel_cb = (lkmdbg_task_work_cancel_cb_fn)
-		lkmdbg_symbols.task_work_cancel_sym;
 #ifdef TWA_RESUME
-	return cancel_cb(entry->task, &entry->work) ? &entry->work : NULL;
+	return lkmdbg_task_work_cancel_runtime(entry->task, &entry->work) ?
+		       &entry->work :
+		       NULL;
 #else
-	return cancel_cb(entry->task, lkmdbg_freeze_task_work);
+	return lkmdbg_task_work_cancel_runtime(entry->task,
+					       lkmdbg_freeze_task_work);
 #endif
 }
 

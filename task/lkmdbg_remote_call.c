@@ -19,8 +19,6 @@
 
 #define LKMDBG_TASK_WORK_NOTIFY_RESUME 1U
 
-typedef void (*lkmdbg_perf_event_disable_local_fn)(struct perf_event *event);
-
 #ifdef CONFIG_ARM64
 static inline void lkmdbg_u128_split(__uint128_t value, u64 *lo, u64 *hi)
 {
@@ -207,7 +205,7 @@ static int lkmdbg_validate_remote_thread_create_request(
 	return 0;
 }
 
-static void lkmdbg_remote_call_park_work(struct callback_head *work)
+static void __nocfi lkmdbg_remote_call_park_work(struct callback_head *work)
 {
 	struct lkmdbg_remote_call_state *state =
 		container_of(work, struct lkmdbg_remote_call_state, park_work);
@@ -239,15 +237,10 @@ static int lkmdbg_remote_call_queue_park(struct lkmdbg_session *session)
 
 static void lkmdbg_remote_call_disable_breakpoint(struct perf_event *event)
 {
-	lkmdbg_perf_event_disable_local_fn disable_fn;
-
 	if (!event)
 		return;
 
-	disable_fn = (lkmdbg_perf_event_disable_local_fn)
-		lkmdbg_symbols.perf_event_disable_local_sym;
-	if (disable_fn)
-		disable_fn(event);
+	lkmdbg_perf_event_disable_local_runtime(event);
 }
 
 #ifdef CONFIG_ARM64

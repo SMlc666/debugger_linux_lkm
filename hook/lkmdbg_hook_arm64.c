@@ -164,7 +164,7 @@ static int lkmdbg_write_text_insn(void *addr, u32 insn)
 		return -ENOENT;
 
 	if (lkmdbg_symbols.aarch64_insn_patch_text_nosync) {
-		ret = lkmdbg_symbols.aarch64_insn_patch_text_nosync(addr, insn);
+		ret = lkmdbg_aarch64_insn_patch_text_nosync_runtime(addr, insn);
 		if (ret)
 			return ret;
 	} else {

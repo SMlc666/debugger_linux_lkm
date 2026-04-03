@@ -207,9 +207,9 @@ int lkmdbg_stealth_init(void)
 	lkmdbg_module_kobj_parent = NULL;
 	if (lkmdbg_symbols.kallsyms_lookup_name) {
 		lkmdbg_module_mutex = (struct mutex *)
-			lkmdbg_symbols.kallsyms_lookup_name("module_mutex");
+			lkmdbg_kallsyms_lookup_name_runtime("module_mutex");
 		lkmdbg_modules_head = (struct list_head *)
-			lkmdbg_symbols.kallsyms_lookup_name("modules");
+			lkmdbg_kallsyms_lookup_name_runtime("modules");
 		if (lkmdbg_module_mutex && lkmdbg_modules_head)
 			supported_flags |=
 				LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN;

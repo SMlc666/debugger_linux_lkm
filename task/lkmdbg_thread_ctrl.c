@@ -84,11 +84,8 @@ struct lkmdbg_mm_event_pending {
 };
 
 #ifdef CONFIG_ARM64
-typedef void (*lkmdbg_user_single_step_fn)(struct task_struct *task);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
 #define LKMDBG_ARM64_USER_STEP_HOOKS 1
-typedef void (*lkmdbg_register_user_step_hook_fn)(struct step_hook *hook);
-typedef void (*lkmdbg_unregister_user_step_hook_fn)(struct step_hook *hook);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
 typedef unsigned long lkmdbg_step_hook_esr_t;
 #else
@@ -130,13 +127,6 @@ static void lkmdbg_regs_arm64_export_stop(struct lkmdbg_regs_arm64 *dst,
 	}
 }
 #endif
-typedef void (*lkmdbg_for_each_kernel_tracepoint_fn)(
-	void (*fct)(struct tracepoint *tp, void *priv), void *priv);
-typedef int (*lkmdbg_tracepoint_probe_register_fn)(struct tracepoint *tp,
-						   void *probe, void *data);
-typedef int (*lkmdbg_tracepoint_probe_unregister_fn)(struct tracepoint *tp,
-						     void *probe, void *data);
-typedef void (*lkmdbg_perf_event_disable_local_fn)(struct perf_event *event);
 #ifdef CONFIG_ARM64
 typedef void (*lkmdbg_invoke_syscall_fn)(struct pt_regs *regs,
 					 unsigned int scno,
@@ -990,9 +980,10 @@ static int lkmdbg_install_user_single_step_backend(void)
 	    lkmdbg_symbols.unregister_user_step_hook_sym &&
 	    lkmdbg_symbols.user_enable_single_step_sym &&
 	    lkmdbg_symbols.user_disable_single_step_sym) {
-		((lkmdbg_register_user_step_hook_fn)
-			 lkmdbg_symbols.register_user_step_hook_sym)(
+		ret = lkmdbg_register_user_step_hook_runtime(
 			&lkmdbg_user_step_hook);
+		if (ret)
+			return ret;
 		lkmdbg_user_step_hook_registered = true;
 		return 0;
 	}
@@ -1381,19 +1372,16 @@ static int lkmdbg_mmu_install_remote_vm_write_hook(void)
 
 static void lkmdbg_disable_user_single_step_tid(pid_t tid)
 {
-	lkmdbg_user_single_step_fn disable_fn;
 	struct task_struct *task;
 
 	if (tid <= 0 || !lkmdbg_symbols.user_disable_single_step_sym)
 		return;
 
-	disable_fn =
-		(lkmdbg_user_single_step_fn)lkmdbg_symbols.user_disable_single_step_sym;
 	task = get_pid_task(find_vpid(tid), PIDTYPE_PID);
 	if (!task)
 		return;
 
-	disable_fn(task);
+	lkmdbg_user_disable_single_step_runtime(task);
 	put_task_struct(task);
 }
 #endif
@@ -1440,11 +1428,7 @@ static void lkmdbg_hwpoint_fill_entry(struct lkmdbg_hwpoint_entry *dst,
 
 static void lkmdbg_hwpoint_disable_stop_mode(struct lkmdbg_hwpoint *entry)
 {
-	lkmdbg_perf_event_disable_local_fn disable_local_fn;
-
-	disable_local_fn = (lkmdbg_perf_event_disable_local_fn)
-		lkmdbg_symbols.perf_event_disable_local_sym;
-	if (!disable_local_fn) {
+	if (!lkmdbg_symbols.perf_event_disable_local_sym) {
 		if (!READ_ONCE(lkmdbg_perf_disable_missing_logged)) {
 			WRITE_ONCE(lkmdbg_perf_disable_missing_logged, true);
 			lkmdbg_pr_warn("lkmdbg: perf_event_disable_local unavailable, stop-mode hwpoints remain armed\n");
@@ -1452,7 +1436,7 @@ static void lkmdbg_hwpoint_disable_stop_mode(struct lkmdbg_hwpoint *entry)
 		return;
 	}
 
-	disable_local_fn(entry->event);
+	lkmdbg_perf_event_disable_local_runtime(entry->event);
 	WRITE_ONCE(entry->armed, false);
 }
 
@@ -2294,14 +2278,11 @@ static struct tracepoint *lkmdbg_find_tracepoint(const char *name)
 	struct lkmdbg_tracepoint_lookup lookup = {
 		.name = name,
 	};
-	lkmdbg_for_each_kernel_tracepoint_fn for_each_fn;
-
-	for_each_fn = (lkmdbg_for_each_kernel_tracepoint_fn)
-		lkmdbg_symbols.for_each_kernel_tracepoint_sym;
-	if (!for_each_fn)
+	if (!lkmdbg_symbols.for_each_kernel_tracepoint_sym)
 		return NULL;
 
-	for_each_fn(lkmdbg_tracepoint_find_cb, &lookup);
+	lkmdbg_for_each_kernel_tracepoint_runtime(lkmdbg_tracepoint_find_cb,
+						     &lookup);
 	return lookup.match;
 }
 
@@ -2316,17 +2297,13 @@ static bool lkmdbg_user_single_step_backend_ready(void)
 
 static int lkmdbg_mmu_queue_step_rearm(struct lkmdbg_hwpoint *entry)
 {
-	lkmdbg_user_single_step_fn enable_fn;
 	unsigned long irqflags;
 
 	if (!entry)
 		return -EINVAL;
 	if (!lkmdbg_user_single_step_backend_ready())
 		return -EOPNOTSUPP;
-
-	enable_fn =
-		(lkmdbg_user_single_step_fn)lkmdbg_symbols.user_enable_single_step_sym;
-	if (!enable_fn)
+	if (!lkmdbg_symbols.user_enable_single_step_sym)
 		return -EOPNOTSUPP;
 
 	spin_lock_irqsave(&lkmdbg_mmu_hwpoint_lock, irqflags);
@@ -2340,7 +2317,7 @@ static int lkmdbg_mmu_queue_step_rearm(struct lkmdbg_hwpoint *entry)
 	entry->rearm_step_tid = current->pid;
 	spin_unlock_irqrestore(&lkmdbg_mmu_hwpoint_lock, irqflags);
 
-	enable_fn(current);
+	lkmdbg_user_enable_single_step_runtime(current);
 	return 0;
 }
 #endif
@@ -2567,7 +2544,6 @@ static bool lkmdbg_handle_user_single_step(struct pt_regs *regs)
 	struct lkmdbg_hwpoint *entry = NULL;
 	pid_t tid = current->pid;
 	pid_t tgid = current->tgid;
-	lkmdbg_user_single_step_fn disable_fn;
 	unsigned long irqflags;
 
 	spin_lock_irqsave(&lkmdbg_mmu_hwpoint_lock, irqflags);
@@ -2581,10 +2557,7 @@ static bool lkmdbg_handle_user_single_step(struct pt_regs *regs)
 	spin_unlock_irqrestore(&lkmdbg_mmu_hwpoint_lock, irqflags);
 
 	if (entry) {
-		disable_fn = (lkmdbg_user_single_step_fn)
-			lkmdbg_symbols.user_disable_single_step_sym;
-		if (disable_fn)
-			disable_fn(current);
+		lkmdbg_user_disable_single_step_runtime(current);
 		if (!lkmdbg_mmu_apply_trap(current->mm, entry)) {
 			atomic_set(&entry->stop_latched, 0);
 			entry->armed = true;
@@ -2597,10 +2570,7 @@ static bool lkmdbg_handle_user_single_step(struct pt_regs *regs)
 	if (!matched)
 		return false;
 
-	disable_fn =
-		(lkmdbg_user_single_step_fn)lkmdbg_symbols.user_disable_single_step_sym;
-	if (disable_fn)
-		disable_fn(current);
+	lkmdbg_user_disable_single_step_runtime(current);
 
 	{
 		struct lkmdbg_regs_arm64 stop_regs;
@@ -2652,20 +2622,18 @@ out:
 
 static int lkmdbg_register_trace_hooks(void)
 {
-	lkmdbg_tracepoint_probe_register_fn register_fn;
 	int ret;
 
-	register_fn = (lkmdbg_tracepoint_probe_register_fn)
-		lkmdbg_symbols.tracepoint_probe_register_sym;
-	if (!register_fn) {
+	if (!lkmdbg_symbols.tracepoint_probe_register_sym) {
 		lkmdbg_pr_info("lkmdbg: tracepoint register helper unavailable\n");
 		return 0;
 	}
 
 	lkmdbg_trace_fork_tp = lkmdbg_find_tracepoint("sched_process_fork");
 	if (lkmdbg_trace_fork_tp) {
-		ret = register_fn(lkmdbg_trace_fork_tp,
-				  (void *)lkmdbg_trace_sched_process_fork, NULL);
+		ret = lkmdbg_tracepoint_probe_register_runtime(
+			lkmdbg_trace_fork_tp,
+			(void *)lkmdbg_trace_sched_process_fork, NULL);
 		if (!ret)
 			lkmdbg_trace_fork_registered = true;
 		else
@@ -2677,8 +2645,9 @@ static int lkmdbg_register_trace_hooks(void)
 
 	lkmdbg_trace_exec_tp = lkmdbg_find_tracepoint("sched_process_exec");
 	if (lkmdbg_trace_exec_tp) {
-		ret = register_fn(lkmdbg_trace_exec_tp,
-				  (void *)lkmdbg_trace_sched_process_exec, NULL);
+		ret = lkmdbg_tracepoint_probe_register_runtime(
+			lkmdbg_trace_exec_tp,
+			(void *)lkmdbg_trace_sched_process_exec, NULL);
 		if (!ret)
 			lkmdbg_trace_exec_registered = true;
 		else
@@ -2690,8 +2659,9 @@ static int lkmdbg_register_trace_hooks(void)
 
 	lkmdbg_trace_exit_tp = lkmdbg_find_tracepoint("sched_process_exit");
 	if (lkmdbg_trace_exit_tp) {
-		ret = register_fn(lkmdbg_trace_exit_tp,
-				  (void *)lkmdbg_trace_sched_process_exit, NULL);
+		ret = lkmdbg_tracepoint_probe_register_runtime(
+			lkmdbg_trace_exit_tp,
+			(void *)lkmdbg_trace_sched_process_exit, NULL);
 		if (!ret)
 			lkmdbg_trace_exit_registered = true;
 		else
@@ -2703,8 +2673,9 @@ static int lkmdbg_register_trace_hooks(void)
 
 	lkmdbg_trace_signal_tp = lkmdbg_find_tracepoint("signal_generate");
 	if (lkmdbg_trace_signal_tp) {
-		ret = register_fn(lkmdbg_trace_signal_tp,
-				  (void *)lkmdbg_trace_signal_generate, NULL);
+		ret = lkmdbg_tracepoint_probe_register_runtime(
+			lkmdbg_trace_signal_tp,
+			(void *)lkmdbg_trace_signal_generate, NULL);
 		if (!ret)
 			lkmdbg_trace_signal_registered = true;
 		else
@@ -2716,8 +2687,9 @@ static int lkmdbg_register_trace_hooks(void)
 
 	lkmdbg_trace_sys_enter_tp = lkmdbg_find_tracepoint("sys_enter");
 	if (lkmdbg_trace_sys_enter_tp) {
-		ret = register_fn(lkmdbg_trace_sys_enter_tp,
-				  (void *)lkmdbg_trace_raw_sys_enter, NULL);
+		ret = lkmdbg_tracepoint_probe_register_runtime(
+			lkmdbg_trace_sys_enter_tp,
+			(void *)lkmdbg_trace_raw_sys_enter, NULL);
 		if (!ret)
 			lkmdbg_trace_sys_enter_registered = true;
 		else
@@ -2729,8 +2701,9 @@ static int lkmdbg_register_trace_hooks(void)
 
 	lkmdbg_trace_sys_exit_tp = lkmdbg_find_tracepoint("sys_exit");
 	if (lkmdbg_trace_sys_exit_tp) {
-		ret = register_fn(lkmdbg_trace_sys_exit_tp,
-				  (void *)lkmdbg_trace_raw_sys_exit, NULL);
+		ret = lkmdbg_tracepoint_probe_register_runtime(
+			lkmdbg_trace_sys_exit_tp,
+			(void *)lkmdbg_trace_raw_sys_exit, NULL);
 		if (!ret)
 			lkmdbg_trace_sys_exit_registered = true;
 		else
@@ -3105,60 +3078,69 @@ long lkmdbg_get_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 
 void lkmdbg_thread_ctrl_exit(void)
 {
-	lkmdbg_tracepoint_probe_unregister_fn unregister_fn;
-
-	unregister_fn = (lkmdbg_tracepoint_probe_unregister_fn)
-		lkmdbg_symbols.tracepoint_probe_unregister_sym;
-
-	if (unregister_fn && lkmdbg_trace_sys_exit_registered &&
+	if (lkmdbg_symbols.tracepoint_probe_unregister_sym &&
+	    lkmdbg_trace_sys_exit_registered &&
 	    lkmdbg_trace_sys_exit_tp) {
-		unregister_fn(lkmdbg_trace_sys_exit_tp,
-			      (void *)lkmdbg_trace_raw_sys_exit, NULL);
+		lkmdbg_tracepoint_probe_unregister_runtime(
+			lkmdbg_trace_sys_exit_tp,
+			(void *)lkmdbg_trace_raw_sys_exit, NULL);
 		lkmdbg_trace_sys_exit_registered = false;
 	}
 	lkmdbg_trace_sys_exit_tp = NULL;
 
-	if (unregister_fn && lkmdbg_trace_sys_enter_registered &&
+	if (lkmdbg_symbols.tracepoint_probe_unregister_sym &&
+	    lkmdbg_trace_sys_enter_registered &&
 	    lkmdbg_trace_sys_enter_tp) {
-		unregister_fn(lkmdbg_trace_sys_enter_tp,
-			      (void *)lkmdbg_trace_raw_sys_enter, NULL);
+		lkmdbg_tracepoint_probe_unregister_runtime(
+			lkmdbg_trace_sys_enter_tp,
+			(void *)lkmdbg_trace_raw_sys_enter, NULL);
 		lkmdbg_trace_sys_enter_registered = false;
 	}
 	lkmdbg_trace_sys_enter_tp = NULL;
 
-	if (unregister_fn && lkmdbg_trace_signal_registered &&
+	if (lkmdbg_symbols.tracepoint_probe_unregister_sym &&
+	    lkmdbg_trace_signal_registered &&
 	    lkmdbg_trace_signal_tp) {
-		unregister_fn(lkmdbg_trace_signal_tp,
-			      (void *)lkmdbg_trace_signal_generate, NULL);
+		lkmdbg_tracepoint_probe_unregister_runtime(
+			lkmdbg_trace_signal_tp,
+			(void *)lkmdbg_trace_signal_generate, NULL);
 		lkmdbg_trace_signal_registered = false;
 	}
 	lkmdbg_trace_signal_tp = NULL;
 
-	if (unregister_fn && lkmdbg_trace_exit_registered && lkmdbg_trace_exit_tp) {
-		unregister_fn(lkmdbg_trace_exit_tp,
-			      (void *)lkmdbg_trace_sched_process_exit, NULL);
+	if (lkmdbg_symbols.tracepoint_probe_unregister_sym &&
+	    lkmdbg_trace_exit_registered &&
+	    lkmdbg_trace_exit_tp) {
+		lkmdbg_tracepoint_probe_unregister_runtime(
+			lkmdbg_trace_exit_tp,
+			(void *)lkmdbg_trace_sched_process_exit, NULL);
 		lkmdbg_trace_exit_registered = false;
 	}
 	lkmdbg_trace_exit_tp = NULL;
 
-	if (unregister_fn && lkmdbg_trace_exec_registered && lkmdbg_trace_exec_tp) {
-		unregister_fn(lkmdbg_trace_exec_tp,
-			      (void *)lkmdbg_trace_sched_process_exec, NULL);
+	if (lkmdbg_symbols.tracepoint_probe_unregister_sym &&
+	    lkmdbg_trace_exec_registered &&
+	    lkmdbg_trace_exec_tp) {
+		lkmdbg_tracepoint_probe_unregister_runtime(
+			lkmdbg_trace_exec_tp,
+			(void *)lkmdbg_trace_sched_process_exec, NULL);
 		lkmdbg_trace_exec_registered = false;
 	}
 	lkmdbg_trace_exec_tp = NULL;
 
-	if (unregister_fn && lkmdbg_trace_fork_registered && lkmdbg_trace_fork_tp) {
-		unregister_fn(lkmdbg_trace_fork_tp,
-			      (void *)lkmdbg_trace_sched_process_fork, NULL);
+	if (lkmdbg_symbols.tracepoint_probe_unregister_sym &&
+	    lkmdbg_trace_fork_registered &&
+	    lkmdbg_trace_fork_tp) {
+		lkmdbg_tracepoint_probe_unregister_runtime(
+			lkmdbg_trace_fork_tp,
+			(void *)lkmdbg_trace_sched_process_fork, NULL);
 		lkmdbg_trace_fork_registered = false;
 	}
 	lkmdbg_trace_fork_tp = NULL;
 
 #if defined(CONFIG_ARM64) && LKMDBG_ARM64_USER_STEP_HOOKS
 	if (lkmdbg_user_step_hook_registered) {
-		((lkmdbg_unregister_user_step_hook_fn)
-			 lkmdbg_symbols.unregister_user_step_hook_sym)(
+		lkmdbg_unregister_user_step_hook_runtime(
 			&lkmdbg_user_step_hook);
 		lkmdbg_user_step_hook_registered = false;
 	}
@@ -3251,7 +3233,6 @@ void lkmdbg_thread_ctrl_release(struct lkmdbg_session *session)
 	struct lkmdbg_hwpoint *entry;
 	struct lkmdbg_hwpoint *tmp;
 #ifdef CONFIG_ARM64
-	lkmdbg_user_single_step_fn disable_fn;
 	bool fallback_active;
 	pid_t step_tid;
 #endif
@@ -3289,14 +3270,12 @@ void lkmdbg_thread_ctrl_release(struct lkmdbg_session *session)
 	if (!step_tid || !lkmdbg_symbols.user_disable_single_step_sym)
 		return;
 
-	disable_fn =
-		(lkmdbg_user_single_step_fn)lkmdbg_symbols.user_disable_single_step_sym;
-	if (disable_fn) {
+	{
 		struct task_struct *task;
 
 		task = get_pid_task(find_vpid(step_tid), PIDTYPE_PID);
 		if (task) {
-			disable_fn(task);
+			lkmdbg_user_disable_single_step_runtime(task);
 			put_task_struct(task);
 		}
 	}
@@ -3474,7 +3453,6 @@ long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp)
 #ifdef CONFIG_ARM64
 	struct task_struct *task = NULL;
 	pid_t tid;
-	lkmdbg_user_single_step_fn enable_fn;
 	u32 freeze_flags;
 #endif
 
@@ -3515,9 +3493,7 @@ long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp)
 	WRITE_ONCE(session->step_tid, tid);
 	mutex_unlock(&session->lock);
 
-	enable_fn =
-		(lkmdbg_user_single_step_fn)lkmdbg_symbols.user_enable_single_step_sym;
-	enable_fn(task);
+	lkmdbg_user_enable_single_step_runtime(task);
 	put_task_struct(task);
 
 	req.tid = tid;

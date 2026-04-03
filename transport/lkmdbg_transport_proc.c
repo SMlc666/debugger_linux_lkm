@@ -3,11 +3,14 @@
 #include <linux/fs.h>
 #include <linux/jiffies.h>
 #include <linux/module.h>
+#include <linux/namei.h>
 #include <linux/slab.h>
 
 #include "lkmdbg_internal.h"
 
 static struct inode *proc_version_inode;
+static struct path proc_version_path;
+static bool proc_version_path_valid;
 static const struct file_operations *proc_version_orig_fops;
 static struct file_operations *proc_version_hook_fops;
 static struct lkmdbg_inline_hook *proc_version_open_hook;
@@ -141,7 +144,6 @@ static long lkmdbg_proc_version_compat_ioctl(struct file *file,
 
 int lkmdbg_transport_init(void)
 {
-	struct file *filp;
 	struct inode *inode;
 	void *orig_open = NULL;
 	int ret;
@@ -150,36 +152,34 @@ int lkmdbg_transport_init(void)
 		return 0;
 
 	atomic_set(&proc_version_open_inflight, 0);
+	proc_version_path_valid = false;
 
-	if (!lkmdbg_symbols.filp_open || !lkmdbg_symbols.filp_close)
-		return -ENOENT;
+	ret = lkmdbg_kern_path_runtime(LKMDBG_TARGET_PATH, LOOKUP_FOLLOW,
+				       &proc_version_path);
+	if (ret)
+		return ret;
 
-	filp = lkmdbg_symbols.filp_open(LKMDBG_TARGET_PATH, O_RDONLY, 0);
-	if (IS_ERR(filp))
-		return PTR_ERR(filp);
-
-	inode = file_inode(filp);
+	proc_version_path_valid = true;
+	inode = d_inode(proc_version_path.dentry);
 	if (!inode || !inode->i_fop) {
-		lkmdbg_symbols.filp_close(filp, NULL);
+		lkmdbg_path_put_runtime(&proc_version_path);
+		proc_version_path_valid = false;
 		return -ENOENT;
 	}
 
-	proc_version_inode = igrab(inode);
-	if (!proc_version_inode) {
-		lkmdbg_symbols.filp_close(filp, NULL);
-		return -ENOENT;
-	}
-
+	proc_version_inode = inode;
 	proc_version_orig_fops = inode->i_fop;
-	proc_version_hook_fops = kmemdup(proc_version_orig_fops,
-					 sizeof(*proc_version_hook_fops),
+	proc_version_hook_fops = kmalloc(sizeof(*proc_version_hook_fops),
 					 GFP_KERNEL);
-	lkmdbg_symbols.filp_close(filp, NULL);
 	if (!proc_version_hook_fops) {
-		iput(proc_version_inode);
+		lkmdbg_path_put_runtime(&proc_version_path);
+		proc_version_path_valid = false;
 		proc_version_inode = NULL;
 		return -ENOMEM;
 	}
+
+	memcpy(proc_version_hook_fops, proc_version_orig_fops,
+	       sizeof(*proc_version_hook_fops));
 
 	proc_version_orig_open = proc_version_orig_fops->open;
 	proc_version_orig_release = proc_version_orig_fops->release;
@@ -191,7 +191,8 @@ int lkmdbg_transport_init(void)
 	if (!proc_version_orig_open) {
 		kfree(proc_version_hook_fops);
 		proc_version_hook_fops = NULL;
-		iput(proc_version_inode);
+		lkmdbg_path_put_runtime(&proc_version_path);
+		proc_version_path_valid = false;
 		proc_version_inode = NULL;
 		proc_version_orig_fops = NULL;
 		proc_version_orig_release = NULL;
@@ -215,7 +216,8 @@ int lkmdbg_transport_init(void)
 	if (!proc_version_open_registry) {
 		kfree(proc_version_hook_fops);
 		proc_version_hook_fops = NULL;
-		iput(proc_version_inode);
+		lkmdbg_path_put_runtime(&proc_version_path);
+		proc_version_path_valid = false;
 		proc_version_inode = NULL;
 		proc_version_orig_fops = NULL;
 		proc_version_orig_open = NULL;
@@ -235,7 +237,8 @@ int lkmdbg_transport_init(void)
 		proc_version_open_registry = NULL;
 		kfree(proc_version_hook_fops);
 		proc_version_hook_fops = NULL;
-		iput(proc_version_inode);
+		lkmdbg_path_put_runtime(&proc_version_path);
+		proc_version_path_valid = false;
 		proc_version_inode = NULL;
 		proc_version_orig_fops = NULL;
 		proc_version_orig_open = NULL;
@@ -289,10 +292,13 @@ void lkmdbg_transport_exit(void)
 	kfree(proc_version_hook_fops);
 	proc_version_hook_fops = NULL;
 
-	if (proc_version_inode) {
-		iput(proc_version_inode);
-		proc_version_inode = NULL;
+	if (proc_version_path_valid) {
+		lkmdbg_path_put_runtime(&proc_version_path);
+		proc_version_path_valid = false;
 	}
+
+	if (proc_version_inode)
+		proc_version_inode = NULL;
 
 	proc_version_orig_fops = NULL;
 	proc_version_orig_open = NULL;

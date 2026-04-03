@@ -35,6 +35,11 @@ module_param(enable_debugfs, bool, 0644);
 MODULE_PARM_DESC(enable_debugfs,
 		 "Create the debugfs diagnostics surface under /sys/kernel/debug/lkmdbg");
 
+bool enable_input_tracking;
+module_param(enable_input_tracking, bool, 0644);
+MODULE_PARM_DESC(enable_input_tracking,
+		 "Enable optional input/touch device tracking and injection support");
+
 bool bypass_kprobe_blacklist;
 module_param(bypass_kprobe_blacklist, bool, 0644);
 MODULE_PARM_DESC(bypass_kprobe_blacklist,

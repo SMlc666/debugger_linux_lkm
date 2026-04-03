@@ -15,6 +15,10 @@
 #include "lkmdbg_internal.h"
 
 struct lkmdbg_input_device;
+typedef int (*lkmdbg_class_interface_register_fn)(
+	struct class_interface *class_intf);
+typedef void (*lkmdbg_class_interface_unregister_fn)(
+	struct class_interface *class_intf);
 
 struct lkmdbg_input_channel {
 	struct list_head session_node;
@@ -66,6 +70,11 @@ static u64 lkmdbg_next_input_device_id;
 
 static struct class_interface lkmdbg_input_class_interface;
 static struct class *lkmdbg_input_class;
+static lkmdbg_class_interface_register_fn
+	lkmdbg_input_class_interface_register_fn;
+static lkmdbg_class_interface_unregister_fn
+	lkmdbg_input_class_interface_unregister_fn;
+static bool lkmdbg_input_class_registered;
 static struct lkmdbg_inline_hook *lkmdbg_input_event_hook;
 static struct lkmdbg_hook_registry_entry *lkmdbg_input_event_registry;
 static void (*lkmdbg_input_event_orig)(struct input_dev *dev, unsigned int type,
@@ -1034,7 +1043,7 @@ static int lkmdbg_install_input_event_hook(void)
 	if (!lkmdbg_symbols.kallsyms_lookup_name)
 		return -ENOENT;
 
-	target = (void *)lkmdbg_symbols.kallsyms_lookup_name("input_event");
+	target = (void *)lkmdbg_kallsyms_lookup_name_runtime("input_event");
 	if (!target)
 		return -ENOENT;
 
@@ -1055,6 +1064,49 @@ static int lkmdbg_install_input_event_hook(void)
 	lkmdbg_hook_registry_mark_installed(lkmdbg_input_event_registry, target,
 						orig_fn, 0);
 	return 0;
+}
+
+static int lkmdbg_input_resolve_class_interface_helpers(void)
+{
+	unsigned long addr;
+
+	lkmdbg_input_class_interface_register_fn = NULL;
+	lkmdbg_input_class_interface_unregister_fn = NULL;
+
+	addr = lkmdbg_lookup_runtime_symbol_any("class_interface_register");
+	if (!addr)
+		return -ENOENT;
+	lkmdbg_input_class_interface_register_fn =
+		(lkmdbg_class_interface_register_fn)addr;
+
+	addr = lkmdbg_lookup_runtime_symbol_any("class_interface_unregister");
+	if (!addr) {
+		lkmdbg_input_class_interface_register_fn = NULL;
+		return -ENOENT;
+	}
+	lkmdbg_input_class_interface_unregister_fn =
+		(lkmdbg_class_interface_unregister_fn)addr;
+
+	return 0;
+}
+
+static int __nocfi
+lkmdbg_input_class_interface_register_runtime(struct class_interface *class_intf)
+{
+	if (!lkmdbg_input_class_interface_register_fn)
+		return -EOPNOTSUPP;
+
+	return lkmdbg_input_class_interface_register_fn(class_intf);
+}
+
+static void __nocfi
+lkmdbg_input_class_interface_unregister_runtime(
+	struct class_interface *class_intf)
+{
+	if (!lkmdbg_input_class_interface_unregister_fn)
+		return;
+
+	lkmdbg_input_class_interface_unregister_fn(class_intf);
 }
 
 static void lkmdbg_input_free_device_list(struct list_head *list)
@@ -1093,13 +1145,29 @@ int lkmdbg_input_init(void)
 	lkmdbg_input_event_hook = NULL;
 	lkmdbg_input_event_registry = NULL;
 	lkmdbg_input_event_orig = NULL;
+	lkmdbg_input_class_registered = false;
+	lkmdbg_input_class = NULL;
+
+	if (!READ_ONCE(enable_input_tracking)) {
+		lkmdbg_pr_info("lkmdbg: input tracking disabled by module parameter\n");
+		return 0;
+	}
 
 	if (!lkmdbg_symbols.kallsyms_lookup_name)
-		return -ENOENT;
+		return 0;
 
-	class_addr = lkmdbg_symbols.kallsyms_lookup_name("input_class");
-	if (!class_addr)
-		return -ENOENT;
+	class_addr = lkmdbg_kallsyms_lookup_name_runtime("input_class");
+	if (!class_addr) {
+		lkmdbg_pr_warn("lkmdbg: input_class unavailable, input tracking disabled\n");
+		return 0;
+	}
+
+	ret = lkmdbg_input_resolve_class_interface_helpers();
+	if (ret) {
+		lkmdbg_pr_warn("lkmdbg: class_interface helpers unavailable, input tracking disabled ret=%d\n",
+			       ret);
+		return 0;
+	}
 
 	lkmdbg_input_class = (struct class *)class_addr;
 	memset(&lkmdbg_input_class_interface, 0,
@@ -1108,13 +1176,20 @@ int lkmdbg_input_init(void)
 	lkmdbg_input_class_interface.add_dev = lkmdbg_input_add_dev;
 	lkmdbg_input_class_interface.remove_dev = lkmdbg_input_remove_dev;
 
-	ret = class_interface_register(&lkmdbg_input_class_interface);
+	ret = lkmdbg_input_class_interface_register_runtime(
+		&lkmdbg_input_class_interface);
 	if (ret)
 		return ret;
+	lkmdbg_input_class_registered = true;
 
 	ret = lkmdbg_install_input_event_hook();
 	if (ret) {
-		class_interface_unregister(&lkmdbg_input_class_interface);
+		if (lkmdbg_input_class_registered &&
+		    lkmdbg_input_class_interface_unregister_fn) {
+			lkmdbg_input_class_interface_unregister_runtime(
+				&lkmdbg_input_class_interface);
+			lkmdbg_input_class_registered = false;
+		}
 		synchronize_rcu();
 		mutex_lock(&lkmdbg_input_devices_lock);
 		lkmdbg_input_retire_all_active_locked();
@@ -1154,7 +1229,12 @@ void lkmdbg_input_exit(void)
 	lkmdbg_input_event_orig = NULL;
 
 	if (lkmdbg_input_class) {
-		class_interface_unregister(&lkmdbg_input_class_interface);
+		if (lkmdbg_input_class_registered &&
+		    lkmdbg_input_class_interface_unregister_fn) {
+			lkmdbg_input_class_interface_unregister_runtime(
+				&lkmdbg_input_class_interface);
+			lkmdbg_input_class_registered = false;
+		}
 		lkmdbg_input_class = NULL;
 	}
 

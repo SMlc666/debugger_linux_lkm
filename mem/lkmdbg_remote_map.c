@@ -255,7 +255,7 @@ static lkmdbg_vm_mmap_fn lkmdbg_remote_map_vm_mmap_resolve(void)
 	if (!fn && lkmdbg_symbols.kallsyms_lookup_name) {
 		unsigned long addr;
 
-		addr = lkmdbg_symbols.kallsyms_lookup_name("vm_mmap");
+		addr = lkmdbg_kallsyms_lookup_name_runtime("vm_mmap");
 		if (addr)
 			fn = (lkmdbg_vm_mmap_fn)addr;
 	}
@@ -263,7 +263,7 @@ static lkmdbg_vm_mmap_fn lkmdbg_remote_map_vm_mmap_resolve(void)
 	return fn;
 }
 
-static void lkmdbg_remote_map_install_task_work(struct callback_head *work)
+static void __nocfi lkmdbg_remote_map_install_task_work(struct callback_head *work)
 {
 	struct lkmdbg_remote_map_install *install =
 		container_of(work, struct lkmdbg_remote_map_install, work);
@@ -489,7 +489,7 @@ static void lkmdbg_remote_map_put_pages(struct page **pages, u32 page_count,
 
 #ifdef FOLL_PIN
 	if (dirty)
-		unpin_user_pages_dirty_lock(pages, page_count, true);
+		lkmdbg_unpin_user_pages_dirty_lock_runtime(pages, page_count, true);
 	else
 		unpin_user_pages(pages, page_count);
 
@@ -659,7 +659,8 @@ static void lkmdbg_remote_map_release_pages(struct lkmdbg_remote_map *map)
 
 #ifdef FOLL_PIN
 	if (map->prot & LKMDBG_REMOTE_MAP_PROT_WRITE)
-		unpin_user_pages_dirty_lock(map->pages, map->page_count, true);
+		lkmdbg_unpin_user_pages_dirty_lock_runtime(map->pages,
+						       map->page_count, true);
 	else
 		unpin_user_pages(map->pages, map->page_count);
 

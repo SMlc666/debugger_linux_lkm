@@ -854,6 +854,9 @@ static void qemu_run_input_smoke(void)
 	       (unsigned long long)device_id, info.entry.name);
 	fflush(stdout);
 	qemu_wait_for_key_event(host_fd, QEMU_INPUT_HOST_TIMEOUT_MS, false);
+	printf("LKMDBG_QEMU_INPUT_HOST_KEY_OK device_id=%llu\n",
+	       (unsigned long long)device_id);
+	fflush(stdout);
 	qemu_drain_input_until_idle(host_fd, 150, 2000);
 	close(host_fd);
 
@@ -865,7 +868,13 @@ static void qemu_run_input_smoke(void)
 	qemu_check(nwritten == (ssize_t)sizeof(inject_events),
 		   "short_input_inject_write=%zd", nwritten);
 	qemu_wait_for_key_event(include_fd, QEMU_INPUT_INJECT_TIMEOUT_MS, true);
+	printf("LKMDBG_QEMU_INPUT_INJECT_OK device_id=%llu\n",
+	       (unsigned long long)device_id);
+	fflush(stdout);
 	qemu_expect_no_input_events(default_fd, QEMU_INPUT_IDLE_TIMEOUT_MS);
+	printf("LKMDBG_QEMU_INPUT_DEFAULT_CHANNEL_CLEAN device_id=%llu\n",
+	       (unsigned long long)device_id);
+	fflush(stdout);
 	close(include_fd);
 	close(default_fd);
 	close(session_fd);
@@ -1070,7 +1079,9 @@ int main(void)
 	}
 
 	for (iter = 0; iter < proc_version_repeats; iter++) {
-		qemu_insmod("hook_proc_version=1");
+		qemu_insmod(!hook_soak_only && iter == 0 ?
+			    "hook_proc_version=1 enable_input_tracking=1" :
+			    "hook_proc_version=1");
 		qemu_expect_status_u64_at_least("inline_hook_active=", 1);
 		qemu_read_file("/proc/version", version_buf, sizeof(version_buf));
 		qemu_check(version_buf[0] != '\0', "empty_proc_version");
