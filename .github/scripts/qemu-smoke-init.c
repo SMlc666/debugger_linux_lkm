@@ -1097,7 +1097,9 @@ int main(void)
 	char *const ex_perf_baseline_argv[] = { EXAMPLE_PERF_BASELINE_TOOL, NULL };
 	int watchpoint_ctrl_status;
 	int mem_test_status;
+	int open_session_status;
 	bool hook_soak_only;
+	bool session_transport_available = true;
 	unsigned int selftest_stress_repeats;
 	unsigned int proc_version_repeats;
 	unsigned int seq_read_repeats;
@@ -1177,36 +1179,50 @@ int main(void)
 		qemu_expect_status_line("proc_version_hook_active=1\n");
 		qemu_expect_status_u64_at_least("proc_open_successes=", 1);
 		if (!hook_soak_only && iter == 0) {
-			qemu_run_tool(open_session_argv);
-			qemu_run_tool_capture(stealth_report_argv, report_buf,
-					      sizeof(report_buf));
-			printf("%s", report_buf);
-			fflush(stdout);
-			qemu_check(strstr(report_buf,
-					  "report.stealth.flags=0x6(modulehide,sysfshide)") !=
-					   NULL,
-				   "missing_report_stealth_flags");
-			qemu_check(strstr(report_buf,
-					  "report.exposure.proc_modules=hidden") != NULL,
-				   "missing_report_proc_modules");
-			qemu_check(strstr(report_buf,
-					  "report.exposure.sysfs_module=hidden") != NULL,
-				   "missing_report_sysfs_module");
-			qemu_check(strstr(report_buf,
-					  "report.exposure.debugfs_dir=hidden") != NULL,
-				   "missing_report_debugfs_dir");
-			qemu_check(strstr(report_buf,
-					  "report.bootstrap.proc_open_successes=") != NULL,
-				   "missing_report_proc_open_successes");
-			qemu_check(strstr(report_buf,
-					  "report.exposure.sysfs_holders=") != NULL,
-				   "missing_report_sysfs_holders");
-			qemu_check(strstr(report_buf,
-					  "report.exposure.sysfs_sections=") != NULL,
-				   "missing_report_sysfs_sections");
-			qemu_check(strstr(report_buf,
-					  "report.exposure.debugfs_status=hidden") != NULL,
-				   "missing_report_debugfs_status");
+			open_session_status = qemu_run_tool_status(open_session_argv);
+			if (open_session_status == 0) {
+				session_transport_available = true;
+			} else if (!qemu_status_debugfs_available &&
+				   open_session_status == 1) {
+				session_transport_available = false;
+				printf("LKMDBG_QEMU_SESSION_UNAVAILABLE status=%d\n",
+				       open_session_status);
+				fflush(stdout);
+			} else {
+				qemu_fail("open_session_tool_exit_%d",
+					  open_session_status);
+			}
+
+			if (session_transport_available) {
+				qemu_run_tool_capture(stealth_report_argv, report_buf,
+						      sizeof(report_buf));
+				printf("%s", report_buf);
+				fflush(stdout);
+				qemu_check(strstr(report_buf,
+						  "report.stealth.flags=0x6(modulehide,sysfshide)") !=
+						   NULL,
+					   "missing_report_stealth_flags");
+				qemu_check(strstr(report_buf,
+						  "report.exposure.proc_modules=hidden") != NULL,
+					   "missing_report_proc_modules");
+				qemu_check(strstr(report_buf,
+						  "report.exposure.sysfs_module=hidden") != NULL,
+					   "missing_report_sysfs_module");
+				qemu_check(strstr(report_buf,
+						  "report.exposure.debugfs_dir=hidden") != NULL,
+					   "missing_report_debugfs_dir");
+				qemu_check(strstr(report_buf,
+						  "report.bootstrap.proc_open_successes=") != NULL,
+					   "missing_report_proc_open_successes");
+				qemu_check(strstr(report_buf,
+						  "report.exposure.sysfs_holders=") != NULL,
+					   "missing_report_sysfs_holders");
+				qemu_check(strstr(report_buf,
+						  "report.exposure.sysfs_sections=") != NULL,
+					   "missing_report_sysfs_sections");
+				qemu_check(strstr(report_buf,
+						  "report.exposure.debugfs_status=hidden") != NULL,
+					   "missing_report_debugfs_status");
 				qemu_check(strstr(report_buf,
 						  "report.exposure.debugfs_hooks=hidden") != NULL,
 					   "missing_report_debugfs_hooks");
@@ -1252,6 +1268,7 @@ int main(void)
 					       qemu_read_status_u64("hwpoint_last_ip="));
 					fflush(stdout);
 				}
+			}
 		}
 		qemu_rmmod();
 	}
@@ -1293,13 +1310,13 @@ int main(void)
 					   "missing_proc_version_open_registry");
 			}
 		}
-		if (!hook_soak_only) {
+		if (!hook_soak_only && session_transport_available) {
 			session_fd = qemu_open_session();
 			qemu_drain_one_event(session_fd);
 		}
 		qemu_read_file("/proc/version", version_buf, sizeof(version_buf));
 		qemu_check(version_buf[0] != '\0', "empty_proc_version_seq_read");
-		if (!hook_soak_only)
+		if (!hook_soak_only && session_transport_available)
 			qemu_expect_event_type(session_fd, LKMDBG_EVENT_HOOK_HIT);
 		qemu_expect_status_u64_at_least("seq_read_hook_hits=", 2);
 		qemu_expect_status_u64_at_least("inline_hook_install_total=", 1);
