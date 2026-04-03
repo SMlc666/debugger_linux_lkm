@@ -27,6 +27,38 @@ static long (*proc_version_orig_compat_ioctl)(struct file *file,
 					      unsigned long arg);
 #endif
 
+static bool lkmdbg_proc_version_matches(struct inode *inode,
+					const struct file *file)
+{
+	const struct dentry *target_dentry;
+	const struct dentry *file_dentry;
+
+	if (!proc_version_inode || !inode)
+		return false;
+
+	if (inode == proc_version_inode)
+		return true;
+
+	if (inode->i_sb == proc_version_inode->i_sb &&
+	    inode->i_ino == proc_version_inode->i_ino)
+		return true;
+
+	if (!file || !proc_version_path_valid)
+		return false;
+
+	target_dentry = proc_version_path.dentry;
+	file_dentry = file->f_path.dentry;
+	if (!target_dentry || !file_dentry)
+		return false;
+
+	if (file_dentry == target_dentry)
+		return true;
+
+	return file_dentry->d_sb == target_dentry->d_sb &&
+	       file_dentry->d_inode &&
+	       file_dentry->d_inode->i_ino == target_dentry->d_inode->i_ino;
+}
+
 static long lkmdbg_bootstrap_ioctl(struct file *file, unsigned int cmd,
 				   unsigned long arg)
 {
@@ -70,7 +102,7 @@ static int __nocfi lkmdbg_proc_version_open(struct inode *inode,
 	if (ret)
 		goto out;
 
-	if (!proc_version_inode || inode != proc_version_inode)
+	if (!lkmdbg_proc_version_matches(inode, file))
 		goto out;
 
 	registry = READ_ONCE(proc_version_open_registry);

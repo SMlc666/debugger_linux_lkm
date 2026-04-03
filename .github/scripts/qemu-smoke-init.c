@@ -60,6 +60,8 @@
 static int qemu_open_session(void);
 static bool qemu_status_debugfs_available = true;
 static bool qemu_status_debugfs_reported;
+static bool qemu_hooks_debugfs_available = true;
+static bool qemu_hooks_debugfs_reported;
 
 static void qemu_poweroff(void)
 {
@@ -1260,16 +1262,37 @@ int main(void)
 	 */
 	for (iter = 0; iter < seq_read_repeats; iter++) {
 		int session_fd = -1;
+		int err;
 
 		qemu_insmod("hook_proc_version=1 hook_seq_read=1");
 		qemu_expect_status_line("seq_read_hook_active=1\n");
 		qemu_expect_status_line("proc_version_hook_active=1\n");
 		qemu_expect_status_u64_at_least("inline_hook_active=", 1);
-		qemu_read_file(HOOKS_PATH, version_buf, sizeof(version_buf));
-		qemu_check(strstr(version_buf, "name=seq_read") != NULL,
-			   "missing_seq_read_registry");
-		qemu_check(strstr(version_buf, "name=proc_version_open") != NULL,
-			   "missing_proc_version_open_registry");
+		if (qemu_hooks_debugfs_available) {
+			if (!qemu_try_read_file_errno(HOOKS_PATH, version_buf,
+						      sizeof(version_buf),
+						      &err)) {
+				if (err == ENOENT) {
+					qemu_hooks_debugfs_available = false;
+					if (!qemu_hooks_debugfs_reported) {
+						printf("LKMDBG_QEMU_HOOKS_UNAVAILABLE errno=%d\n",
+						       err);
+						fflush(stdout);
+						qemu_hooks_debugfs_reported = true;
+					}
+				} else {
+					qemu_fail("open_%s errno=%d", HOOKS_PATH,
+						  err);
+				}
+			}
+			if (qemu_hooks_debugfs_available) {
+				qemu_check(strstr(version_buf, "name=seq_read") != NULL,
+					   "missing_seq_read_registry");
+				qemu_check(strstr(version_buf,
+						  "name=proc_version_open") != NULL,
+					   "missing_proc_version_open_registry");
+			}
+		}
 		if (!hook_soak_only) {
 			session_fd = qemu_open_session();
 			qemu_drain_one_event(session_fd);
