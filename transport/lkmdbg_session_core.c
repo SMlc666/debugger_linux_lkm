@@ -278,6 +278,19 @@ void lkmdbg_session_queue_event_locked(struct lkmdbg_session *session, u32 type,
 	session->event_drop_pending = 0;
 }
 
+void lkmdbg_session_queue_event_ex(struct lkmdbg_session *session, u32 type,
+				   u32 code, pid_t tgid, pid_t tid, u32 flags,
+				   u64 value0, u64 value1)
+{
+	unsigned long irqflags;
+
+	spin_lock_irqsave(&session->event_lock, irqflags);
+	lkmdbg_session_queue_event_locked(session, type, code, tgid, tid, flags,
+					 value0, value1);
+	spin_unlock_irqrestore(&session->event_lock, irqflags);
+	wake_up_interruptible(&session->readq);
+}
+
 long lkmdbg_set_event_config(struct lkmdbg_session *session, void __user *argp)
 {
 	struct lkmdbg_event_config_request req;
