@@ -626,6 +626,54 @@ jobs:
           path: ${{ runner.temp }}/qemu-smoke-tcg.log
           if-no-files-found: ignore
 
+  qemu-arm64-transport-smoke:
+    runs-on: ubuntu-24.04
+    needs:
+      - prepare-ci-image
+      - qemu-arm64-build-artifacts
+    timeout-minutes: 30
+    container:
+      image: ${{ needs.prepare-ci-image.outputs.image_ref }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Download representative QEMU boot artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: qemu-arm64-boot-6.6
+          path: ${{ runner.temp }}/qemu-artifacts
+
+      - name: Run representative transport smoke (TCG)
+        run: |
+          set -euo pipefail
+          KERNEL_IMAGE="$RUNNER_TEMP/qemu-artifacts/Image"
+          INITRAMFS="$RUNNER_TEMP/qemu-artifacts/initramfs.cpio.gz"
+          LOG="$RUNNER_TEMP/qemu-transport-smoke-tcg.log"
+          timeout 240s qemu-system-aarch64 \
+            -machine virt \
+            -cpu cortex-a72 \
+            -smp 2 \
+            -m 1024 \
+            -nographic \
+            -nic none \
+            -kernel "$KERNEL_IMAGE" \
+            -initrd "$INITRAMFS" \
+            -append "console=ttyAMA0 rdinit=/init panic=-1 lkmdbg.proc_version_repeats=1 lkmdbg.smoke_clusters=transport" \
+            -no-reboot | tee "$LOG"
+          grep -q 'LKMDBG_QEMU_CLUSTER_OK name=transport-negative' "$LOG"
+          grep -q 'LKMDBG_QEMU_CLUSTER_OK name=transport' "$LOG"
+          grep -q 'LKMDBG_QEMU_SMOKE_OK' "$LOG"
+
+      - name: Upload representative transport smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-arm64-transport-smoke-log-6.6
+          path: ${{ runner.temp }}/qemu-transport-smoke-tcg.log
+          if-no-files-found: ignore
+
   qemu-arm64-hook-soak:
     runs-on: ubuntu-24.04
     needs:

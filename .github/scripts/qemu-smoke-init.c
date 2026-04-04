@@ -58,6 +58,49 @@
 #define QEMU_PROC_EXPOSURE_LIFETIME_US 700000
 #define QEMU_INPUT_DEVICES_PATH "/proc/bus/input/devices"
 
+#define QEMU_SMOKE_CLUSTER_WATCHPOINT 0x00000001U
+#define QEMU_SMOKE_CLUSTER_HOOK_SELFTEST 0x00000002U
+#define QEMU_SMOKE_CLUSTER_TRANSPORT 0x00000004U
+#define QEMU_SMOKE_CLUSTER_INPUT 0x00000008U
+#define QEMU_SMOKE_CLUSTER_PROC_EXPOSURE 0x00000010U
+#define QEMU_SMOKE_CLUSTER_SEQ_READ 0x00000020U
+#define QEMU_SMOKE_CLUSTER_ALL                                             \
+	(QEMU_SMOKE_CLUSTER_WATCHPOINT | QEMU_SMOKE_CLUSTER_HOOK_SELFTEST | \
+	 QEMU_SMOKE_CLUSTER_TRANSPORT | QEMU_SMOKE_CLUSTER_INPUT |         \
+	 QEMU_SMOKE_CLUSTER_PROC_EXPOSURE | QEMU_SMOKE_CLUSTER_SEQ_READ)
+
+struct qemu_hook_selftest_case {
+	const char *params;
+	const char *status_line;
+	bool expect_installed;
+	unsigned int repeats;
+};
+
+static const struct qemu_hook_selftest_case qemu_hook_selftests[] = {
+	{ "hook_selftest_mode=1", "hook_selftest_enabled=1\n", false, 1 },
+	{ "hook_selftest_mode=2", "hook_selftest_exec_pool_ready=1\n", false, 1 },
+	{ "hook_selftest_mode=3", "hook_selftest_exec_allocated=1\n", false, 1 },
+	{ "hook_selftest_mode=4", "hook_selftest_exec_ready=1\n", false, 1 },
+	{ "hook_selftest_mode=5", "hook_selftest_exec_ready=1\n", true,
+	  QEMU_HOOK_SELFTEST_STRESS_REPEATS },
+	{ "hook_selftest_mode=6", "hook_selftest_actual=", true,
+	  QEMU_HOOK_SELFTEST_STRESS_REPEATS },
+};
+
+struct qemu_smoke_cluster_spec {
+	const char *name;
+	unsigned int bit;
+};
+
+static const struct qemu_smoke_cluster_spec qemu_smoke_cluster_specs[] = {
+	{ "watchpoint", QEMU_SMOKE_CLUSTER_WATCHPOINT },
+	{ "selftest", QEMU_SMOKE_CLUSTER_HOOK_SELFTEST },
+	{ "transport", QEMU_SMOKE_CLUSTER_TRANSPORT },
+	{ "input", QEMU_SMOKE_CLUSTER_INPUT },
+	{ "exposure", QEMU_SMOKE_CLUSTER_PROC_EXPOSURE },
+	{ "seqread", QEMU_SMOKE_CLUSTER_SEQ_READ },
+};
+
 static int qemu_open_session(void);
 static bool qemu_status_debugfs_available = true;
 static bool qemu_status_debugfs_reported;
@@ -498,6 +541,146 @@ static unsigned int qemu_cmdline_get_u32(const char *key,
 	return default_value;
 }
 
+static bool qemu_cmdline_get_value(const char *key, char *buf, size_t buf_size)
+{
+	char needle[64];
+	const char *cmdline = qemu_cmdline();
+	const char *pos = cmdline;
+	const char *end;
+	int len;
+
+	qemu_check(buf && buf_size > 0, "cmdline_value_buffer_invalid_%s", key);
+	len = snprintf(needle, sizeof(needle), "%s=", key);
+	qemu_check(len > 0 && (size_t)len < sizeof(needle),
+		   "cmdline_value_key_too_long_%s", key);
+
+	while ((pos = strstr(pos, needle)) != NULL) {
+		size_t value_len;
+
+		if (!(pos == cmdline || pos[-1] == ' ')) {
+			pos += len;
+			continue;
+		}
+
+		pos += len;
+		end = pos;
+		while (*end && *end != ' ' && *end != '\n')
+			end++;
+
+		value_len = (size_t)(end - pos);
+		qemu_check(value_len + 1U <= buf_size,
+			   "cmdline_value_too_long_%s", key);
+		memcpy(buf, pos, value_len);
+		buf[value_len] = '\0';
+		return true;
+	}
+
+	return false;
+}
+
+static unsigned int qemu_default_smoke_clusters(bool hook_soak_only)
+{
+	if (hook_soak_only)
+		return QEMU_SMOKE_CLUSTER_SEQ_READ;
+
+	return QEMU_SMOKE_CLUSTER_ALL;
+}
+
+static void qemu_append_name(char *buf, size_t buf_size, const char *name)
+{
+	size_t len;
+
+	if (!buf || !buf_size || !name || !name[0])
+		return;
+
+	len = strlen(buf);
+	if (len >= buf_size - 1)
+		return;
+
+	if (len) {
+		snprintf(buf + len, buf_size - len, ",%s", name);
+		return;
+	}
+
+	snprintf(buf, buf_size, "%s", name);
+}
+
+static const char *qemu_describe_smoke_clusters(unsigned int mask, char *buf,
+						size_t buf_size)
+{
+	size_t i;
+
+	qemu_check(buf && buf_size > 0, "smoke_cluster_desc_buffer_invalid");
+	buf[0] = '\0';
+	for (i = 0; i < sizeof(qemu_smoke_cluster_specs) /
+			    sizeof(qemu_smoke_cluster_specs[0]);
+	     i++) {
+		if (!(mask & qemu_smoke_cluster_specs[i].bit))
+			continue;
+		qemu_append_name(buf, buf_size, qemu_smoke_cluster_specs[i].name);
+	}
+
+	if (!buf[0])
+		snprintf(buf, buf_size, "none");
+	return buf;
+}
+
+static unsigned int qemu_parse_smoke_clusters(bool hook_soak_only)
+{
+	char value[128];
+	unsigned int mask = 0;
+	char *cursor;
+	char *token;
+
+	if (!qemu_cmdline_get_value("lkmdbg.smoke_clusters", value, sizeof(value)))
+		return qemu_default_smoke_clusters(hook_soak_only);
+	if (!value[0] || strcmp(value, "default") == 0)
+		return qemu_default_smoke_clusters(hook_soak_only);
+	if (strcmp(value, "all") == 0)
+		return QEMU_SMOKE_CLUSTER_ALL;
+	if (strcmp(value, "none") == 0)
+		return 0;
+
+	cursor = value;
+	while ((token = strsep(&cursor, ",")) != NULL) {
+		size_t i;
+		bool found = false;
+
+		if (!token[0])
+			continue;
+		for (i = 0; i < sizeof(qemu_smoke_cluster_specs) /
+				    sizeof(qemu_smoke_cluster_specs[0]);
+		     i++) {
+			if (strcmp(token, qemu_smoke_cluster_specs[i].name) != 0)
+				continue;
+			mask |= qemu_smoke_cluster_specs[i].bit;
+			found = true;
+			break;
+		}
+		qemu_check(found, "unknown_smoke_cluster_%s", token);
+	}
+
+	return mask;
+}
+
+static void qemu_cluster_begin(const char *name)
+{
+	printf("LKMDBG_QEMU_CLUSTER_BEGIN name=%s\n", name);
+	fflush(stdout);
+}
+
+static void qemu_cluster_ok(const char *name)
+{
+	printf("LKMDBG_QEMU_CLUSTER_OK name=%s\n", name);
+	fflush(stdout);
+}
+
+static void qemu_cluster_skip(const char *name, const char *reason)
+{
+	printf("LKMDBG_QEMU_CLUSTER_SKIP name=%s reason=%s\n", name, reason);
+	fflush(stdout);
+}
+
 static void qemu_expect_status_line(const char *needle)
 {
 	char buf[8192];
@@ -707,6 +890,92 @@ static int qemu_open_session(void)
 
 	close(proc_fd);
 	return session_fd;
+}
+
+static void qemu_expect_bootstrap_open_session_errno(
+	const struct lkmdbg_open_session_request *req, int expected_errno,
+	const char *label)
+{
+	int proc_fd;
+	int session_fd;
+	int saved_errno;
+
+	proc_fd = open("/proc/version", O_RDONLY | O_CLOEXEC);
+	if (proc_fd < 0)
+		qemu_fail("open_proc_version_%s errno=%d", label, errno);
+
+	errno = 0;
+	session_fd = ioctl(proc_fd, LKMDBG_IOC_OPEN_SESSION, req);
+	saved_errno = errno;
+	close(proc_fd);
+
+	qemu_check(session_fd < 0, "bootstrap_%s_unexpected_success", label);
+	qemu_check(saved_errno == expected_errno,
+		   "bootstrap_%s_errno=%d expected=%d", label, saved_errno,
+		   expected_errno);
+}
+
+static void qemu_expect_session_ioctl_errno(int session_fd, unsigned int cmd,
+					    void *argp, int expected_errno,
+					    const char *label)
+{
+	int ret;
+	int saved_errno;
+
+	errno = 0;
+	ret = ioctl(session_fd, cmd, argp);
+	saved_errno = errno;
+	qemu_check(ret < 0, "session_%s_unexpected_success", label);
+	qemu_check(saved_errno == expected_errno,
+		   "session_%s_errno=%d expected=%d", label, saved_errno,
+		   expected_errno);
+}
+
+static void qemu_expect_session_read_errno(int session_fd, size_t len,
+					   int expected_errno,
+					   const char *label)
+{
+	char buf[sizeof(struct lkmdbg_event_record)];
+	ssize_t nr;
+	int saved_errno;
+
+	qemu_check(len > 0 && len <= sizeof(buf), "session_read_len_invalid_%s",
+		   label);
+	errno = 0;
+	nr = read(session_fd, buf, len);
+	saved_errno = errno;
+	qemu_check(nr < 0, "session_read_%s_unexpected_success", label);
+	qemu_check(saved_errno == expected_errno,
+		   "session_read_%s_errno=%d expected=%d", label, saved_errno,
+		   expected_errno);
+}
+
+static void qemu_run_transport_negative_tests(void)
+{
+	struct lkmdbg_open_session_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+	};
+	int session_fd;
+
+	qemu_cluster_begin("transport-negative");
+
+	req.version++;
+	qemu_expect_bootstrap_open_session_errno(&req, ENOTTY, "bad_version");
+	req.version = LKMDBG_PROTO_VERSION;
+	req.size -= 4;
+	qemu_expect_bootstrap_open_session_errno(&req, ENOTTY, "bad_size");
+
+	session_fd = qemu_open_session();
+	qemu_expect_session_read_errno(session_fd,
+				       sizeof(struct lkmdbg_event_record) - 1U,
+				       EINVAL, "short_event_read");
+	qemu_expect_session_ioctl_errno(session_fd,
+					_IO(LKMDBG_IOC_MAGIC, 0x7f), NULL,
+					ENOTTY, "unknown_ioctl");
+	close(session_fd);
+
+	qemu_cluster_ok("transport-negative");
 }
 
 static bool qemu_bitmap64_test(const __u64 *words, size_t word_count,
@@ -1089,50 +1358,240 @@ static void qemu_rmmod(void)
 	qemu_fail("rmmod timeout errno=%d", errno);
 }
 
-int main(void)
+static bool qemu_probe_session_transport_available(void)
 {
-	static const struct {
-		const char *params;
-		const char *status_line;
-		bool expect_installed;
-		unsigned int repeats;
-	} selftests[] = {
-		{ "hook_selftest_mode=1", "hook_selftest_enabled=1\n", false, 1 },
-		{ "hook_selftest_mode=2", "hook_selftest_exec_pool_ready=1\n", false, 1 },
-		{ "hook_selftest_mode=3", "hook_selftest_exec_allocated=1\n", false, 1 },
-		{ "hook_selftest_mode=4", "hook_selftest_exec_ready=1\n", false, 1 },
-		{ "hook_selftest_mode=5", "hook_selftest_exec_ready=1\n", true,
-		  QEMU_HOOK_SELFTEST_STRESS_REPEATS },
-		{ "hook_selftest_mode=6", "hook_selftest_actual=", true,
-		  QEMU_HOOK_SELFTEST_STRESS_REPEATS },
-	};
-	char version_buf[4096];
-	char report_buf[4096];
+	char *const open_session_argv[] = { OPEN_SESSION_TOOL, NULL };
+	int open_session_status;
+
+	open_session_status = qemu_run_tool_status(open_session_argv);
+	if (open_session_status == 0)
+		return true;
+	if (!qemu_status_debugfs_available && open_session_status == 1) {
+		printf("LKMDBG_QEMU_SESSION_UNAVAILABLE status=%d\n",
+		       open_session_status);
+		fflush(stdout);
+		return false;
+	}
+
+	qemu_fail("open_session_tool_exit_%d", open_session_status);
+	return false;
+}
+
+static void qemu_run_watchpoint_control_smoke(void)
+{
+	char *const watchpoint_ctrl_argv[] = { WATCHPOINT_CTRL_TOOL, NULL };
+	int watchpoint_ctrl_status;
+
+	qemu_cluster_begin("watchpoint");
+	watchpoint_ctrl_status = qemu_run_tool_status(watchpoint_ctrl_argv);
+	if (watchpoint_ctrl_status == 0) {
+		printf("LKMDBG_QEMU_WATCHPOINT_CTRL_OK\n");
+	} else if (watchpoint_ctrl_status == 2) {
+		printf("LKMDBG_QEMU_WATCHPOINT_CTRL_SKIP\n");
+	} else {
+		qemu_fail("watchpoint_ctrl_exit_%d", watchpoint_ctrl_status);
+	}
+	fflush(stdout);
+	qemu_cluster_ok("watchpoint");
+}
+
+static void qemu_run_hook_selftests(unsigned int stress_repeats)
+{
 	size_t i;
 	unsigned int iter;
-	char *const open_session_argv[] = { OPEN_SESSION_TOOL, NULL };
+
+	qemu_cluster_begin("selftest");
+	for (i = 0; i < sizeof(qemu_hook_selftests) /
+			    sizeof(qemu_hook_selftests[0]);
+	     i++) {
+		unsigned int repeats = qemu_hook_selftests[i].repeats;
+
+		if (strcmp(qemu_hook_selftests[i].params, "hook_selftest_mode=5") == 0 ||
+		    strcmp(qemu_hook_selftests[i].params, "hook_selftest_mode=6") == 0)
+			repeats = stress_repeats;
+
+		for (iter = 0; iter < repeats; iter++) {
+			qemu_insmod(qemu_hook_selftests[i].params);
+			qemu_expect_status_line(qemu_hook_selftests[i].status_line);
+			if (qemu_hook_selftests[i].expect_installed) {
+				qemu_expect_status_line("hook_selftest_installed=1\n");
+				qemu_expect_status_u64_at_least("inline_hook_active=", 1);
+			} else {
+				qemu_expect_status_line("hook_selftest_installed=0\n");
+			}
+			qemu_rmmod();
+		}
+	}
+	qemu_cluster_ok("selftest");
+}
+
+static void qemu_run_transport_tool_smoke(void)
+{
+	char report_buf[4096];
 	char *const stealth_report_argv[] = { STEALTH_CTL_TOOL, "report", NULL };
 	char *const mem_test_argv[] = { MEM_TEST_TOOL, "selftest", NULL };
 	char *const mmu_test_argv[] = { MMU_TEST_TOOL, "selftest", NULL };
-	char *const watchpoint_ctrl_argv[] = { WATCHPOINT_CTRL_TOOL, NULL };
 	char *const ex_session_status_argv[] = { EXAMPLE_SESSION_STATUS_TOOL, NULL };
 	char *const ex_mem_rw_argv[] = { EXAMPLE_MEM_RW_TOOL, NULL };
 	char *const ex_threads_query_argv[] = { EXAMPLE_THREADS_QUERY_TOOL, NULL };
 	char *const ex_regs_fp_argv[] = { EXAMPLE_REGS_FP_TOOL, NULL };
-	char *const ex_stealth_roundtrip_argv[] = { EXAMPLE_STEALTH_ROUNDTRIP_TOOL,
-						    NULL };
+	char *const ex_stealth_roundtrip_argv[] = {
+		EXAMPLE_STEALTH_ROUNDTRIP_TOOL,
+		NULL,
+	};
 	char *const ex_sysrule_combo_argv[] = { EXAMPLE_SYSRULE_COMBO_TOOL, NULL };
 	char *const ex_vma_page_query_argv[] = { EXAMPLE_VMA_PAGE_QUERY_TOOL, NULL };
-	char *const ex_remote_alloc_rw_argv[] = { EXAMPLE_REMOTE_ALLOC_RW_TOOL,
-						  NULL };
+	char *const ex_remote_alloc_rw_argv[] = {
+		EXAMPLE_REMOTE_ALLOC_RW_TOOL,
+		NULL,
+	};
 	char *const ex_phys_translate_read_argv[] = {
 		EXAMPLE_PHYS_TRANSLATE_READ_TOOL,
 		NULL,
 	};
 	char *const ex_perf_baseline_argv[] = { EXAMPLE_PERF_BASELINE_TOOL, NULL };
-	int watchpoint_ctrl_status;
 	int mem_test_status;
-	int open_session_status;
+
+	qemu_cluster_begin("transport");
+	qemu_run_transport_negative_tests();
+	qemu_run_tool_capture(stealth_report_argv, report_buf, sizeof(report_buf));
+	printf("%s", report_buf);
+	fflush(stdout);
+	qemu_check(strstr(report_buf,
+			  "report.stealth.flags=0x6(modulehide,sysfshide)") != NULL,
+		   "missing_report_stealth_flags");
+	qemu_check(strstr(report_buf, "report.exposure.proc_modules=hidden") != NULL,
+		   "missing_report_proc_modules");
+	qemu_check(strstr(report_buf, "report.exposure.sysfs_module=hidden") != NULL,
+		   "missing_report_sysfs_module");
+	qemu_check(strstr(report_buf, "report.exposure.debugfs_dir=hidden") != NULL,
+		   "missing_report_debugfs_dir");
+	qemu_check(strstr(report_buf, "report.bootstrap.proc_open_successes=") != NULL,
+		   "missing_report_proc_open_successes");
+	qemu_check(strstr(report_buf, "report.exposure.sysfs_holders=") != NULL,
+		   "missing_report_sysfs_holders");
+	qemu_check(strstr(report_buf, "report.exposure.sysfs_sections=") != NULL,
+		   "missing_report_sysfs_sections");
+	qemu_check(strstr(report_buf, "report.exposure.debugfs_status=hidden") != NULL,
+		   "missing_report_debugfs_status");
+	qemu_check(strstr(report_buf, "report.exposure.debugfs_hooks=hidden") != NULL,
+		   "missing_report_debugfs_hooks");
+	qemu_check(strstr(report_buf, "report.exposure.kallsyms_symbols=") != NULL,
+		   "missing_report_kallsyms_symbols");
+
+	qemu_run_tool(ex_session_status_argv);
+	qemu_run_tool(ex_mem_rw_argv);
+	qemu_run_tool(ex_threads_query_argv);
+	qemu_run_tool(ex_regs_fp_argv);
+	qemu_run_tool(ex_stealth_roundtrip_argv);
+	mem_test_status = qemu_run_tool_status(mem_test_argv);
+	if (mem_test_status != 0) {
+		printf("LKMDBG_QEMU_MEM_TEST_RETRY first_status=%d\n",
+		       mem_test_status);
+		fflush(stdout);
+		mem_test_status = qemu_run_tool_status(mem_test_argv);
+		qemu_check(mem_test_status == 0, "tool_exit_%s status=%d",
+			   MEM_TEST_TOOL, mem_test_status);
+	}
+	qemu_run_tool(mmu_test_argv);
+	qemu_run_tool(ex_sysrule_combo_argv);
+	qemu_run_tool(ex_vma_page_query_argv);
+	qemu_run_tool(ex_remote_alloc_rw_argv);
+	qemu_run_tool(ex_phys_translate_read_argv);
+	qemu_run_tool(ex_perf_baseline_argv);
+	if (qemu_status_debugfs_available) {
+		printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
+		       qemu_read_status_u64("hwpoint_callback_total="),
+		       qemu_read_status_u64("breakpoint_callback_total="),
+		       qemu_read_status_u64("watchpoint_callback_total="),
+		       qemu_read_status_u64("target_stop_event_read_total="),
+		       qemu_read_status_u64("breakpoint_stop_event_read_total="),
+		       qemu_read_status_u64("watchpoint_stop_event_read_total="),
+		       qemu_read_status_u64("hwpoint_last_reason="),
+		       qemu_read_status_u64("hwpoint_last_type="),
+		       qemu_read_status_u64("hwpoint_last_addr="),
+		       qemu_read_status_u64("hwpoint_last_ip="));
+		fflush(stdout);
+	}
+	qemu_cluster_ok("transport");
+}
+
+static void qemu_run_input_cluster(void)
+{
+	qemu_cluster_begin("input");
+	qemu_run_input_smoke();
+	qemu_cluster_ok("input");
+}
+
+static void qemu_run_proc_exposure_cluster(void)
+{
+	qemu_cluster_begin("exposure");
+	qemu_report_user_proc_exposure();
+	qemu_cluster_ok("exposure");
+}
+
+static void qemu_run_seq_read_smoke(unsigned int seq_read_repeats,
+				    bool session_transport_available)
+{
+	char version_buf[4096];
+	unsigned int iter;
+
+	qemu_cluster_begin("seqread");
+	for (iter = 0; iter < seq_read_repeats; iter++) {
+		int session_fd = -1;
+		int err;
+
+		qemu_insmod("hook_proc_version=1 hook_seq_read=1");
+		qemu_expect_status_line("seq_read_hook_active=1\n");
+		qemu_expect_status_line("proc_version_hook_active=1\n");
+		qemu_expect_status_u64_at_least("inline_hook_active=", 1);
+		if (qemu_hooks_debugfs_available) {
+			if (!qemu_try_read_file_errno(HOOKS_PATH, version_buf,
+						      sizeof(version_buf),
+						      &err)) {
+				if (err == ENOENT) {
+					qemu_hooks_debugfs_available = false;
+					if (!qemu_hooks_debugfs_reported) {
+						printf("LKMDBG_QEMU_HOOKS_UNAVAILABLE errno=%d\n",
+						       err);
+						fflush(stdout);
+						qemu_hooks_debugfs_reported = true;
+					}
+				} else {
+					qemu_fail("open_%s errno=%d", HOOKS_PATH, err);
+				}
+			}
+			if (qemu_hooks_debugfs_available) {
+				qemu_check(strstr(version_buf, "name=seq_read") != NULL,
+					   "missing_seq_read_registry");
+				qemu_check(strstr(version_buf,
+						  "name=proc_version_open") != NULL,
+					   "missing_proc_version_open_registry");
+			}
+		}
+		if (session_transport_available) {
+			session_fd = qemu_open_session();
+			qemu_drain_one_event(session_fd);
+		}
+		qemu_read_file("/proc/version", version_buf, sizeof(version_buf));
+		qemu_check(version_buf[0] != '\0', "empty_proc_version_seq_read");
+		if (session_transport_available)
+			qemu_expect_event_type(session_fd, LKMDBG_EVENT_HOOK_HIT);
+		qemu_expect_status_u64_at_least("seq_read_hook_hits=", 2);
+		qemu_expect_status_u64_at_least("inline_hook_install_total=", 1);
+		if (session_fd >= 0)
+			close(session_fd);
+		qemu_rmmod();
+	}
+	qemu_cluster_ok("seqread");
+}
+
+int main(void)
+{
+	char version_buf[4096];
+	char cluster_buf[128];
+	unsigned int smoke_clusters;
+	unsigned int iter;
 	bool hook_soak_only;
 	bool session_transport_available = true;
 	unsigned int selftest_stress_repeats;
@@ -1161,6 +1620,7 @@ int main(void)
 		"lkmdbg.seq_read_repeats",
 		hook_soak_only ? QEMU_HOOK_SOAK_SEQ_READ_REPEATS :
 				 QEMU_SEQ_READ_REPEATS);
+	smoke_clusters = qemu_parse_smoke_clusters(hook_soak_only);
 
 	if (hook_soak_only) {
 		printf("LKMDBG_QEMU_HOOK_SOAK_BEGIN proc=%u seq=%u\n",
@@ -1168,41 +1628,22 @@ int main(void)
 	} else {
 		printf("LKMDBG_QEMU_SMOKE_BEGIN\n");
 	}
+	printf("LKMDBG_QEMU_SMOKE_CLUSTERS mask=0x%x names=%s\n", smoke_clusters,
+	       qemu_describe_smoke_clusters(smoke_clusters, cluster_buf,
+					    sizeof(cluster_buf)));
 	fflush(stdout);
 
-	if (!hook_soak_only) {
-		watchpoint_ctrl_status = qemu_run_tool_status(watchpoint_ctrl_argv);
-		if (watchpoint_ctrl_status == 0) {
-			printf("LKMDBG_QEMU_WATCHPOINT_CTRL_OK\n");
-		} else if (watchpoint_ctrl_status == 2) {
-			printf("LKMDBG_QEMU_WATCHPOINT_CTRL_SKIP\n");
-		} else {
-			qemu_fail("watchpoint_ctrl_exit_%d", watchpoint_ctrl_status);
-		}
-		fflush(stdout);
-	}
+	if (!hook_soak_only &&
+	    (smoke_clusters & QEMU_SMOKE_CLUSTER_WATCHPOINT))
+		qemu_run_watchpoint_control_smoke();
+	else if (!hook_soak_only)
+		qemu_cluster_skip("watchpoint", "not-selected");
 
-	if (!hook_soak_only) {
-		for (i = 0; i < sizeof(selftests) / sizeof(selftests[0]); i++) {
-			unsigned int repeats = selftests[i].repeats;
-
-			if (strcmp(selftests[i].params, "hook_selftest_mode=5") == 0 ||
-			    strcmp(selftests[i].params, "hook_selftest_mode=6") == 0)
-				repeats = selftest_stress_repeats;
-
-			for (iter = 0; iter < repeats; iter++) {
-				qemu_insmod(selftests[i].params);
-				qemu_expect_status_line(selftests[i].status_line);
-				if (selftests[i].expect_installed) {
-					qemu_expect_status_line("hook_selftest_installed=1\n");
-					qemu_expect_status_u64_at_least("inline_hook_active=", 1);
-				} else {
-					qemu_expect_status_line("hook_selftest_installed=0\n");
-				}
-				qemu_rmmod();
-			}
-		}
-	}
+	if (!hook_soak_only &&
+	    (smoke_clusters & QEMU_SMOKE_CLUSTER_HOOK_SELFTEST))
+		qemu_run_hook_selftests(selftest_stress_repeats);
+	else if (!hook_soak_only)
+		qemu_cluster_skip("selftest", "not-selected");
 
 	for (iter = 0; iter < proc_version_repeats; iter++) {
 		qemu_insmod(!hook_soak_only && iter == 0 ?
@@ -1214,151 +1655,44 @@ int main(void)
 		qemu_expect_status_line("proc_version_hook_active=1\n");
 		qemu_expect_status_u64_at_least("proc_open_successes=", 1);
 		if (!hook_soak_only && iter == 0) {
-			open_session_status = qemu_run_tool_status(open_session_argv);
-			if (open_session_status == 0) {
-				session_transport_available = true;
-			} else if (!qemu_status_debugfs_available &&
-				   open_session_status == 1) {
-				session_transport_available = false;
-				printf("LKMDBG_QEMU_SESSION_UNAVAILABLE status=%d\n",
-				       open_session_status);
-				fflush(stdout);
-			} else {
-				qemu_fail("open_session_tool_exit_%d",
-					  open_session_status);
+			if (smoke_clusters & (QEMU_SMOKE_CLUSTER_TRANSPORT |
+					      QEMU_SMOKE_CLUSTER_INPUT |
+					      QEMU_SMOKE_CLUSTER_PROC_EXPOSURE)) {
+				session_transport_available =
+					qemu_probe_session_transport_available();
 			}
-
 			if (session_transport_available) {
-				qemu_run_tool_capture(stealth_report_argv, report_buf,
-						      sizeof(report_buf));
-				printf("%s", report_buf);
-				fflush(stdout);
-				qemu_check(strstr(report_buf,
-						  "report.stealth.flags=0x6(modulehide,sysfshide)") !=
-						   NULL,
-					   "missing_report_stealth_flags");
-				qemu_check(strstr(report_buf,
-						  "report.exposure.proc_modules=hidden") != NULL,
-					   "missing_report_proc_modules");
-				qemu_check(strstr(report_buf,
-						  "report.exposure.sysfs_module=hidden") != NULL,
-					   "missing_report_sysfs_module");
-				qemu_check(strstr(report_buf,
-						  "report.exposure.debugfs_dir=hidden") != NULL,
-					   "missing_report_debugfs_dir");
-				qemu_check(strstr(report_buf,
-						  "report.bootstrap.proc_open_successes=") != NULL,
-					   "missing_report_proc_open_successes");
-				qemu_check(strstr(report_buf,
-						  "report.exposure.sysfs_holders=") != NULL,
-					   "missing_report_sysfs_holders");
-				qemu_check(strstr(report_buf,
-						  "report.exposure.sysfs_sections=") != NULL,
-					   "missing_report_sysfs_sections");
-				qemu_check(strstr(report_buf,
-						  "report.exposure.debugfs_status=hidden") != NULL,
-					   "missing_report_debugfs_status");
-				qemu_check(strstr(report_buf,
-						  "report.exposure.debugfs_hooks=hidden") != NULL,
-					   "missing_report_debugfs_hooks");
-				qemu_check(strstr(report_buf,
-						  "report.exposure.kallsyms_symbols=") != NULL,
-					   "missing_report_kallsyms_symbols");
-				qemu_run_tool(ex_session_status_argv);
-				qemu_run_tool(ex_mem_rw_argv);
-				qemu_run_tool(ex_threads_query_argv);
-				qemu_run_tool(ex_regs_fp_argv);
-				qemu_run_tool(ex_stealth_roundtrip_argv);
-				mem_test_status = qemu_run_tool_status(mem_test_argv);
-				if (mem_test_status != 0) {
-					printf("LKMDBG_QEMU_MEM_TEST_RETRY first_status=%d\n",
-					       mem_test_status);
-					fflush(stdout);
-					mem_test_status =
-						qemu_run_tool_status(mem_test_argv);
-					qemu_check(mem_test_status == 0,
-						   "tool_exit_%s status=%d",
-						   MEM_TEST_TOOL,
-						   mem_test_status);
-				}
-				qemu_run_tool(mmu_test_argv);
-				qemu_run_input_smoke();
-			qemu_report_user_proc_exposure();
-				qemu_run_tool(ex_sysrule_combo_argv);
-				qemu_run_tool(ex_vma_page_query_argv);
-				qemu_run_tool(ex_remote_alloc_rw_argv);
-				qemu_run_tool(ex_phys_translate_read_argv);
-				qemu_run_tool(ex_perf_baseline_argv);
-				if (qemu_status_debugfs_available) {
-					printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
-					       qemu_read_status_u64("hwpoint_callback_total="),
-					       qemu_read_status_u64("breakpoint_callback_total="),
-					       qemu_read_status_u64("watchpoint_callback_total="),
-					       qemu_read_status_u64("target_stop_event_read_total="),
-					       qemu_read_status_u64("breakpoint_stop_event_read_total="),
-					       qemu_read_status_u64("watchpoint_stop_event_read_total="),
-					       qemu_read_status_u64("hwpoint_last_reason="),
-					       qemu_read_status_u64("hwpoint_last_type="),
-					       qemu_read_status_u64("hwpoint_last_addr="),
-					       qemu_read_status_u64("hwpoint_last_ip="));
-					fflush(stdout);
-				}
+				if (smoke_clusters & QEMU_SMOKE_CLUSTER_TRANSPORT)
+					qemu_run_transport_tool_smoke();
+				else
+					qemu_cluster_skip("transport", "not-selected");
+				if (smoke_clusters & QEMU_SMOKE_CLUSTER_INPUT)
+					qemu_run_input_cluster();
+				else
+					qemu_cluster_skip("input", "not-selected");
+				if (smoke_clusters & QEMU_SMOKE_CLUSTER_PROC_EXPOSURE)
+					qemu_run_proc_exposure_cluster();
+				else
+					qemu_cluster_skip("exposure", "not-selected");
+			} else {
+				if (smoke_clusters & QEMU_SMOKE_CLUSTER_TRANSPORT)
+					qemu_cluster_skip("transport",
+							  "session-unavailable");
+				if (smoke_clusters & QEMU_SMOKE_CLUSTER_INPUT)
+					qemu_cluster_skip("input",
+							  "session-unavailable");
+				if (smoke_clusters & QEMU_SMOKE_CLUSTER_PROC_EXPOSURE)
+					qemu_cluster_skip("exposure",
+							  "session-unavailable");
 			}
 		}
 		qemu_rmmod();
 	}
 
-	/*
-	 * Keep seq_read covered in the main smoke path, but cap the repeat count
-	 * so runtime stays short enough for CI.
-	 */
-	for (iter = 0; iter < seq_read_repeats; iter++) {
-		int session_fd = -1;
-		int err;
-
-		qemu_insmod("hook_proc_version=1 hook_seq_read=1");
-		qemu_expect_status_line("seq_read_hook_active=1\n");
-		qemu_expect_status_line("proc_version_hook_active=1\n");
-		qemu_expect_status_u64_at_least("inline_hook_active=", 1);
-		if (qemu_hooks_debugfs_available) {
-			if (!qemu_try_read_file_errno(HOOKS_PATH, version_buf,
-						      sizeof(version_buf),
-						      &err)) {
-				if (err == ENOENT) {
-					qemu_hooks_debugfs_available = false;
-					if (!qemu_hooks_debugfs_reported) {
-						printf("LKMDBG_QEMU_HOOKS_UNAVAILABLE errno=%d\n",
-						       err);
-						fflush(stdout);
-						qemu_hooks_debugfs_reported = true;
-					}
-				} else {
-					qemu_fail("open_%s errno=%d", HOOKS_PATH,
-						  err);
-				}
-			}
-			if (qemu_hooks_debugfs_available) {
-				qemu_check(strstr(version_buf, "name=seq_read") != NULL,
-					   "missing_seq_read_registry");
-				qemu_check(strstr(version_buf,
-						  "name=proc_version_open") != NULL,
-					   "missing_proc_version_open_registry");
-			}
-		}
-		if (!hook_soak_only && session_transport_available) {
-			session_fd = qemu_open_session();
-			qemu_drain_one_event(session_fd);
-		}
-		qemu_read_file("/proc/version", version_buf, sizeof(version_buf));
-		qemu_check(version_buf[0] != '\0', "empty_proc_version_seq_read");
-		if (!hook_soak_only && session_transport_available)
-			qemu_expect_event_type(session_fd, LKMDBG_EVENT_HOOK_HIT);
-		qemu_expect_status_u64_at_least("seq_read_hook_hits=", 2);
-		qemu_expect_status_u64_at_least("inline_hook_install_total=", 1);
-		if (session_fd >= 0)
-			close(session_fd);
-		qemu_rmmod();
-	}
+	if (smoke_clusters & QEMU_SMOKE_CLUSTER_SEQ_READ)
+		qemu_run_seq_read_smoke(seq_read_repeats, session_transport_available);
+	else
+		qemu_cluster_skip("seqread", "not-selected");
 
 	if (hook_soak_only) {
 		printf("LKMDBG_QEMU_HOOK_SOAK_OK\n");
