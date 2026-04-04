@@ -102,6 +102,9 @@ static const struct qemu_smoke_cluster_spec qemu_smoke_cluster_specs[] = {
 };
 
 static int qemu_open_session(void);
+static void qemu_drain_one_event(int session_fd);
+static void qemu_read_event_blocking(int session_fd,
+				     struct lkmdbg_event_record *event_out);
 static bool qemu_status_debugfs_available = true;
 static bool qemu_status_debugfs_reported;
 static bool qemu_hooks_debugfs_available = true;
@@ -960,10 +963,16 @@ static void qemu_run_transport_negative_tests(void)
 		.version = LKMDBG_PROTO_VERSION,
 		.size = sizeof(req),
 	};
+	struct lkmdbg_status_reply status = { 0 };
+	struct lkmdbg_stop_query_request stop_req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(stop_req),
+	};
 	struct lkmdbg_target_request target_req = {
 		.version = LKMDBG_PROTO_VERSION,
 		.size = sizeof(target_req),
 	};
+	struct lkmdbg_event_record event;
 	int session_fd;
 
 	qemu_cluster_begin("transport-negative");
@@ -987,10 +996,42 @@ static void qemu_run_transport_negative_tests(void)
 	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_GET_EVENT_CONFIG,
 					&event_cfg, EINVAL,
 					"bad_get_event_config_flags");
+	stop_req.size -= 8U;
+	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_GET_STOP_STATE,
+					&stop_req, EINVAL,
+					"bad_get_stop_state_size");
+	stop_req.size = sizeof(stop_req);
+	stop_req.flags = 1U;
+	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_GET_STOP_STATE,
+					&stop_req, EINVAL,
+					"bad_get_stop_state_flags");
 	target_req.tgid = 0;
 	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_SET_TARGET,
 					&target_req, EINVAL,
 					"bad_set_target_zero_tgid");
+	target_req.tgid = 1;
+	target_req.tid = 2;
+	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_SET_TARGET,
+					&target_req, ESRCH,
+					"bad_set_target_mismatched_tid");
+	if (ioctl(session_fd, LKMDBG_IOC_GET_STATUS, &status) != 0)
+		qemu_fail("get_status_before_reset errno=%d", errno);
+	qemu_check(status.session_ioctl_calls >= 1,
+		   "status_before_reset_ioctl_calls=%llu",
+		   (unsigned long long)status.session_ioctl_calls);
+	qemu_drain_one_event(session_fd);
+	if (ioctl(session_fd, LKMDBG_IOC_RESET_SESSION) != 0)
+		qemu_fail("reset_session errno=%d", errno);
+	qemu_read_event_blocking(session_fd, &event);
+	qemu_check(event.type == LKMDBG_EVENT_SESSION_RESET,
+		   "unexpected_reset_event_type=%u", event.type);
+	qemu_check(event.value0 >= 1, "reset_event_old_calls=%llu",
+		   (unsigned long long)event.value0);
+	if (ioctl(session_fd, LKMDBG_IOC_GET_STATUS, &status) != 0)
+		qemu_fail("get_status_after_reset errno=%d", errno);
+	qemu_check(status.session_ioctl_calls == 1,
+		   "status_after_reset_ioctl_calls=%llu",
+		   (unsigned long long)status.session_ioctl_calls);
 	qemu_expect_session_ioctl_errno(session_fd,
 					_IO(LKMDBG_IOC_MAGIC, 0x7f), NULL,
 					ENOTTY, "unknown_ioctl");
@@ -1399,28 +1440,38 @@ static void qemu_drain_one_event(int session_fd)
 	qemu_check((size_t)nr == sizeof(event), "short_session_event_read=%zd", nr);
 }
 
-static void qemu_expect_event_type(int session_fd, unsigned int type)
+static void qemu_read_event_blocking(int session_fd,
+				     struct lkmdbg_event_record *event_out)
 {
-	struct lkmdbg_event_record event;
 	struct pollfd pfd = {
 		.fd = session_fd,
 		.events = POLLIN,
 	};
+	struct lkmdbg_event_record event;
 	int poll_ret;
 	ssize_t nr;
 
-	for (;;) {
-		poll_ret = poll(&pfd, 1, 1000);
-		if (poll_ret < 0)
-			qemu_fail("poll_session_event errno=%d", errno);
-		qemu_check(poll_ret > 0 && (pfd.revents & POLLIN),
-			   "missing_session_event_type_%u", type);
+	poll_ret = poll(&pfd, 1, 1000);
+	if (poll_ret < 0)
+		qemu_fail("poll_session_event errno=%d", errno);
+	qemu_check(poll_ret > 0 && (pfd.revents & POLLIN),
+		   "missing_session_event");
 
-		nr = read(session_fd, &event, sizeof(event));
-		if (nr < 0)
-			qemu_fail("read_session_event errno=%d", errno);
-		qemu_check((size_t)nr == sizeof(event), "short_session_event_read=%zd",
-			   nr);
+	nr = read(session_fd, &event, sizeof(event));
+	if (nr < 0)
+		qemu_fail("read_session_event errno=%d", errno);
+	qemu_check((size_t)nr == sizeof(event), "short_session_event_read=%zd",
+		   nr);
+	if (event_out)
+		*event_out = event;
+}
+
+static void qemu_expect_event_type(int session_fd, unsigned int type)
+{
+	struct lkmdbg_event_record event;
+
+	for (;;) {
+		qemu_read_event_blocking(session_fd, &event);
 		if (event.type == type)
 			return;
 	}
