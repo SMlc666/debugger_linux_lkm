@@ -2128,7 +2128,8 @@ static void lkmdbg_syscall_enter_broadcast_regs(struct pt_regs *regs, s32 nr)
 	struct lkmdbg_regs_arm64 *stop_regs_ptr = NULL;
 
 	if (!regs || current->tgid <= 0 || current->pid <= 0 || nr < 0 ||
-	    READ_ONCE(lkmdbg_trace_sys_enter_registered))
+	    (lkmdbg_syscall_trace_tracepoint_phases() &
+	     LKMDBG_SYSCALL_TRACE_PHASE_ENTER))
 		return;
 
 	lkmdbg_mm_event_track_sys_enter(regs, nr);
@@ -2147,7 +2148,8 @@ static void lkmdbg_syscall_exit_broadcast_regs(struct pt_regs *regs, s32 nr,
 	struct lkmdbg_regs_arm64 *stop_regs_ptr = NULL;
 
 	if (!regs || current->tgid <= 0 || current->pid <= 0 || nr < 0 ||
-	    READ_ONCE(lkmdbg_trace_sys_exit_registered))
+	    (lkmdbg_syscall_trace_tracepoint_phases() &
+	     LKMDBG_SYSCALL_TRACE_PHASE_EXIT))
 		return;
 
 	lkmdbg_mm_event_emit_sys_exit(regs, nr, retval);
