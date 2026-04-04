@@ -590,6 +590,7 @@ void lkmdbg_thread_ctrl_exit(void);
 void lkmdbg_thread_ctrl_release(struct lkmdbg_session *session);
 int lkmdbg_thread_trace_hooks_init(void);
 void lkmdbg_thread_trace_hooks_exit(void);
+u32 lkmdbg_thread_tracepoint_phases(void);
 void lkmdbg_trace_sched_process_fork(void *data, struct task_struct *parent,
 				     struct task_struct *child);
 void __nocfi lkmdbg_trace_sched_process_exec(void *data, struct task_struct *p,

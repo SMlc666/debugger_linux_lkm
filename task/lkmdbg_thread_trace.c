@@ -45,6 +45,18 @@ static struct tracepoint *lkmdbg_find_tracepoint(const char *name)
 	return lookup.match;
 }
 
+u32 lkmdbg_thread_tracepoint_phases(void)
+{
+	u32 phases = 0;
+
+	if (READ_ONCE(lkmdbg_trace_sys_enter_registered))
+		phases |= LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
+	if (READ_ONCE(lkmdbg_trace_sys_exit_registered))
+		phases |= LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
+
+	return phases;
+}
+
 int lkmdbg_thread_trace_hooks_init(void)
 {
 	int ret;

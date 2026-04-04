@@ -479,13 +479,7 @@ static int lkmdbg_validate_syscall_trace_request(
 
 static u32 lkmdbg_syscall_trace_tracepoint_phases(void)
 {
-	u32 phases = 0;
-
-	if (READ_ONCE(lkmdbg_trace_sys_enter_registered))
-		phases |= LKMDBG_SYSCALL_TRACE_PHASE_ENTER;
-	if (READ_ONCE(lkmdbg_trace_sys_exit_registered))
-		phases |= LKMDBG_SYSCALL_TRACE_PHASE_EXIT;
-	return phases;
+	return lkmdbg_thread_tracepoint_phases();
 }
 
 static u32 lkmdbg_syscall_trace_fallback_phases(void)
