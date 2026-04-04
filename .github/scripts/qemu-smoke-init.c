@@ -1531,6 +1531,7 @@ static void qemu_run_proc_exposure_cluster(void)
 }
 
 static void qemu_run_seq_read_smoke(unsigned int seq_read_repeats,
+				    bool allow_session_transport,
 				    bool session_transport_available)
 {
 	char version_buf[4096];
@@ -1569,13 +1570,13 @@ static void qemu_run_seq_read_smoke(unsigned int seq_read_repeats,
 					   "missing_proc_version_open_registry");
 			}
 		}
-		if (session_transport_available) {
+		if (allow_session_transport && session_transport_available) {
 			session_fd = qemu_open_session();
 			qemu_drain_one_event(session_fd);
 		}
 		qemu_read_file("/proc/version", version_buf, sizeof(version_buf));
 		qemu_check(version_buf[0] != '\0', "empty_proc_version_seq_read");
-		if (session_transport_available)
+		if (allow_session_transport && session_transport_available)
 			qemu_expect_event_type(session_fd, LKMDBG_EVENT_HOOK_HIT);
 		qemu_expect_status_u64_at_least("seq_read_hook_hits=", 2);
 		qemu_expect_status_u64_at_least("inline_hook_install_total=", 1);
@@ -1690,7 +1691,8 @@ int main(void)
 	}
 
 	if (smoke_clusters & QEMU_SMOKE_CLUSTER_SEQ_READ)
-		qemu_run_seq_read_smoke(seq_read_repeats, session_transport_available);
+		qemu_run_seq_read_smoke(seq_read_repeats, !hook_soak_only,
+					session_transport_available);
 	else
 		qemu_cluster_skip("seqread", "not-selected");
 
