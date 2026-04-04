@@ -968,6 +968,22 @@ static void qemu_run_transport_negative_tests(void)
 		.version = LKMDBG_PROTO_VERSION,
 		.size = sizeof(stop_req),
 	};
+	struct lkmdbg_freeze_request freeze_req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(freeze_req),
+	};
+	struct lkmdbg_signal_config_request signal_cfg = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(signal_cfg),
+	};
+	struct lkmdbg_syscall_trace_request syscall_trace = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(syscall_trace),
+	};
+	struct lkmdbg_remote_thread_create_request remote_thread_req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(remote_thread_req),
+	};
 	struct lkmdbg_target_request target_req = {
 		.version = LKMDBG_PROTO_VERSION,
 		.size = sizeof(target_req),
@@ -1005,6 +1021,29 @@ static void qemu_run_transport_negative_tests(void)
 	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_GET_STOP_STATE,
 					&stop_req, EINVAL,
 					"bad_get_stop_state_flags");
+	freeze_req.size -= 8U;
+	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_FREEZE_THREADS,
+					&freeze_req, EINVAL,
+					"bad_freeze_threads_size");
+	freeze_req.size = sizeof(freeze_req);
+	freeze_req.flags = 1U;
+	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_THAW_THREADS,
+					&freeze_req, EINVAL,
+					"bad_thaw_threads_flags");
+	signal_cfg.flags = ~LKMDBG_SIGNAL_CONFIG_STOP;
+	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_SET_SIGNAL_CONFIG,
+					&signal_cfg, EINVAL,
+					"bad_set_signal_config_flags");
+	syscall_trace.mode = LKMDBG_SYSCALL_TRACE_MODE_EVENT;
+	syscall_trace.phases = 0;
+	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_SET_SYSCALL_TRACE,
+					&syscall_trace, EINVAL,
+					"bad_set_syscall_trace_phases");
+	remote_thread_req.flags = ~LKMDBG_REMOTE_THREAD_CREATE_FLAG_SET_TLS;
+	qemu_expect_session_ioctl_errno(session_fd,
+					LKMDBG_IOC_REMOTE_THREAD_CREATE,
+					&remote_thread_req, EINVAL,
+					"bad_remote_thread_create_flags");
 	target_req.tgid = 0;
 	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_SET_TARGET,
 					&target_req, EINVAL,

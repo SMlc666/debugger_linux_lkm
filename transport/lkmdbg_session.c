@@ -16,17 +16,19 @@
 
 #include "lkmdbg_internal.h"
 
-static LIST_HEAD(lkmdbg_session_list);
-static DEFINE_SPINLOCK(lkmdbg_session_list_lock);
-#define LKMDBG_SESSION_READ_BATCH 16U
 #define LKMDBG_SYSCALL_RULE_MAX_ENTRIES 128U
-static void lkmdbg_session_stop_workfn(struct work_struct *work);
+void lkmdbg_session_stop_workfn(struct work_struct *work);
 
 struct lkmdbg_syscall_rule {
 	struct list_head node;
 	struct lkmdbg_syscall_rule_entry entry;
 };
 
+/*
+ * Session list ownership, event-mask helpers, status/event-config handlers,
+ * and file-ops now live in transport/lkmdbg_session_core.c.
+ */
+#if 0
 static bool lkmdbg_session_owner_active(pid_t owner_tgid)
 {
 	struct lkmdbg_session *session;
@@ -136,6 +138,8 @@ static bool lkmdbg_event_mask_supported(const u64 *mask_words,
 	return true;
 }
 
+#endif
+
 #ifdef CONFIG_ARM64
 static void lkmdbg_regs_arm64_export_control(struct lkmdbg_regs_arm64 *dst,
 					     const struct pt_regs *src)
@@ -151,6 +155,14 @@ static void lkmdbg_regs_arm64_export_control(struct lkmdbg_regs_arm64 *dst,
 }
 #endif
 
+static bool lkmdbg_session_stop_matches(const struct lkmdbg_stop_state *stop,
+					u32 reason, u64 value1)
+{
+	return stop && (stop->flags & LKMDBG_STOP_FLAG_ACTIVE) &&
+	       stop->reason == reason && stop->value1 == value1;
+}
+
+#if 0
 static void lkmdbg_session_zero_stop(struct lkmdbg_stop_state *stop)
 {
 	memset(stop, 0, sizeof(*stop));
@@ -386,6 +398,7 @@ long lkmdbg_get_event_config(struct lkmdbg_session *session, void __user *argp)
 
 	return 0;
 }
+#endif
 
 struct lkmdbg_session *lkmdbg_session_consume_single_step(pid_t tgid,
 							  pid_t tid)
@@ -501,7 +514,7 @@ void lkmdbg_session_clear_stop(struct lkmdbg_session *session)
 	wake_up_all(&session->stop_waitq);
 }
 
-static void lkmdbg_session_stop_workfn(struct work_struct *work)
+void lkmdbg_session_stop_workfn(struct work_struct *work)
 {
 	struct lkmdbg_session *session =
 		container_of(work, struct lkmdbg_session, stop_work);
@@ -810,7 +823,7 @@ lkmdbg_find_syscall_rule_locked(struct lkmdbg_session *session, u64 rule_id)
 	return NULL;
 }
 
-static void lkmdbg_release_syscall_rules_locked(struct lkmdbg_session *session)
+void lkmdbg_release_syscall_rules_locked(struct lkmdbg_session *session)
 {
 	struct lkmdbg_syscall_rule *rule;
 	struct lkmdbg_syscall_rule *tmp;
@@ -1354,6 +1367,7 @@ int lkmdbg_control_syscall_exit(struct pt_regs *regs, s32 syscall_nr,
 #endif
 }
 
+#if 0
 static int lkmdbg_session_copy_status_to_user(struct lkmdbg_session *session,
 					      void __user *argp)
 {
@@ -1434,6 +1448,8 @@ long lkmdbg_get_stop_state(struct lkmdbg_session *session, void __user *argp)
 
 	return 0;
 }
+
+#endif
 
 static int lkmdbg_validate_continue_request(struct lkmdbg_continue_request *req)
 {
@@ -1814,6 +1830,7 @@ long lkmdbg_resolve_syscall(struct lkmdbg_session *session, void __user *argp)
 
 	return 0;
 }
+#endif
 
 int lkmdbg_wait_for_stop_state(struct lkmdbg_session *session, u32 reason,
 			       u64 value1, u32 timeout_ms,
@@ -1941,6 +1958,7 @@ long lkmdbg_continue_target(struct lkmdbg_session *session, void __user *argp)
 	return 0;
 }
 
+#if 0
 static int lkmdbg_session_release(struct inode *inode, struct file *file)
 {
 	struct lkmdbg_session *session = file->private_data;
@@ -2291,3 +2309,4 @@ int lkmdbg_open_session(void __user *argp)
 
 	return fd;
 }
+#endif

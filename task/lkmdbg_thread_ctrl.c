@@ -137,18 +137,6 @@ typedef long (*lkmdbg_invoke_syscall_inner_fn)(struct pt_regs *regs,
 typedef void (*lkmdbg_do_el0_svc_fn)(struct pt_regs *regs);
 #endif
 
-static bool lkmdbg_trace_fork_registered;
-static bool lkmdbg_trace_exec_registered;
-static bool lkmdbg_trace_exit_registered;
-static bool lkmdbg_trace_signal_registered;
-static bool lkmdbg_trace_sys_enter_registered;
-static bool lkmdbg_trace_sys_exit_registered;
-static struct tracepoint *lkmdbg_trace_fork_tp;
-static struct tracepoint *lkmdbg_trace_exec_tp;
-static struct tracepoint *lkmdbg_trace_exit_tp;
-static struct tracepoint *lkmdbg_trace_signal_tp;
-static struct tracepoint *lkmdbg_trace_sys_enter_tp;
-static struct tracepoint *lkmdbg_trace_sys_exit_tp;
 static bool lkmdbg_perf_disable_missing_logged;
 static DEFINE_HASHTABLE(lkmdbg_mm_event_pending_ht, LKMDBG_MM_EVENT_HASH_BITS);
 static DEFINE_SPINLOCK(lkmdbg_mm_event_pending_lock);
@@ -2003,9 +1991,8 @@ static void lkmdbg_mm_event_emit_sys_exit(struct pt_regs *regs, s32 syscall_nr,
 					      value1);
 }
 
-static void lkmdbg_trace_sched_process_fork(void *data,
-					    struct task_struct *parent,
-					    struct task_struct *child)
+void lkmdbg_trace_sched_process_fork(void *data, struct task_struct *parent,
+				     struct task_struct *child)
 {
 	(void)data;
 
@@ -2027,10 +2014,10 @@ static void lkmdbg_trace_sched_process_fork(void *data,
 					      parent->pid);
 }
 
-static void __nocfi lkmdbg_trace_sched_process_exec(void *data,
-						    struct task_struct *p,
-						    pid_t old_pid,
-						    struct linux_binprm *bprm)
+void __nocfi lkmdbg_trace_sched_process_exec(void *data,
+					     struct task_struct *p,
+					     pid_t old_pid,
+					     struct linux_binprm *bprm)
 {
 	(void)data;
 	(void)bprm;
@@ -2047,7 +2034,7 @@ static void __nocfi lkmdbg_trace_sched_process_exec(void *data,
  * signature versioned or tracepoint registration will trip CFI immediately on
  * task exit.
  */
-static void __nocfi lkmdbg_trace_sched_process_exit(
+void __nocfi lkmdbg_trace_sched_process_exit(
 	void *data, struct task_struct *p
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
 	, bool group_dead
@@ -2069,10 +2056,10 @@ static void __nocfi lkmdbg_trace_sched_process_exit(
 					      0);
 }
 
-static void __nocfi lkmdbg_trace_signal_generate(void *data, int sig,
-						 struct kernel_siginfo *info,
-						 struct task_struct *task,
-						 int group, int result)
+void __nocfi lkmdbg_trace_signal_generate(void *data, int sig,
+					  struct kernel_siginfo *info,
+					  struct task_struct *task, int group,
+					  int result)
 {
 	u64 siginfo_code = 0;
 
@@ -2089,8 +2076,7 @@ static void __nocfi lkmdbg_trace_signal_generate(void *data, int sig,
 		group ? LKMDBG_SIGNAL_EVENT_GROUP : 0, siginfo_code, result);
 }
 
-static void lkmdbg_trace_raw_sys_enter(void *data, struct pt_regs *regs,
-				       long id)
+void lkmdbg_trace_raw_sys_enter(void *data, struct pt_regs *regs, long id)
 {
 	struct lkmdbg_regs_arm64 *stop_regs_ptr = NULL;
 #ifdef CONFIG_ARM64
@@ -2113,8 +2099,7 @@ static void lkmdbg_trace_raw_sys_enter(void *data, struct pt_regs *regs,
 		(s32)id, 0, stop_regs_ptr);
 }
 
-static void lkmdbg_trace_raw_sys_exit(void *data, struct pt_regs *regs,
-				      long ret)
+void lkmdbg_trace_raw_sys_exit(void *data, struct pt_regs *regs, long ret)
 {
 	struct lkmdbg_regs_arm64 *stop_regs_ptr = NULL;
 	long nr;
@@ -2257,34 +2242,6 @@ static void __nocfi lkmdbg_do_el0_svc_replacement(struct pt_regs *regs)
 		wake_up_all(&lkmdbg_syscall_enter_waitq);
 }
 #endif
-
-struct lkmdbg_tracepoint_lookup {
-	const char *name;
-	struct tracepoint *match;
-};
-
-static void lkmdbg_tracepoint_find_cb(struct tracepoint *tp, void *priv)
-{
-	struct lkmdbg_tracepoint_lookup *lookup = priv;
-
-	if (lookup->match)
-		return;
-	if (strcmp(tp->name, lookup->name) == 0)
-		lookup->match = tp;
-}
-
-static struct tracepoint *lkmdbg_find_tracepoint(const char *name)
-{
-	struct lkmdbg_tracepoint_lookup lookup = {
-		.name = name,
-	};
-	if (!lkmdbg_symbols.for_each_kernel_tracepoint_sym)
-		return NULL;
-
-	lkmdbg_for_each_kernel_tracepoint_runtime(lkmdbg_tracepoint_find_cb,
-						     &lookup);
-	return lookup.match;
-}
 
 #ifdef CONFIG_ARM64
 static bool lkmdbg_user_single_step_backend_ready(void)
@@ -2620,102 +2577,6 @@ out:
 #endif
 #endif
 
-static int lkmdbg_register_trace_hooks(void)
-{
-	int ret;
-
-	if (!lkmdbg_symbols.tracepoint_probe_register_sym) {
-		lkmdbg_pr_info("lkmdbg: tracepoint register helper unavailable\n");
-		return 0;
-	}
-
-	lkmdbg_trace_fork_tp = lkmdbg_find_tracepoint("sched_process_fork");
-	if (lkmdbg_trace_fork_tp) {
-		ret = lkmdbg_tracepoint_probe_register_runtime(
-			lkmdbg_trace_fork_tp,
-			(void *)lkmdbg_trace_sched_process_fork, NULL);
-		if (!ret)
-			lkmdbg_trace_fork_registered = true;
-		else
-			lkmdbg_pr_warn("lkmdbg: sched_process_fork trace hook failed ret=%d\n",
-				ret);
-	} else {
-		lkmdbg_pr_info("lkmdbg: sched_process_fork tracepoint unavailable\n");
-	}
-
-	lkmdbg_trace_exec_tp = lkmdbg_find_tracepoint("sched_process_exec");
-	if (lkmdbg_trace_exec_tp) {
-		ret = lkmdbg_tracepoint_probe_register_runtime(
-			lkmdbg_trace_exec_tp,
-			(void *)lkmdbg_trace_sched_process_exec, NULL);
-		if (!ret)
-			lkmdbg_trace_exec_registered = true;
-		else
-			lkmdbg_pr_warn("lkmdbg: sched_process_exec trace hook failed ret=%d\n",
-				ret);
-	} else {
-		lkmdbg_pr_info("lkmdbg: sched_process_exec tracepoint unavailable\n");
-	}
-
-	lkmdbg_trace_exit_tp = lkmdbg_find_tracepoint("sched_process_exit");
-	if (lkmdbg_trace_exit_tp) {
-		ret = lkmdbg_tracepoint_probe_register_runtime(
-			lkmdbg_trace_exit_tp,
-			(void *)lkmdbg_trace_sched_process_exit, NULL);
-		if (!ret)
-			lkmdbg_trace_exit_registered = true;
-		else
-			lkmdbg_pr_warn("lkmdbg: sched_process_exit trace hook failed ret=%d\n",
-				ret);
-	} else {
-		lkmdbg_pr_info("lkmdbg: sched_process_exit tracepoint unavailable\n");
-	}
-
-	lkmdbg_trace_signal_tp = lkmdbg_find_tracepoint("signal_generate");
-	if (lkmdbg_trace_signal_tp) {
-		ret = lkmdbg_tracepoint_probe_register_runtime(
-			lkmdbg_trace_signal_tp,
-			(void *)lkmdbg_trace_signal_generate, NULL);
-		if (!ret)
-			lkmdbg_trace_signal_registered = true;
-		else
-			lkmdbg_pr_warn("lkmdbg: signal_generate trace hook failed ret=%d\n",
-				ret);
-	} else {
-		lkmdbg_pr_info("lkmdbg: signal_generate tracepoint unavailable\n");
-	}
-
-	lkmdbg_trace_sys_enter_tp = lkmdbg_find_tracepoint("sys_enter");
-	if (lkmdbg_trace_sys_enter_tp) {
-		ret = lkmdbg_tracepoint_probe_register_runtime(
-			lkmdbg_trace_sys_enter_tp,
-			(void *)lkmdbg_trace_raw_sys_enter, NULL);
-		if (!ret)
-			lkmdbg_trace_sys_enter_registered = true;
-		else
-			lkmdbg_pr_warn("lkmdbg: raw sys_enter trace hook failed ret=%d\n",
-				ret);
-	} else {
-		lkmdbg_pr_info("lkmdbg: raw sys_enter tracepoint unavailable\n");
-	}
-
-	lkmdbg_trace_sys_exit_tp = lkmdbg_find_tracepoint("sys_exit");
-	if (lkmdbg_trace_sys_exit_tp) {
-		ret = lkmdbg_tracepoint_probe_register_runtime(
-			lkmdbg_trace_sys_exit_tp,
-			(void *)lkmdbg_trace_raw_sys_exit, NULL);
-		if (!ret)
-			lkmdbg_trace_sys_exit_registered = true;
-		else
-			lkmdbg_pr_warn("lkmdbg: raw sys_exit trace hook failed ret=%d\n",
-				ret);
-	} else {
-		lkmdbg_pr_info("lkmdbg: raw sys_exit tracepoint unavailable\n");
-	}
-
-	return 0;
-}
-
 #ifdef CONFIG_ARM64
 static int lkmdbg_install_syscall_enter_backend(void)
 {
@@ -2927,7 +2788,7 @@ int lkmdbg_thread_ctrl_init(void)
 	lkmdbg_install_user_single_step_backend();
 #endif
 
-	ret = lkmdbg_register_trace_hooks();
+	ret = lkmdbg_thread_trace_hooks_init();
 	return ret;
 }
 
@@ -3078,65 +2939,7 @@ long lkmdbg_get_syscall_trace(struct lkmdbg_session *session, void __user *argp)
 
 void lkmdbg_thread_ctrl_exit(void)
 {
-	if (lkmdbg_symbols.tracepoint_probe_unregister_sym &&
-	    lkmdbg_trace_sys_exit_registered &&
-	    lkmdbg_trace_sys_exit_tp) {
-		lkmdbg_tracepoint_probe_unregister_runtime(
-			lkmdbg_trace_sys_exit_tp,
-			(void *)lkmdbg_trace_raw_sys_exit, NULL);
-		lkmdbg_trace_sys_exit_registered = false;
-	}
-	lkmdbg_trace_sys_exit_tp = NULL;
-
-	if (lkmdbg_symbols.tracepoint_probe_unregister_sym &&
-	    lkmdbg_trace_sys_enter_registered &&
-	    lkmdbg_trace_sys_enter_tp) {
-		lkmdbg_tracepoint_probe_unregister_runtime(
-			lkmdbg_trace_sys_enter_tp,
-			(void *)lkmdbg_trace_raw_sys_enter, NULL);
-		lkmdbg_trace_sys_enter_registered = false;
-	}
-	lkmdbg_trace_sys_enter_tp = NULL;
-
-	if (lkmdbg_symbols.tracepoint_probe_unregister_sym &&
-	    lkmdbg_trace_signal_registered &&
-	    lkmdbg_trace_signal_tp) {
-		lkmdbg_tracepoint_probe_unregister_runtime(
-			lkmdbg_trace_signal_tp,
-			(void *)lkmdbg_trace_signal_generate, NULL);
-		lkmdbg_trace_signal_registered = false;
-	}
-	lkmdbg_trace_signal_tp = NULL;
-
-	if (lkmdbg_symbols.tracepoint_probe_unregister_sym &&
-	    lkmdbg_trace_exit_registered &&
-	    lkmdbg_trace_exit_tp) {
-		lkmdbg_tracepoint_probe_unregister_runtime(
-			lkmdbg_trace_exit_tp,
-			(void *)lkmdbg_trace_sched_process_exit, NULL);
-		lkmdbg_trace_exit_registered = false;
-	}
-	lkmdbg_trace_exit_tp = NULL;
-
-	if (lkmdbg_symbols.tracepoint_probe_unregister_sym &&
-	    lkmdbg_trace_exec_registered &&
-	    lkmdbg_trace_exec_tp) {
-		lkmdbg_tracepoint_probe_unregister_runtime(
-			lkmdbg_trace_exec_tp,
-			(void *)lkmdbg_trace_sched_process_exec, NULL);
-		lkmdbg_trace_exec_registered = false;
-	}
-	lkmdbg_trace_exec_tp = NULL;
-
-	if (lkmdbg_symbols.tracepoint_probe_unregister_sym &&
-	    lkmdbg_trace_fork_registered &&
-	    lkmdbg_trace_fork_tp) {
-		lkmdbg_tracepoint_probe_unregister_runtime(
-			lkmdbg_trace_fork_tp,
-			(void *)lkmdbg_trace_sched_process_fork, NULL);
-		lkmdbg_trace_fork_registered = false;
-	}
-	lkmdbg_trace_fork_tp = NULL;
+	lkmdbg_thread_trace_hooks_exit();
 
 #if defined(CONFIG_ARM64) && LKMDBG_ARM64_USER_STEP_HOOKS
 	if (lkmdbg_user_step_hook_registered) {

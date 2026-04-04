@@ -33,6 +33,8 @@ struct seq_file;
 struct task_struct;
 struct tracepoint;
 struct vm_area_struct;
+struct linux_binprm;
+struct kernel_siginfo;
 struct lkmdbg_freezer;
 struct perf_event;
 struct perf_event_attr;
@@ -326,6 +328,7 @@ extern bool hook_proc_version;
 extern unsigned int hook_selftest_mode;
 extern bool hook_seq_read;
 extern bool enable_kmsg;
+extern bool enable_probe_logs;
 extern bool enable_debugfs;
 extern bool enable_input_tracking;
 extern bool bypass_kprobe_blacklist;
@@ -379,6 +382,12 @@ const char *lkmdbg_probe_stage_name(enum lkmdbg_probe_stage stage);
 			pr_emerg(fmt, ##__VA_ARGS__);                          \
 	} while (0)
 
+#define lkmdbg_probe_pr_err(fmt, ...)                                         \
+	do {                                                                   \
+		if (READ_ONCE(enable_probe_logs))                              \
+			pr_err(fmt, ##__VA_ARGS__);                            \
+	} while (0)
+
 int lkmdbg_debugfs_init(void);
 void lkmdbg_debugfs_exit(void);
 int lkmdbg_debugfs_set_visible(bool visible);
@@ -427,6 +436,26 @@ long lkmdbg_open_input_channel(struct lkmdbg_session *session,
 			       void __user *argp);
 
 int lkmdbg_open_session(void __user *argp);
+extern struct list_head lkmdbg_session_list;
+extern spinlock_t lkmdbg_session_list_lock;
+bool lkmdbg_session_owner_active(pid_t owner_tgid);
+void lkmdbg_session_supported_event_mask(u64 *mask_words);
+bool lkmdbg_session_event_type_enabled(const struct lkmdbg_session *session,
+				       u32 type);
+void lkmdbg_session_zero_stop(struct lkmdbg_stop_state *stop);
+void lkmdbg_session_reset_syscall_control_locked(struct lkmdbg_session *session);
+int lkmdbg_session_prepare_continue_syscall_control(
+	struct lkmdbg_session *session, const struct lkmdbg_stop_state *stop);
+void lkmdbg_session_finish_continue_syscall_control(
+	struct lkmdbg_session *session, const struct lkmdbg_stop_state *stop);
+void lkmdbg_session_fail_syscall_control(struct lkmdbg_session *session);
+bool lkmdbg_session_syscall_control_matches(
+	const struct lkmdbg_session *session, pid_t tid, s32 syscall_nr);
+void lkmdbg_session_queue_event_locked(struct lkmdbg_session *session, u32 type,
+				       u32 code, pid_t tgid, pid_t tid,
+				       u32 flags, u64 value0, u64 value1);
+void lkmdbg_release_syscall_rules_locked(struct lkmdbg_session *session);
+void lkmdbg_session_stop_workfn(struct work_struct *work);
 long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 			  unsigned long arg);
 ssize_t lkmdbg_session_read(struct file *file, char __user *buf, size_t count,
@@ -559,6 +588,25 @@ void lkmdbg_session_clear_stop(struct lkmdbg_session *session);
 int lkmdbg_thread_ctrl_init(void);
 void lkmdbg_thread_ctrl_exit(void);
 void lkmdbg_thread_ctrl_release(struct lkmdbg_session *session);
+int lkmdbg_thread_trace_hooks_init(void);
+void lkmdbg_thread_trace_hooks_exit(void);
+void lkmdbg_trace_sched_process_fork(void *data, struct task_struct *parent,
+				     struct task_struct *child);
+void __nocfi lkmdbg_trace_sched_process_exec(void *data, struct task_struct *p,
+					     pid_t old_pid,
+					     struct linux_binprm *bprm);
+void __nocfi lkmdbg_trace_sched_process_exit(
+	void *data, struct task_struct *p
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	, bool group_dead
+#endif
+);
+void __nocfi lkmdbg_trace_signal_generate(void *data, int sig,
+					  struct kernel_siginfo *info,
+					  struct task_struct *task, int group,
+					  int result);
+void lkmdbg_trace_raw_sys_enter(void *data, struct pt_regs *regs, long id);
+void lkmdbg_trace_raw_sys_exit(void *data, struct pt_regs *regs, long ret);
 long lkmdbg_add_hwpoint(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_remove_hwpoint(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_query_hwpoints(struct lkmdbg_session *session, void __user *argp);

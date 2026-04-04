@@ -17,6 +17,7 @@ lkmdbg-hook-y := \
 	hook/lkmdbg_hook_arm64.o
 
 lkmdbg-transport-y := \
+	transport/lkmdbg_session_core.o \
 	transport/lkmdbg_session.o \
 	transport/lkmdbg_transport_proc.o
 
@@ -37,6 +38,7 @@ lkmdbg-input-y := \
 lkmdbg-task-y := \
 	task/lkmdbg_freeze.o \
 	task/lkmdbg_remote_call.o \
+	task/lkmdbg_thread_trace.o \
 	task/lkmdbg_thread_ctrl.o \
 	task/lkmdbg_thread.o
 

@@ -30,6 +30,11 @@ module_param(enable_kmsg, bool, 0644);
 MODULE_PARM_DESC(enable_kmsg,
 		 "Emit lkmdbg module logs into kmsg (disabled by default for stealth)");
 
+bool enable_probe_logs;
+module_param(enable_probe_logs, bool, 0644);
+MODULE_PARM_DESC(enable_probe_logs,
+		 "Emit explicit init/transport/debugfs probe markers into kmsg");
+
 bool enable_debugfs;
 module_param(enable_debugfs, bool, 0644);
 MODULE_PARM_DESC(enable_debugfs,
@@ -297,15 +302,16 @@ static int __init lkmdbg_init(void)
 	int ret;
 
 	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_INIT_ENTER);
-	pr_err("lkmdbg: init probe begin enable_kmsg=%u enable_debugfs=%u hook_proc_version=%u hook_selftest_mode=%u hook_seq_read=%u\n",
-	       enable_kmsg, enable_debugfs, hook_proc_version,
-	       hook_selftest_mode, hook_seq_read);
+	lkmdbg_probe_pr_err("lkmdbg: init probe begin enable_kmsg=%u enable_debugfs=%u hook_proc_version=%u hook_selftest_mode=%u hook_seq_read=%u\n",
+			    enable_kmsg, enable_debugfs, hook_proc_version,
+			    hook_selftest_mode, hook_seq_read);
 	lkmdbg_trace_stage("init_begin");
 	lkmdbg_state.load_jiffies = jiffies;
 
 	ret = lkmdbg_debugfs_set_visible(enable_debugfs);
-	pr_err("lkmdbg: init probe debugfs ret=%d active=%u dir=%px\n",
-	       ret, lkmdbg_debugfs_is_active(), lkmdbg_state.debugfs_dir);
+	lkmdbg_probe_pr_err("lkmdbg: init probe debugfs ret=%d active=%u dir=%px\n",
+			    ret, lkmdbg_debugfs_is_active(),
+			    lkmdbg_state.debugfs_dir);
 	if (ret)
 		return ret;
 	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_INIT_DEBUGFS_READY);
@@ -363,9 +369,10 @@ static int __init lkmdbg_init(void)
 	}
 
 	ret = lkmdbg_transport_init();
-	pr_err("lkmdbg: init probe transport ret=%d proc_hook_active=%u inline_hook_active=%llu\n",
-	       ret, READ_ONCE(lkmdbg_state.proc_version_hook_active),
-	       (unsigned long long)READ_ONCE(lkmdbg_state.inline_hook_active));
+	lkmdbg_probe_pr_err("lkmdbg: init probe transport ret=%d proc_hook_active=%u inline_hook_active=%llu\n",
+			    ret, READ_ONCE(lkmdbg_state.proc_version_hook_active),
+			    (unsigned long long)READ_ONCE(
+				    lkmdbg_state.inline_hook_active));
 	if (ret) {
 		lkmdbg_hooks_exit();
 		lkmdbg_stealth_exit();
@@ -416,10 +423,11 @@ static int __init lkmdbg_init(void)
 	lkmdbg_trace_stage("thread_ctrl_ready");
 
 	lkmdbg_probe_set_stage(LKMDBG_PROBE_STAGE_INIT_LOADED);
-	pr_err("lkmdbg: init probe loaded debugfs_active=%u proc_hook_active=%u active_sessions=%llu\n",
-	       lkmdbg_debugfs_is_active(),
-	       READ_ONCE(lkmdbg_state.proc_version_hook_active),
-	       (unsigned long long)READ_ONCE(lkmdbg_state.active_sessions));
+	lkmdbg_probe_pr_err("lkmdbg: init probe loaded debugfs_active=%u proc_hook_active=%u active_sessions=%llu\n",
+			    lkmdbg_debugfs_is_active(),
+			    READ_ONCE(lkmdbg_state.proc_version_hook_active),
+			    (unsigned long long)READ_ONCE(
+				    lkmdbg_state.active_sessions));
 	lkmdbg_pr_info("lkmdbg: loaded tag=%s hook_proc_version=%u hook_selftest_mode=%u hook_seq_read=%u kprobe_patched=%d cfi_patched=%d\n",
 		       tag, hook_proc_version, hook_selftest_mode,
 		       hook_seq_read, blacklist_patched, cfi_patched);
@@ -430,10 +438,11 @@ static void __exit lkmdbg_exit(void)
 {
 	enum lkmdbg_probe_stage stage = lkmdbg_probe_get_stage();
 
-	pr_err("lkmdbg: exit probe enable_kmsg=%u enable_debugfs=%u debugfs_active=%u proc_hook_active=%u probe_stage=%u(%s)\n",
-	       enable_kmsg, enable_debugfs, lkmdbg_debugfs_is_active(),
-	       READ_ONCE(lkmdbg_state.proc_version_hook_active),
-	       stage, lkmdbg_probe_stage_name(stage));
+	lkmdbg_probe_pr_err("lkmdbg: exit probe enable_kmsg=%u enable_debugfs=%u debugfs_active=%u proc_hook_active=%u probe_stage=%u(%s)\n",
+			    enable_kmsg, enable_debugfs,
+			    lkmdbg_debugfs_is_active(),
+			    READ_ONCE(lkmdbg_state.proc_version_hook_active),
+			    stage, lkmdbg_probe_stage_name(stage));
 	lkmdbg_stealth_exit();
 	lkmdbg_thread_ctrl_exit();
 	lkmdbg_runtime_hooks_exit();
