@@ -952,9 +952,17 @@ static void qemu_expect_session_read_errno(int session_fd, size_t len,
 
 static void qemu_run_transport_negative_tests(void)
 {
+	struct lkmdbg_event_config_request event_cfg = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(event_cfg),
+	};
 	struct lkmdbg_open_session_request req = {
 		.version = LKMDBG_PROTO_VERSION,
 		.size = sizeof(req),
+	};
+	struct lkmdbg_target_request target_req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(target_req),
 	};
 	int session_fd;
 
@@ -970,12 +978,120 @@ static void qemu_run_transport_negative_tests(void)
 	qemu_expect_session_read_errno(session_fd,
 				       sizeof(struct lkmdbg_event_record) - 1U,
 				       EINVAL, "short_event_read");
+	event_cfg.size -= 8U;
+	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_GET_EVENT_CONFIG,
+					&event_cfg, EINVAL,
+					"bad_get_event_config_size");
+	event_cfg.size = sizeof(event_cfg);
+	event_cfg.flags = 1U;
+	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_GET_EVENT_CONFIG,
+					&event_cfg, EINVAL,
+					"bad_get_event_config_flags");
+	target_req.tgid = 0;
+	qemu_expect_session_ioctl_errno(session_fd, LKMDBG_IOC_SET_TARGET,
+					&target_req, EINVAL,
+					"bad_set_target_zero_tgid");
 	qemu_expect_session_ioctl_errno(session_fd,
 					_IO(LKMDBG_IOC_MAGIC, 0x7f), NULL,
 					ENOTTY, "unknown_ioctl");
 	close(session_fd);
 
 	qemu_cluster_ok("transport-negative");
+}
+
+static void qemu_validate_transport_report(const char *report_buf)
+{
+	qemu_check(strstr(report_buf,
+			  "report.stealth.flags=0x6(modulehide,sysfshide)") != NULL,
+		   "missing_report_stealth_flags");
+	qemu_check(strstr(report_buf, "report.exposure.proc_modules=hidden") != NULL,
+		   "missing_report_proc_modules");
+	qemu_check(strstr(report_buf, "report.exposure.sysfs_module=hidden") != NULL,
+		   "missing_report_sysfs_module");
+	qemu_check(strstr(report_buf, "report.exposure.debugfs_dir=hidden") != NULL,
+		   "missing_report_debugfs_dir");
+	qemu_check(strstr(report_buf, "report.bootstrap.proc_open_successes=") != NULL,
+		   "missing_report_proc_open_successes");
+	qemu_check(strstr(report_buf, "report.exposure.sysfs_holders=") != NULL,
+		   "missing_report_sysfs_holders");
+	qemu_check(strstr(report_buf, "report.exposure.sysfs_sections=") != NULL,
+		   "missing_report_sysfs_sections");
+	qemu_check(strstr(report_buf, "report.exposure.debugfs_status=hidden") != NULL,
+		   "missing_report_debugfs_status");
+	qemu_check(strstr(report_buf, "report.exposure.debugfs_hooks=hidden") != NULL,
+		   "missing_report_debugfs_hooks");
+	qemu_check(strstr(report_buf, "report.exposure.kallsyms_symbols=") != NULL,
+		   "missing_report_kallsyms_symbols");
+}
+
+static void qemu_run_transport_core_tools(void)
+{
+	char *const mem_test_argv[] = { MEM_TEST_TOOL, "selftest", NULL };
+	char *const mmu_test_argv[] = { MMU_TEST_TOOL, "selftest", NULL };
+	char *const ex_session_status_argv[] = { EXAMPLE_SESSION_STATUS_TOOL, NULL };
+	char *const ex_mem_rw_argv[] = { EXAMPLE_MEM_RW_TOOL, NULL };
+	char *const ex_threads_query_argv[] = { EXAMPLE_THREADS_QUERY_TOOL, NULL };
+	char *const ex_regs_fp_argv[] = { EXAMPLE_REGS_FP_TOOL, NULL };
+	char *const ex_stealth_roundtrip_argv[] = {
+		EXAMPLE_STEALTH_ROUNDTRIP_TOOL,
+		NULL,
+	};
+	int mem_test_status;
+
+	qemu_cluster_begin("transport-core-tools");
+	qemu_run_tool(ex_session_status_argv);
+	qemu_run_tool(ex_mem_rw_argv);
+	qemu_run_tool(ex_threads_query_argv);
+	qemu_run_tool(ex_regs_fp_argv);
+	qemu_run_tool(ex_stealth_roundtrip_argv);
+	mem_test_status = qemu_run_tool_status(mem_test_argv);
+	if (mem_test_status != 0) {
+		printf("LKMDBG_QEMU_MEM_TEST_RETRY first_status=%d\n",
+		       mem_test_status);
+		fflush(stdout);
+		mem_test_status = qemu_run_tool_status(mem_test_argv);
+		qemu_check(mem_test_status == 0, "tool_exit_%s status=%d",
+			   MEM_TEST_TOOL, mem_test_status);
+	}
+	qemu_run_tool(mmu_test_argv);
+	qemu_cluster_ok("transport-core-tools");
+}
+
+static void qemu_run_transport_extended_tools(void)
+{
+	char *const ex_sysrule_combo_argv[] = { EXAMPLE_SYSRULE_COMBO_TOOL, NULL };
+	char *const ex_vma_page_query_argv[] = { EXAMPLE_VMA_PAGE_QUERY_TOOL, NULL };
+	char *const ex_remote_alloc_rw_argv[] = {
+		EXAMPLE_REMOTE_ALLOC_RW_TOOL,
+		NULL,
+	};
+	char *const ex_phys_translate_read_argv[] = {
+		EXAMPLE_PHYS_TRANSLATE_READ_TOOL,
+		NULL,
+	};
+	char *const ex_perf_baseline_argv[] = { EXAMPLE_PERF_BASELINE_TOOL, NULL };
+
+	qemu_cluster_begin("transport-extended-tools");
+	qemu_run_tool(ex_sysrule_combo_argv);
+	qemu_run_tool(ex_vma_page_query_argv);
+	qemu_run_tool(ex_remote_alloc_rw_argv);
+	qemu_run_tool(ex_phys_translate_read_argv);
+	qemu_run_tool(ex_perf_baseline_argv);
+	if (qemu_status_debugfs_available) {
+		printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
+		       qemu_read_status_u64("hwpoint_callback_total="),
+		       qemu_read_status_u64("breakpoint_callback_total="),
+		       qemu_read_status_u64("watchpoint_callback_total="),
+		       qemu_read_status_u64("target_stop_event_read_total="),
+		       qemu_read_status_u64("breakpoint_stop_event_read_total="),
+		       qemu_read_status_u64("watchpoint_stop_event_read_total="),
+		       qemu_read_status_u64("hwpoint_last_reason="),
+		       qemu_read_status_u64("hwpoint_last_type="),
+		       qemu_read_status_u64("hwpoint_last_addr="),
+		       qemu_read_status_u64("hwpoint_last_ip="));
+		fflush(stdout);
+	}
+	qemu_cluster_ok("transport-extended-tools");
 }
 
 static bool qemu_bitmap64_test(const __u64 *words, size_t word_count,
@@ -1429,90 +1545,17 @@ static void qemu_run_transport_tool_smoke(void)
 {
 	char report_buf[4096];
 	char *const stealth_report_argv[] = { STEALTH_CTL_TOOL, "report", NULL };
-	char *const mem_test_argv[] = { MEM_TEST_TOOL, "selftest", NULL };
-	char *const mmu_test_argv[] = { MMU_TEST_TOOL, "selftest", NULL };
-	char *const ex_session_status_argv[] = { EXAMPLE_SESSION_STATUS_TOOL, NULL };
-	char *const ex_mem_rw_argv[] = { EXAMPLE_MEM_RW_TOOL, NULL };
-	char *const ex_threads_query_argv[] = { EXAMPLE_THREADS_QUERY_TOOL, NULL };
-	char *const ex_regs_fp_argv[] = { EXAMPLE_REGS_FP_TOOL, NULL };
-	char *const ex_stealth_roundtrip_argv[] = {
-		EXAMPLE_STEALTH_ROUNDTRIP_TOOL,
-		NULL,
-	};
-	char *const ex_sysrule_combo_argv[] = { EXAMPLE_SYSRULE_COMBO_TOOL, NULL };
-	char *const ex_vma_page_query_argv[] = { EXAMPLE_VMA_PAGE_QUERY_TOOL, NULL };
-	char *const ex_remote_alloc_rw_argv[] = {
-		EXAMPLE_REMOTE_ALLOC_RW_TOOL,
-		NULL,
-	};
-	char *const ex_phys_translate_read_argv[] = {
-		EXAMPLE_PHYS_TRANSLATE_READ_TOOL,
-		NULL,
-	};
-	char *const ex_perf_baseline_argv[] = { EXAMPLE_PERF_BASELINE_TOOL, NULL };
-	int mem_test_status;
 
 	qemu_cluster_begin("transport");
 	qemu_run_transport_negative_tests();
+	qemu_cluster_begin("transport-report");
 	qemu_run_tool_capture(stealth_report_argv, report_buf, sizeof(report_buf));
 	printf("%s", report_buf);
 	fflush(stdout);
-	qemu_check(strstr(report_buf,
-			  "report.stealth.flags=0x6(modulehide,sysfshide)") != NULL,
-		   "missing_report_stealth_flags");
-	qemu_check(strstr(report_buf, "report.exposure.proc_modules=hidden") != NULL,
-		   "missing_report_proc_modules");
-	qemu_check(strstr(report_buf, "report.exposure.sysfs_module=hidden") != NULL,
-		   "missing_report_sysfs_module");
-	qemu_check(strstr(report_buf, "report.exposure.debugfs_dir=hidden") != NULL,
-		   "missing_report_debugfs_dir");
-	qemu_check(strstr(report_buf, "report.bootstrap.proc_open_successes=") != NULL,
-		   "missing_report_proc_open_successes");
-	qemu_check(strstr(report_buf, "report.exposure.sysfs_holders=") != NULL,
-		   "missing_report_sysfs_holders");
-	qemu_check(strstr(report_buf, "report.exposure.sysfs_sections=") != NULL,
-		   "missing_report_sysfs_sections");
-	qemu_check(strstr(report_buf, "report.exposure.debugfs_status=hidden") != NULL,
-		   "missing_report_debugfs_status");
-	qemu_check(strstr(report_buf, "report.exposure.debugfs_hooks=hidden") != NULL,
-		   "missing_report_debugfs_hooks");
-	qemu_check(strstr(report_buf, "report.exposure.kallsyms_symbols=") != NULL,
-		   "missing_report_kallsyms_symbols");
-
-	qemu_run_tool(ex_session_status_argv);
-	qemu_run_tool(ex_mem_rw_argv);
-	qemu_run_tool(ex_threads_query_argv);
-	qemu_run_tool(ex_regs_fp_argv);
-	qemu_run_tool(ex_stealth_roundtrip_argv);
-	mem_test_status = qemu_run_tool_status(mem_test_argv);
-	if (mem_test_status != 0) {
-		printf("LKMDBG_QEMU_MEM_TEST_RETRY first_status=%d\n",
-		       mem_test_status);
-		fflush(stdout);
-		mem_test_status = qemu_run_tool_status(mem_test_argv);
-		qemu_check(mem_test_status == 0, "tool_exit_%s status=%d",
-			   MEM_TEST_TOOL, mem_test_status);
-	}
-	qemu_run_tool(mmu_test_argv);
-	qemu_run_tool(ex_sysrule_combo_argv);
-	qemu_run_tool(ex_vma_page_query_argv);
-	qemu_run_tool(ex_remote_alloc_rw_argv);
-	qemu_run_tool(ex_phys_translate_read_argv);
-	qemu_run_tool(ex_perf_baseline_argv);
-	if (qemu_status_debugfs_available) {
-		printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
-		       qemu_read_status_u64("hwpoint_callback_total="),
-		       qemu_read_status_u64("breakpoint_callback_total="),
-		       qemu_read_status_u64("watchpoint_callback_total="),
-		       qemu_read_status_u64("target_stop_event_read_total="),
-		       qemu_read_status_u64("breakpoint_stop_event_read_total="),
-		       qemu_read_status_u64("watchpoint_stop_event_read_total="),
-		       qemu_read_status_u64("hwpoint_last_reason="),
-		       qemu_read_status_u64("hwpoint_last_type="),
-		       qemu_read_status_u64("hwpoint_last_addr="),
-		       qemu_read_status_u64("hwpoint_last_ip="));
-		fflush(stdout);
-	}
+	qemu_validate_transport_report(report_buf);
+	qemu_cluster_ok("transport-report");
+	qemu_run_transport_core_tools();
+	qemu_run_transport_extended_tools();
 	qemu_cluster_ok("transport");
 }
 
