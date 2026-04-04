@@ -1830,8 +1830,6 @@ long lkmdbg_resolve_syscall(struct lkmdbg_session *session, void __user *argp)
 
 	return 0;
 }
-#endif
-
 int lkmdbg_wait_for_stop_state(struct lkmdbg_session *session, u32 reason,
 			       u64 value1, u32 timeout_ms,
 			       struct lkmdbg_stop_state *stop_out)
