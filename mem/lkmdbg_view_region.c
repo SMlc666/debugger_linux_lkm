@@ -1,12 +1,26 @@
 #include <linux/errno.h>
+#include <linux/highmem.h>
 #include <linux/list.h>
 #include <linux/mm.h>
+#include <linux/mmap_lock.h>
+#include <linux/pid.h>
 #include <linux/refcount.h>
+#include <linux/sched/mm.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/uaccess.h>
+#include <linux/version.h>
+#include <linux/vmalloc.h>
 
 #include "lkmdbg_internal.h"
+
+#define LKMDBG_VIEW_REGION_MAX_PIN_PAGES 16U
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+#define LKMDBG_VIEW_REGION_GUP_HAS_LOCKED_ONLY 1
+#else
+#define LKMDBG_VIEW_REGION_GUP_HAS_LOCKED_ONLY 0
+#endif
 
 struct lkmdbg_view_region {
 	struct list_head session_node;
@@ -33,6 +47,12 @@ struct lkmdbg_view_region {
 	u32 exec_backing_type;
 	u64 fault_count;
 	u8 *read_bytes;
+	u8 *write_bytes;
+	u8 *exec_bytes;
+	u8 *original_bytes;
+	struct page **shadow_pages;
+	pte_t *shadow_baseline_ptes;
+	u32 shadow_page_count;
 };
 
 static LIST_HEAD(lkmdbg_view_region_global_list);
@@ -41,15 +61,413 @@ static DEFINE_SPINLOCK(lkmdbg_view_region_global_lock);
 static void lkmdbg_view_region_refresh_active_state(
 	struct lkmdbg_view_region *region)
 {
+	u32 state = 0;
+
 	if (!region)
 		return;
 
 	if (region->read_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
 	    region->write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
 	    region->exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL)
-		region->state |= LKMDBG_VIEW_REGION_STATE_ACTIVE;
+		state |= LKMDBG_VIEW_REGION_STATE_ACTIVE;
+	if (region->write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	    region->exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL)
+		state |= LKMDBG_VIEW_REGION_STATE_MUTATED;
+	if (region->fault_count)
+		state |= LKMDBG_VIEW_REGION_STATE_FAULTED;
+
+	region->state &= ~(LKMDBG_VIEW_REGION_STATE_ACTIVE |
+			   LKMDBG_VIEW_REGION_STATE_MUTATED |
+			   LKMDBG_VIEW_REGION_STATE_FAULTED);
+	region->state |= state;
+}
+
+static void lkmdbg_view_region_free_pages(struct page **pages, u32 page_count)
+{
+	u32 i;
+
+	if (!pages)
+		return;
+
+	for (i = 0; i < page_count; i++) {
+		if (!pages[i])
+			continue;
+		__free_page(pages[i]);
+		pages[i] = NULL;
+	}
+}
+
+static void lkmdbg_view_region_free_shadow_storage(
+	struct lkmdbg_view_region *region)
+{
+	if (!region)
+		return;
+
+	lkmdbg_view_region_free_pages(region->shadow_pages,
+				      region->shadow_page_count);
+	kfree(region->shadow_pages);
+	kfree(region->shadow_baseline_ptes);
+	kvfree(region->original_bytes);
+	region->shadow_pages = NULL;
+	region->shadow_baseline_ptes = NULL;
+	region->original_bytes = NULL;
+	region->shadow_page_count = 0;
+}
+
+static bool lkmdbg_view_region_shadow_requested(u32 write_backing_type,
+						u32 exec_backing_type)
+{
+	return write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	       exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL;
+}
+
+static const u8 *lkmdbg_view_region_overlay_bytes(
+	const struct lkmdbg_view_region *region)
+{
+	if (!region)
+		return NULL;
+
+	switch (region->active_backend) {
+	case LKMDBG_VIEW_BACKEND_EXTERNAL_READ:
+		if (region->read_backing_type == LKMDBG_VIEW_BACKING_USER_BUFFER)
+			return region->read_bytes;
+		return NULL;
+	case LKMDBG_VIEW_BACKEND_WXSHADOW:
+		if (region->read_backing_type == LKMDBG_VIEW_BACKING_USER_BUFFER)
+			return region->read_bytes;
+		if (region->read_backing_type == LKMDBG_VIEW_BACKING_ORIGINAL)
+			return region->original_bytes;
+		return NULL;
+	default:
+		return NULL;
+	}
+}
+
+static u32 lkmdbg_view_region_shadow_prot(u32 access_mask)
+{
+	u32 prot = 0;
+
+	if (access_mask & LKMDBG_VIEW_ACCESS_READ)
+		prot |= LKMDBG_REMOTE_ALLOC_PROT_READ;
+	if (access_mask & LKMDBG_VIEW_ACCESS_WRITE)
+		prot |= LKMDBG_REMOTE_ALLOC_PROT_WRITE;
+	if (access_mask & LKMDBG_VIEW_ACCESS_EXEC)
+		prot |= LKMDBG_REMOTE_ALLOC_PROT_EXEC;
+	return prot;
+}
+
+static int lkmdbg_view_region_get_mm_by_tgid(pid_t tgid,
+					     struct mm_struct **mm_out)
+{
+	struct task_struct *task;
+	struct mm_struct *mm;
+
+	if (tgid <= 0)
+		return -ESRCH;
+
+	task = get_pid_task(find_vpid(tgid), PIDTYPE_TGID);
+	if (!task)
+		return -ESRCH;
+
+	mm = get_task_mm(task);
+	put_task_struct(task);
+	if (!mm)
+		return -ESRCH;
+
+	*mm_out = mm;
+	return 0;
+}
+
+static long lkmdbg_view_region_pin_remote_pages(struct mm_struct *mm,
+						unsigned long start,
+						unsigned int nr_pages,
+						struct page **pages)
+{
+	long ret;
+	int locked = 1;
+
+	mmap_read_lock(mm);
+#if LKMDBG_VIEW_REGION_GUP_HAS_LOCKED_ONLY
+	ret = get_user_pages_remote(mm, start, nr_pages, 0, pages, &locked);
+#else
+	ret = get_user_pages_remote(mm, start, nr_pages, 0, pages, NULL,
+				    &locked);
+#endif
+	if (locked)
+		mmap_read_unlock(mm);
+	return ret;
+}
+
+static void lkmdbg_view_region_put_remote_pages(struct page **pages,
+						u32 page_count)
+{
+	u32 i;
+
+	for (i = 0; i < page_count; i++) {
+		if (!pages[i])
+			continue;
+		put_page(pages[i]);
+		pages[i] = NULL;
+	}
+}
+
+static int lkmdbg_view_region_read_remote_kernel(struct mm_struct *mm,
+						 unsigned long remote_addr,
+						 void *dst, size_t length)
+{
+	struct page *pages[LKMDBG_VIEW_REGION_MAX_PIN_PAGES] = { 0 };
+	size_t total_done = 0;
+	u8 *out = dst;
+
+	while (total_done < length) {
+		unsigned long window_remote;
+		unsigned long first_offset;
+		size_t window_len;
+		unsigned int nr_pages;
+		long pinned;
+		size_t window_done = 0;
+		unsigned int i;
+
+		window_remote = remote_addr + total_done;
+		first_offset = offset_in_page(window_remote);
+		window_len = min_t(size_t, length - total_done,
+				   (LKMDBG_VIEW_REGION_MAX_PIN_PAGES * PAGE_SIZE) -
+					   first_offset);
+		nr_pages = DIV_ROUND_UP(first_offset + window_len, PAGE_SIZE);
+		pinned = lkmdbg_view_region_pin_remote_pages(mm, window_remote,
+							     nr_pages, pages);
+		if (pinned <= 0)
+			return pinned < 0 ? (int)pinned : -EFAULT;
+		if ((unsigned int)pinned != nr_pages) {
+			lkmdbg_view_region_put_remote_pages(pages, (u32)pinned);
+			return -EFAULT;
+		}
+
+		for (i = 0; i < nr_pages; i++) {
+			unsigned long page_offset = (i == 0) ? first_offset : 0;
+			size_t chunk_len;
+			void *page_addr;
+
+			chunk_len = min_t(size_t, window_len - window_done,
+					  PAGE_SIZE - page_offset);
+			page_addr = lkmdbg_kmap_local_page(pages[i]);
+			memcpy(out + total_done + window_done,
+			       (u8 *)page_addr + page_offset, chunk_len);
+			lkmdbg_kunmap_local(pages[i], page_addr);
+			put_page(pages[i]);
+			pages[i] = NULL;
+			window_done += chunk_len;
+		}
+
+		total_done += window_done;
+		cond_resched();
+	}
+
+	return 0;
+}
+
+static int lkmdbg_view_region_validate_shadow_range(struct mm_struct *mm,
+						    u64 base_addr, u64 length,
+						    u32 access_mask)
+{
+	struct vm_area_struct *vma;
+	u64 vm_flags;
+	int ret;
+
+	mmap_read_lock(mm);
+	ret = lkmdbg_target_vma_lookup_locked(mm, base_addr, length, &vma);
+	if (ret) {
+		mmap_read_unlock(mm);
+		return ret;
+	}
+
+	vm_flags = (u64)vma->vm_flags;
+	if ((access_mask & LKMDBG_VIEW_ACCESS_READ) &&
+	    !(vm_flags & (VM_READ | VM_MAYREAD)))
+		ret = -EACCES;
+	else if ((access_mask & LKMDBG_VIEW_ACCESS_WRITE) &&
+		 !(vm_flags & (VM_WRITE | VM_MAYWRITE)))
+		ret = -EACCES;
+	else if ((access_mask & LKMDBG_VIEW_ACCESS_EXEC) &&
+		 !(vm_flags & (VM_EXEC | VM_MAYEXEC)))
+		ret = -EACCES;
+	else if (vm_flags & (VM_PFNMAP | VM_IO))
+		ret = -EOPNOTSUPP;
 	else
-		region->state &= ~LKMDBG_VIEW_REGION_STATE_ACTIVE;
+		ret = 0;
+
+	mmap_read_unlock(mm);
+	return ret;
+}
+
+static void lkmdbg_view_region_sync_shadow_page(struct page *page, void *page_addr,
+						u32 prot)
+{
+	flush_dcache_page(page);
+	if ((prot & LKMDBG_REMOTE_ALLOC_PROT_EXEC) &&
+	    lkmdbg_symbols.flush_icache_range)
+		lkmdbg_flush_icache_runtime((unsigned long)page_addr,
+					    (unsigned long)page_addr + PAGE_SIZE);
+}
+
+static int lkmdbg_view_region_install_wxshadow(
+	struct lkmdbg_view_region *region, u32 access_mask,
+	const u8 *shadow_bytes)
+{
+#ifndef CONFIG_ARM64
+	(void)region;
+	(void)access_mask;
+	(void)shadow_bytes;
+	return -EOPNOTSUPP;
+#else
+	struct mm_struct *mm = NULL;
+	struct page **shadow_pages = NULL;
+	pte_t *baseline_ptes = NULL;
+	u8 *original_bytes = NULL;
+	u64 mapped_length;
+	u32 shadow_prot;
+	u32 page_count;
+	u32 i;
+	int ret;
+
+	if (!region || !shadow_bytes)
+		return -EINVAL;
+
+	mapped_length = region->length;
+	page_count = (u32)(mapped_length >> PAGE_SHIFT);
+	shadow_prot = lkmdbg_view_region_shadow_prot(access_mask);
+	if (!page_count || !shadow_prot)
+		return -EINVAL;
+
+	ret = lkmdbg_view_region_get_mm_by_tgid(region->target_tgid, &mm);
+	if (ret)
+		return ret;
+
+	ret = lkmdbg_view_region_validate_shadow_range(
+		mm, region->base_addr, mapped_length, access_mask);
+	if (ret)
+		goto out_mm;
+
+	shadow_pages = kcalloc(page_count, sizeof(*shadow_pages), GFP_KERNEL);
+	baseline_ptes = kcalloc(page_count, sizeof(*baseline_ptes), GFP_KERNEL);
+	original_bytes = kvmalloc(mapped_length, GFP_KERNEL);
+	if (!shadow_pages || !baseline_ptes || !original_bytes) {
+		ret = -ENOMEM;
+		goto out_free;
+	}
+
+	ret = lkmdbg_view_region_read_remote_kernel(
+		mm, (unsigned long)region->base_addr, original_bytes,
+		(size_t)mapped_length);
+	if (ret)
+		goto out_free;
+
+	for (i = 0; i < page_count; i++) {
+		void *page_addr;
+
+		shadow_pages[i] = alloc_page(GFP_HIGHUSER | __GFP_ZERO);
+		if (!shadow_pages[i]) {
+			ret = -ENOMEM;
+			goto out_free;
+		}
+
+		page_addr = lkmdbg_kmap_local_page(shadow_pages[i]);
+		memcpy(page_addr, shadow_bytes + ((size_t)i * PAGE_SIZE),
+		       PAGE_SIZE);
+		lkmdbg_view_region_sync_shadow_page(shadow_pages[i], page_addr,
+						    shadow_prot);
+		lkmdbg_kunmap_local(shadow_pages[i], page_addr);
+	}
+
+	mmap_write_lock(mm);
+	for (i = 0; i < page_count; i++) {
+		unsigned long addr = (unsigned long)region->base_addr +
+				     ((unsigned long)i * PAGE_SIZE);
+		pte_t baseline_pte;
+		pte_t alias_pte;
+
+		ret = lkmdbg_pte_read_locked(mm, addr, &baseline_pte, NULL);
+		if (ret)
+			break;
+		baseline_ptes[i] = baseline_pte;
+		alias_pte = lkmdbg_pte_build_alias_pte(shadow_pages[i],
+						       baseline_pte,
+						       shadow_prot);
+		ret = lkmdbg_pte_rewrite_locked(mm, addr, alias_pte, NULL, NULL);
+		if (ret)
+			break;
+	}
+	if (ret) {
+		while (i > 0) {
+			unsigned long addr = (unsigned long)region->base_addr +
+					     ((unsigned long)(i - 1) * PAGE_SIZE);
+
+			lkmdbg_pte_rewrite_locked(mm, addr,
+						  baseline_ptes[i - 1],
+						  NULL, NULL);
+			i--;
+		}
+	}
+	mmap_write_unlock(mm);
+	if (ret)
+		goto out_free;
+
+	region->shadow_pages = shadow_pages;
+	region->shadow_baseline_ptes = baseline_ptes;
+	region->original_bytes = original_bytes;
+	region->shadow_page_count = page_count;
+	mmput(mm);
+	return 0;
+
+out_free:
+	lkmdbg_view_region_free_pages(shadow_pages, page_count);
+	kfree(shadow_pages);
+	kfree(baseline_ptes);
+	kvfree(original_bytes);
+out_mm:
+	mmput(mm);
+	return ret;
+#endif
+}
+
+static int lkmdbg_view_region_restore_wxshadow(struct lkmdbg_view_region *region)
+{
+#ifndef CONFIG_ARM64
+	lkmdbg_view_region_free_shadow_storage(region);
+	return -EOPNOTSUPP;
+#else
+	struct mm_struct *mm = NULL;
+	int ret = 0;
+	u32 i;
+
+	if (!region || !region->shadow_pages || !region->shadow_baseline_ptes ||
+	    !region->shadow_page_count) {
+		lkmdbg_view_region_free_shadow_storage(region);
+		return 0;
+	}
+
+	if (!lkmdbg_view_region_get_mm_by_tgid(region->target_tgid, &mm)) {
+		mmap_write_lock(mm);
+		for (i = 0; i < region->shadow_page_count; i++) {
+			unsigned long addr = (unsigned long)region->base_addr +
+					     ((unsigned long)i * PAGE_SIZE);
+			int page_ret;
+
+			page_ret = lkmdbg_pte_rewrite_locked(
+				mm, addr, region->shadow_baseline_ptes[i], NULL,
+				NULL);
+			if (page_ret && !ret)
+				ret = page_ret;
+		}
+		mmap_write_unlock(mm);
+		mmput(mm);
+	} else {
+		ret = -ESRCH;
+	}
+
+	lkmdbg_view_region_free_shadow_storage(region);
+	return ret;
+#endif
 }
 
 static void lkmdbg_view_region_destroy(struct lkmdbg_view_region *region)
@@ -57,7 +475,10 @@ static void lkmdbg_view_region_destroy(struct lkmdbg_view_region *region)
 	if (!region)
 		return;
 
-	kfree(region->read_bytes);
+	kvfree(region->read_bytes);
+	kvfree(region->write_bytes);
+	kvfree(region->exec_bytes);
+	lkmdbg_view_region_free_shadow_storage(region);
 	kfree(region);
 }
 
@@ -111,9 +532,7 @@ lkmdbg_view_region_lookup(pid_t target_tgid, u64 addr)
 			continue;
 		if (addr < region->base_addr || addr >= region->base_addr + region->length)
 			continue;
-		if (region->active_backend != LKMDBG_VIEW_BACKEND_EXTERNAL_READ ||
-		    region->read_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER ||
-		    !region->read_bytes) {
+		if (!lkmdbg_view_region_overlay_bytes(region)) {
 			spin_unlock_irqrestore(&lkmdbg_view_region_global_lock,
 					       irqflags);
 			return NULL;
@@ -146,7 +565,7 @@ static void lkmdbg_view_region_overlay_user(pid_t target_tgid, u64 remote_addr,
 		step = min_t(size_t, len,
 			     (size_t)((region->base_addr + region->length) -
 				      remote_addr));
-		if (copy_to_user(dst, region->read_bytes +
+		if (copy_to_user(dst, lkmdbg_view_region_overlay_bytes(region) +
 				 (size_t)(remote_addr - region->base_addr),
 				 step)) {
 			lkmdbg_view_region_put(region);
@@ -182,7 +601,7 @@ static void lkmdbg_view_region_overlay_kernel(pid_t target_tgid, u64 remote_addr
 		step = min_t(size_t, len,
 			     (size_t)((region->base_addr + region->length) -
 				      remote_addr));
-		memcpy(buf, region->read_bytes +
+		memcpy(buf, lkmdbg_view_region_overlay_bytes(region) +
 			      (size_t)(remote_addr - region->base_addr),
 		       step);
 		WRITE_ONCE(region->fault_count, region->fault_count + 1);
@@ -223,6 +642,67 @@ static int lkmdbg_view_region_select_external_read(
 	return 0;
 }
 
+static int lkmdbg_view_region_select_wxshadow(
+	u32 access_mask, u32 read_backing_type, u32 write_backing_type,
+	u32 exec_backing_type, u32 fault_policy, u32 sync_policy,
+	u32 writeback_policy, u32 *active_backend_out)
+{
+	int ret;
+	u32 shadow_count = 0;
+
+#ifndef CONFIG_ARM64
+	(void)access_mask;
+	(void)read_backing_type;
+	(void)write_backing_type;
+	(void)exec_backing_type;
+	(void)fault_policy;
+	(void)sync_policy;
+	(void)writeback_policy;
+	(void)active_backend_out;
+	return -EOPNOTSUPP;
+#else
+	if (read_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL &&
+	    read_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER)
+		return -EOPNOTSUPP;
+	if (write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL &&
+	    write_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER)
+		return -EOPNOTSUPP;
+	if (exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL &&
+	    exec_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER)
+		return -EOPNOTSUPP;
+	if (fault_policy != LKMDBG_VIEW_FAULT_POLICY_TRAP_ONLY)
+		return -EOPNOTSUPP;
+	if (sync_policy != LKMDBG_VIEW_SYNC_NONE)
+		return -EOPNOTSUPP;
+	if (writeback_policy != LKMDBG_VIEW_WRITEBACK_DISCARD)
+		return -EOPNOTSUPP;
+	if (read_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL &&
+	    !(access_mask & LKMDBG_VIEW_ACCESS_READ))
+		return -EOPNOTSUPP;
+	if (write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL) {
+		if (!(access_mask & LKMDBG_VIEW_ACCESS_WRITE))
+			return -EOPNOTSUPP;
+		shadow_count++;
+	}
+	if (exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL) {
+		if (!(access_mask & LKMDBG_VIEW_ACCESS_EXEC))
+			return -EOPNOTSUPP;
+		shadow_count++;
+	}
+	if (shadow_count != 1)
+		return -EOPNOTSUPP;
+
+	if (access_mask & LKMDBG_VIEW_ACCESS_READ) {
+		ret = lkmdbg_external_read_hooks_ensure();
+		if (ret)
+			return ret;
+	}
+
+	*active_backend_out = LKMDBG_VIEW_BACKEND_WXSHADOW;
+	return 0;
+#endif
+}
+
 static int lkmdbg_view_region_prepare_backend(
 	u32 requested_backend, u32 access_mask, u32 read_backing_type,
 	u32 write_backing_type, u32 exec_backing_type, u32 fault_policy,
@@ -230,8 +710,22 @@ static int lkmdbg_view_region_prepare_backend(
 {
 	switch (requested_backend) {
 	case LKMDBG_VIEW_BACKEND_AUTO:
+		if (!lkmdbg_view_region_select_external_read(
+			    access_mask, read_backing_type, write_backing_type,
+			    exec_backing_type, fault_policy, sync_policy,
+			    writeback_policy, active_backend_out))
+			return 0;
+		return lkmdbg_view_region_select_wxshadow(
+			access_mask, read_backing_type, write_backing_type,
+			exec_backing_type, fault_policy, sync_policy,
+			writeback_policy, active_backend_out);
 	case LKMDBG_VIEW_BACKEND_EXTERNAL_READ:
 		return lkmdbg_view_region_select_external_read(
+			access_mask, read_backing_type, write_backing_type,
+			exec_backing_type, fault_policy, sync_policy,
+			writeback_policy, active_backend_out);
+	case LKMDBG_VIEW_BACKEND_WXSHADOW:
+		return lkmdbg_view_region_select_wxshadow(
 			access_mask, read_backing_type, write_backing_type,
 			exec_backing_type, fault_policy, sync_policy,
 			writeback_policy, active_backend_out);
@@ -358,8 +852,13 @@ long lkmdbg_create_view_region(struct lkmdbg_session *session, void __user *argp
 		LKMDBG_VIEW_BACKING_ORIGINAL, LKMDBG_VIEW_BACKING_ORIGINAL,
 		req.fault_policy, req.sync_policy, req.writeback_policy,
 		&active_backend);
-	if (ret)
-		return ret;
+	if (ret) {
+		if (req.backend == LKMDBG_VIEW_BACKEND_AUTO ||
+		    req.backend == LKMDBG_VIEW_BACKEND_WXSHADOW)
+			active_backend = req.backend;
+		else
+			return ret;
+	}
 
 	region = kzalloc(sizeof(*region), GFP_KERNEL);
 	if (!region)
@@ -452,6 +951,7 @@ long lkmdbg_remove_view_region(struct lkmdbg_session *session, void __user *argp
 		list_del_init(&region->global_node);
 	spin_unlock_irqrestore(&lkmdbg_view_region_global_lock, irqflags);
 
+	(void)lkmdbg_view_region_restore_wxshadow(region);
 	lkmdbg_view_region_put(region);
 	if (copy_to_user(argp, &req, sizeof(req)))
 		return -EFAULT;
@@ -469,7 +969,20 @@ long lkmdbg_set_view_backing(struct lkmdbg_session *session, void __user *argp)
 	u32 exec_backing_type;
 	u32 active_backend;
 	u32 *kind_type = NULL;
+	u8 **kind_bytes = NULL;
+	u64 *kind_source_id = NULL;
 	u64 requested_backend;
+	u8 *new_read_bytes;
+	u8 *new_write_bytes;
+	u8 *new_exec_bytes;
+	u64 new_read_source_id;
+	u64 new_write_source_id;
+	u64 new_exec_source_id;
+	u64 new_source_id = 0;
+	bool had_shadow;
+	bool need_shadow;
+	bool target_shadow_changed = false;
+	bool updated_target_shadow = false;
 	int ret = 0;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
@@ -490,17 +1003,15 @@ long lkmdbg_set_view_backing(struct lkmdbg_session *session, void __user *argp)
 			ret = -EINVAL;
 			goto out_put;
 		}
-		if (req.view_kind == LKMDBG_VIEW_KIND_READ) {
-			backing = kmalloc(region->length, GFP_KERNEL);
-			if (!backing) {
-				ret = -ENOMEM;
-				goto out_put;
-			}
-			if (copy_from_user(backing, u64_to_user_ptr(req.source_addr),
-					   region->length)) {
-				ret = -EFAULT;
-				goto out_free;
-			}
+		backing = kvmalloc(region->length, GFP_KERNEL);
+		if (!backing) {
+			ret = -ENOMEM;
+			goto out_put;
+		}
+		if (copy_from_user(backing, u64_to_user_ptr(req.source_addr),
+				   region->length)) {
+			ret = -EFAULT;
+			goto out_free;
 		}
 	}
 
@@ -509,15 +1020,29 @@ long lkmdbg_set_view_backing(struct lkmdbg_session *session, void __user *argp)
 	read_backing_type = region->read_backing_type;
 	write_backing_type = region->write_backing_type;
 	exec_backing_type = region->exec_backing_type;
+	new_read_bytes = region->read_bytes;
+	new_write_bytes = region->write_bytes;
+	new_exec_bytes = region->exec_bytes;
+	new_read_source_id = region->read_source_id;
+	new_write_source_id = region->write_source_id;
+	new_exec_source_id = region->exec_source_id;
 	switch (req.view_kind) {
 	case LKMDBG_VIEW_KIND_READ:
 		kind_type = &read_backing_type;
+		kind_bytes = &new_read_bytes;
+		kind_source_id = &new_read_source_id;
 		break;
 	case LKMDBG_VIEW_KIND_WRITE:
 		kind_type = &write_backing_type;
+		kind_bytes = &new_write_bytes;
+		kind_source_id = &new_write_source_id;
+		updated_target_shadow = true;
 		break;
 	case LKMDBG_VIEW_KIND_EXEC:
 		kind_type = &exec_backing_type;
+		kind_bytes = &new_exec_bytes;
+		kind_source_id = &new_exec_source_id;
+		updated_target_shadow = true;
 		break;
 	default:
 		mutex_unlock(&session->lock);
@@ -525,6 +1050,18 @@ long lkmdbg_set_view_backing(struct lkmdbg_session *session, void __user *argp)
 		goto out_free;
 	}
 	*kind_type = req.backing_type;
+	if (req.backing_type == LKMDBG_VIEW_BACKING_ORIGINAL) {
+		*kind_bytes = NULL;
+		*kind_source_id = 0;
+	} else if (req.backing_type == LKMDBG_VIEW_BACKING_USER_BUFFER) {
+		new_source_id = session->next_view_source_id + 1;
+		*kind_bytes = backing;
+		*kind_source_id = new_source_id;
+	} else {
+		mutex_unlock(&session->lock);
+		ret = -EOPNOTSUPP;
+		goto out_free;
+	}
 	ret = lkmdbg_view_region_prepare_backend(
 		(u32)requested_backend, region->access_mask, read_backing_type,
 		write_backing_type, exec_backing_type, region->fault_policy,
@@ -534,34 +1071,82 @@ long lkmdbg_set_view_backing(struct lkmdbg_session *session, void __user *argp)
 		goto out_free;
 	}
 
-	region->active_backend = active_backend;
+	had_shadow = region->shadow_pages && region->shadow_page_count;
+	need_shadow = active_backend == LKMDBG_VIEW_BACKEND_WXSHADOW &&
+		      lkmdbg_view_region_shadow_requested(write_backing_type,
+							 exec_backing_type);
+	target_shadow_changed =
+		(region->active_backend != active_backend) ||
+		(had_shadow != need_shadow);
+	if (updated_target_shadow &&
+	    (req.backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	     req.backing_type != ((req.view_kind == LKMDBG_VIEW_KIND_WRITE) ?
+					  region->write_backing_type :
+					  region->exec_backing_type)))
+		target_shadow_changed = true;
+
+	if (had_shadow && (!need_shadow || target_shadow_changed)) {
+		ret = lkmdbg_view_region_restore_wxshadow(region);
+		if (ret) {
+			mutex_unlock(&session->lock);
+			goto out_free;
+		}
+	}
+
+	if (need_shadow && (!had_shadow || target_shadow_changed)) {
+		const u8 *shadow_source =
+			exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ?
+				new_exec_bytes :
+				new_write_bytes;
+
+		ret = lkmdbg_view_region_install_wxshadow(
+			region, region->access_mask, shadow_source);
+		if (ret) {
+			if (had_shadow) {
+				const u8 *old_shadow_source =
+					region->exec_backing_type !=
+							LKMDBG_VIEW_BACKING_ORIGINAL ?
+						region->exec_bytes :
+						region->write_bytes;
+
+				(void)lkmdbg_view_region_install_wxshadow(
+					region, region->access_mask,
+					old_shadow_source);
+			}
+			mutex_unlock(&session->lock);
+			goto out_free;
+		}
+	}
+
+	if (new_source_id)
+		session->next_view_source_id = new_source_id;
+	req.source_id = new_source_id;
 	switch (req.view_kind) {
 	case LKMDBG_VIEW_KIND_READ:
 		old_backing = region->read_bytes;
-		if (req.backing_type == LKMDBG_VIEW_BACKING_ORIGINAL) {
-			region->read_bytes = NULL;
-			region->read_source_id = 0;
-			region->read_backing_type = LKMDBG_VIEW_BACKING_ORIGINAL;
-		} else {
-			session->next_view_source_id++;
-			region->read_source_id = session->next_view_source_id;
-			region->read_bytes = backing;
-			backing = NULL;
-			region->read_backing_type = LKMDBG_VIEW_BACKING_USER_BUFFER;
-		}
+		region->read_bytes = new_read_bytes;
+		region->read_source_id = new_read_source_id;
+		region->read_backing_type = read_backing_type;
 		break;
 	case LKMDBG_VIEW_KIND_WRITE:
-		region->write_source_id = 0;
-		region->write_backing_type = LKMDBG_VIEW_BACKING_ORIGINAL;
+		old_backing = region->write_bytes;
+		region->write_bytes = new_write_bytes;
+		region->write_source_id = new_write_source_id;
+		region->write_backing_type = write_backing_type;
 		break;
 	case LKMDBG_VIEW_KIND_EXEC:
-		region->exec_source_id = 0;
-		region->exec_backing_type = LKMDBG_VIEW_BACKING_ORIGINAL;
+		old_backing = region->exec_bytes;
+		region->exec_bytes = new_exec_bytes;
+		region->exec_source_id = new_exec_source_id;
+		region->exec_backing_type = exec_backing_type;
 		break;
 	}
+	region->active_backend = active_backend;
 	lkmdbg_view_region_refresh_active_state(region);
 	mutex_unlock(&session->lock);
-	kfree(old_backing);
+	if (old_backing != backing)
+		kvfree(old_backing);
+	backing = NULL;
 
 	if (copy_to_user(argp, &req, sizeof(req))) {
 		ret = -EFAULT;
@@ -570,7 +1155,7 @@ long lkmdbg_set_view_backing(struct lkmdbg_session *session, void __user *argp)
 	goto out_put;
 
 out_free:
-	kfree(backing);
+	kvfree(backing);
 out_put:
 	lkmdbg_view_region_put(region);
 	return ret;
@@ -581,6 +1166,8 @@ long lkmdbg_set_view_policy(struct lkmdbg_session *session, void __user *argp)
 	struct lkmdbg_view_policy_request req;
 	struct lkmdbg_view_region *region;
 	u32 active_backend;
+	bool had_shadow;
+	bool need_shadow;
 	int ret;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
@@ -600,8 +1187,40 @@ long lkmdbg_set_view_policy(struct lkmdbg_session *session, void __user *argp)
 		req.fault_policy, req.sync_policy, req.writeback_policy,
 		&active_backend);
 	if (ret) {
-		mutex_unlock(&session->lock);
-		return ret;
+		if (!lkmdbg_view_region_shadow_requested(
+			    region->write_backing_type, region->exec_backing_type) &&
+		    (req.backend == LKMDBG_VIEW_BACKEND_AUTO ||
+		     req.backend == LKMDBG_VIEW_BACKEND_WXSHADOW))
+			active_backend = req.backend;
+		else {
+			mutex_unlock(&session->lock);
+			return ret;
+		}
+	}
+
+	had_shadow = region->shadow_pages && region->shadow_page_count;
+	need_shadow = active_backend == LKMDBG_VIEW_BACKEND_WXSHADOW &&
+		      lkmdbg_view_region_shadow_requested(
+			      region->write_backing_type,
+			      region->exec_backing_type);
+	if (had_shadow && !need_shadow) {
+		ret = lkmdbg_view_region_restore_wxshadow(region);
+		if (ret) {
+			mutex_unlock(&session->lock);
+			return ret;
+		}
+	} else if (!had_shadow && need_shadow) {
+		const u8 *shadow_source =
+			region->exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ?
+				region->exec_bytes :
+				region->write_bytes;
+
+		ret = lkmdbg_view_region_install_wxshadow(
+			region, region->access_mask, shadow_source);
+		if (ret) {
+			mutex_unlock(&session->lock);
+			return ret;
+		}
 	}
 	region->requested_backend = req.backend;
 	region->active_backend = active_backend;
@@ -644,6 +1263,17 @@ long lkmdbg_query_view_regions(struct lkmdbg_session *session, void __user *argp
 		entries[filled].region_id = region->region_id;
 		entries[filled].base_addr = region->base_addr;
 		entries[filled].length = region->length;
+		if (region->shadow_pages && region->shadow_baseline_ptes &&
+		    region->shadow_page_count) {
+			entries[filled].original_pte =
+				pte_val(region->shadow_baseline_ptes[0]);
+			entries[filled].current_pte = pte_val(
+				lkmdbg_pte_build_alias_pte(
+					region->shadow_pages[0],
+					region->shadow_baseline_ptes[0],
+					lkmdbg_view_region_shadow_prot(
+						region->access_mask)));
+		}
 		entries[filled].fault_count = region->fault_count;
 		entries[filled].read_source_id = region->read_source_id;
 		entries[filled].write_source_id = region->write_source_id;
@@ -711,6 +1341,7 @@ void lkmdbg_view_region_release(struct lkmdbg_session *session)
 		if (!list_empty(&region->global_node))
 			list_del_init(&region->global_node);
 		spin_unlock_irqrestore(&lkmdbg_view_region_global_lock, irqflags);
+		(void)lkmdbg_view_region_restore_wxshadow(region);
 		lkmdbg_view_region_put(region);
 	}
 }

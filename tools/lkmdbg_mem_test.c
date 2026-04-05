@@ -57,6 +57,7 @@ struct child_info {
 	uintptr_t force_read_addr;
 	uintptr_t force_write_addr;
 	uintptr_t large_addr;
+	uintptr_t view_exec_addr;
 	uintptr_t file_addr;
 	uintptr_t exec_target_addr;
 	uintptr_t remote_call_addr;
@@ -216,6 +217,7 @@ enum {
 	CHILD_OP_TRIGGER_SYSCALL = 10,
 	CHILD_OP_PING = 11,
 	CHILD_OP_WRITE_REMOTE = 12,
+	CHILD_OP_CALL_REMOTE = 13,
 };
 
 static int expect_stop_state(int session_fd, uint32_t reason,
@@ -232,6 +234,8 @@ static int child_write_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				    const void *buf, size_t len);
 static int child_fill_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   size_t len, uint8_t value);
+static int child_call_remote0(int cmd_fd, int resp_fd, uintptr_t addr,
+			      uint64_t *retval_out);
 static int query_target_pages_ex(int session_fd, uint64_t start_addr,
 				 uint64_t length, uint32_t flags,
 				 struct page_query_buffer *buf,
@@ -642,6 +646,34 @@ static void fill_pattern(unsigned char *buf, size_t len, unsigned int seed)
 
 	for (i = 0; i < len; i++)
 		buf[i] = pattern_byte(i, seed);
+}
+
+static int build_view_exec_page(unsigned char *buf, size_t len, int shadow)
+{
+#if defined(__aarch64__)
+	static const uint32_t original_code[] = {
+		0xd2800220U,
+		0xd65f03c0U,
+	};
+	static const uint32_t shadow_code[] = {
+		0xd2800440U,
+		0xd65f03c0U,
+	};
+	const void *src = shadow ? (const void *)shadow_code :
+				    (const void *)original_code;
+
+	if (!buf || len < 8U)
+		return -1;
+
+	memset(buf, 0, len);
+	memcpy(buf, src, 8U);
+	return 0;
+#else
+	(void)buf;
+	(void)len;
+	(void)shadow;
+	return -1;
+#endif
 }
 
 static int verify_pattern_range(const unsigned char *buf, size_t len,
@@ -1894,6 +1926,206 @@ out:
 	free(original_buf);
 	free(fake_buf);
 	return ret;
+}
+
+static int verify_view_wxshadow(int session_fd, pid_t child,
+				const struct child_info *info, int cmd_fd,
+				int resp_fd)
+{
+#if !defined(__aarch64__)
+	(void)session_fd;
+	(void)child;
+	(void)info;
+	(void)cmd_fd;
+	(void)resp_fd;
+	printf("selftest view wxshadow skipped: non-aarch64 userspace\n");
+	return 0;
+#else
+	struct lkmdbg_view_region_request region_reply;
+	struct lkmdbg_view_backing_request backing_reply;
+	struct lkmdbg_view_backing_request reset_reply;
+	struct lkmdbg_view_region_query_request query_reply;
+	struct lkmdbg_view_region_handle_request remove_reply;
+	struct lkmdbg_view_region_entry entry;
+	struct iovec local_iov;
+	struct iovec remote_iov;
+	uint8_t *original_buf = NULL;
+	uint8_t *shadow_buf = NULL;
+	uint8_t *kernel_buf = NULL;
+	uint8_t *external_buf = NULL;
+	uintptr_t region_addr = info->view_exec_addr;
+	uint64_t retval = 0;
+	uint32_t bytes_done = 0;
+	int region_active = 0;
+	int ret = -1;
+
+	memset(&region_reply, 0, sizeof(region_reply));
+	memset(&backing_reply, 0, sizeof(backing_reply));
+	memset(&reset_reply, 0, sizeof(reset_reply));
+	memset(&query_reply, 0, sizeof(query_reply));
+	memset(&remove_reply, 0, sizeof(remove_reply));
+	memset(&entry, 0, sizeof(entry));
+
+	original_buf = malloc(info->page_size);
+	shadow_buf = malloc(info->page_size);
+	kernel_buf = malloc(info->page_size);
+	external_buf = malloc(info->page_size);
+	if (!original_buf || !shadow_buf || !kernel_buf || !external_buf) {
+		fprintf(stderr, "view wxshadow allocation failed\n");
+		goto out;
+	}
+
+	if (build_view_exec_page(original_buf, info->page_size, 0) < 0 ||
+	    build_view_exec_page(shadow_buf, info->page_size, 1) < 0) {
+		fprintf(stderr, "view wxshadow build exec pages failed\n");
+		goto out;
+	}
+
+	if (child_write_remote_range(cmd_fd, resp_fd, region_addr, original_buf,
+				     info->page_size) < 0)
+		goto out;
+	if (child_call_remote0(cmd_fd, resp_fd, region_addr, &retval) < 0)
+		goto out;
+	if (retval != 17U) {
+		fprintf(stderr,
+			"view wxshadow original retval mismatch got=%" PRIu64 "\n",
+			retval);
+		goto out;
+	}
+
+	if (create_view_region(session_fd, region_addr, info->page_size,
+			       LKMDBG_VIEW_ACCESS_READ |
+				       LKMDBG_VIEW_ACCESS_EXEC,
+			       LKMDBG_VIEW_BACKEND_AUTO,
+			       LKMDBG_VIEW_FAULT_POLICY_TRAP_ONLY,
+			       LKMDBG_VIEW_SYNC_NONE,
+			       LKMDBG_VIEW_WRITEBACK_DISCARD,
+			       &region_reply) < 0) {
+		if (errno == EOPNOTSUPP || errno == ENOENT) {
+			printf("selftest view wxshadow skipped: backend unavailable errno=%d\n",
+			       errno);
+			ret = 0;
+			goto out;
+		}
+		goto out;
+	}
+	region_active = 1;
+
+	if (set_view_region_exec_backing(session_fd, region_reply.region_id,
+					 shadow_buf, info->page_size,
+					 LKMDBG_VIEW_BACKING_USER_BUFFER,
+					 &backing_reply) < 0)
+		goto out;
+
+	if (query_view_regions(session_fd, region_reply.region_id, &entry, 1,
+			       &query_reply) < 0)
+		goto out;
+	if (query_reply.entries_filled != 1 ||
+	    entry.region_id != region_reply.region_id ||
+	    entry.active_backend != LKMDBG_VIEW_BACKEND_WXSHADOW ||
+	    entry.read_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	    entry.exec_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER) {
+		fprintf(stderr,
+			"bad wxshadow query filled=%u backend=%u read=%u exec=%u region=%" PRIu64 "\n",
+			query_reply.entries_filled, entry.active_backend,
+			entry.read_backing_type, entry.exec_backing_type,
+			(uint64_t)entry.region_id);
+		goto out;
+	}
+
+	local_iov.iov_base = external_buf;
+	local_iov.iov_len = info->page_size;
+	remote_iov.iov_base = (void *)region_addr;
+	remote_iov.iov_len = info->page_size;
+	if (process_vm_readv(child, &local_iov, 1, &remote_iov, 1, 0) !=
+	    (ssize_t)info->page_size) {
+		fprintf(stderr,
+			"view wxshadow process_vm_readv failed errno=%d\n",
+			errno);
+		goto out;
+	}
+	if (memcmp(external_buf, original_buf, info->page_size) != 0) {
+		fprintf(stderr, "view wxshadow external read mismatch\n");
+		goto out;
+	}
+
+	if (read_target_memory(session_fd, region_addr, kernel_buf, info->page_size,
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != info->page_size) {
+		fprintf(stderr, "view wxshadow READ_MEM failed bytes_done=%u\n",
+			bytes_done);
+		goto out;
+	}
+	if (memcmp(kernel_buf, original_buf, info->page_size) != 0) {
+		fprintf(stderr, "view wxshadow READ_MEM overlay mismatch\n");
+		goto out;
+	}
+
+	if (child_call_remote0(cmd_fd, resp_fd, region_addr, &retval) < 0)
+		goto out;
+	if (retval != 34U) {
+		fprintf(stderr,
+			"view wxshadow shadow retval mismatch got=%" PRIu64 "\n",
+			retval);
+		goto out;
+	}
+
+	if (set_view_region_exec_backing(session_fd, region_reply.region_id, NULL,
+					 0, LKMDBG_VIEW_BACKING_ORIGINAL,
+					 &reset_reply) < 0)
+		goto out;
+
+	memset(&entry, 0, sizeof(entry));
+	memset(&query_reply, 0, sizeof(query_reply));
+	if (query_view_regions(session_fd, region_reply.region_id, &entry, 1,
+			       &query_reply) < 0)
+		goto out;
+	if (query_reply.entries_filled != 1 ||
+	    entry.exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	    entry.exec_source_id != 0) {
+		fprintf(stderr,
+			"view wxshadow reset query mismatch filled=%u exec_backing=%u source=%" PRIu64 "\n",
+			query_reply.entries_filled, entry.exec_backing_type,
+			(uint64_t)entry.exec_source_id);
+		goto out;
+	}
+
+	memset(external_buf, 0, info->page_size);
+	if (process_vm_readv(child, &local_iov, 1, &remote_iov, 1, 0) !=
+	    (ssize_t)info->page_size) {
+		fprintf(stderr,
+			"view wxshadow post-reset process_vm_readv failed errno=%d\n",
+			errno);
+		goto out;
+	}
+	if (memcmp(external_buf, original_buf, info->page_size) != 0) {
+		fprintf(stderr, "view wxshadow reset did not restore original bytes\n");
+		goto out;
+	}
+
+	if (child_call_remote0(cmd_fd, resp_fd, region_addr, &retval) < 0)
+		goto out;
+	if (retval != 17U) {
+		fprintf(stderr,
+			"view wxshadow reset retval mismatch got=%" PRIu64 "\n",
+			retval);
+		goto out;
+	}
+
+	ret = 0;
+	printf("selftest view wxshadow ok region=%" PRIu64 " backend=%u exec_source=%" PRIu64 "\n",
+	       (uint64_t)region_reply.region_id, entry.active_backend,
+	       (uint64_t)backing_reply.source_id);
+
+out:
+	if (region_active)
+		remove_view_region(session_fd, region_reply.region_id, &remove_reply);
+	free(external_buf);
+	free(kernel_buf);
+	free(shadow_buf);
+	free(original_buf);
+	return ret;
+#endif
 }
 
 static int verify_remote_map(int session_fd, pid_t child,
@@ -3155,6 +3387,7 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	void *force_read_map;
 	char *force_write_map;
 	unsigned char *large_map;
+	unsigned char *view_exec_map;
 	uint64_t *freeze_counters;
 	pid_t *freeze_tids;
 	volatile int *freeze_stop;
@@ -3195,6 +3428,11 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	large_map = mmap(NULL, SELFTEST_LARGE_MAP_LEN, PROT_READ | PROT_WRITE,
 			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (large_map == MAP_FAILED)
+		return 2;
+
+	view_exec_map = mmap(NULL, page_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (view_exec_map == MAP_FAILED)
 		return 2;
 
 	freeze_counters = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
@@ -3239,6 +3477,8 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 			 "slot-%u-initial", i);
 	}
 	fill_pattern(large_map, SELFTEST_LARGE_MAP_LEN, 1);
+	if (build_view_exec_page(view_exec_map, page_size, 0) < 0)
+		return 2;
 	*mmu_watch_map = 0x123456789abcdef0ULL;
 
 	memset(nofault_map, 0xA5, page_size);
@@ -3271,6 +3511,7 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 	info.force_read_addr = (uintptr_t)force_read_map;
 	info.force_write_addr = (uintptr_t)force_write_map;
 	info.large_addr = (uintptr_t)large_map;
+	info.view_exec_addr = (uintptr_t)view_exec_map;
 	info.file_addr = (uintptr_t)file_map;
 	info.exec_target_addr = (uintptr_t)child_exec_target;
 	info.remote_call_addr = (uintptr_t)child_remote_call_target;
@@ -3386,6 +3627,22 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 			free(tmp);
 			if (write_full(resp_fd, &resident, sizeof(resident)) !=
 			    (ssize_t)sizeof(resident))
+				return 2;
+			break;
+		}
+		case CHILD_OP_CALL_REMOTE:
+		{
+			uint64_t (*fn)(void);
+			uint64_t retval;
+
+			if (!cmd.addr)
+				return 2;
+			__builtin___clear_cache((char *)(uintptr_t)cmd.addr,
+						(char *)(uintptr_t)cmd.addr + 64);
+			fn = (uint64_t (*)(void))(uintptr_t)cmd.addr;
+			retval = fn();
+			if (write_full(resp_fd, &retval, sizeof(retval)) !=
+			    (ssize_t)sizeof(retval))
 				return 2;
 			break;
 		}
@@ -3599,6 +3856,34 @@ static int child_write_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 		return -1;
 	}
 
+	return 0;
+}
+
+static int child_call_remote0(int cmd_fd, int resp_fd, uintptr_t addr,
+			      uint64_t *retval_out)
+{
+	struct child_cmd cmd = {
+		.op = CHILD_OP_CALL_REMOTE,
+		.addr = addr,
+	};
+	uint64_t retval;
+
+	if (!addr)
+		return -1;
+
+	if (write_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
+		fprintf(stderr, "failed to send child remote call command\n");
+		return -1;
+	}
+
+	if (read_full(resp_fd, &retval, sizeof(retval)) !=
+	    (ssize_t)sizeof(retval)) {
+		fprintf(stderr, "failed to read child remote call reply\n");
+		return -1;
+	}
+
+	if (retval_out)
+		*retval_out = retval;
 	return 0;
 }
 
@@ -7214,6 +7499,17 @@ static int run_selftest(const char *prog)
 
 	if (verify_view_external_read(session_fd, child, &info, cmd_pipe[1],
 				      resp_pipe[0]) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	if (verify_view_wxshadow(session_fd, child, &info, cmd_pipe[1],
+				 resp_pipe[0]) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
 		close(cmd_pipe[1]);

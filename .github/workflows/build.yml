@@ -423,6 +423,11 @@ jobs:
             "$GITHUB_WORKSPACE/tools/examples/example_view_external_read.c" \
             "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
             "$GITHUB_WORKSPACE/tools/driver/bridge_memory.c"
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/lkmdbg_example_view_wxshadow_exec" \
+            "$GITHUB_WORKSPACE/tools/examples/example_view_wxshadow_exec.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_memory.c"
           mkdir -p "$INITRAMFS_DIR/dev" "$INITRAMFS_DIR/proc" \
             "$INITRAMFS_DIR/sys" "$INITRAMFS_DIR/sys/kernel" \
             "$INITRAMFS_DIR/sys/kernel/debug"
@@ -460,6 +465,8 @@ jobs:
             "$INITRAMFS_DIR/lkmdbg_example_perf_baseline"
           install -m 0755 "$RUNNER_TEMP/lkmdbg_example_view_external_read" \
             "$INITRAMFS_DIR/lkmdbg_example_view_external_read"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_example_view_wxshadow_exec" \
+            "$INITRAMFS_DIR/lkmdbg_example_view_wxshadow_exec"
           cp "$RUNNER_TEMP/lkmdbg.ko" "$INITRAMFS_DIR/lkmdbg.ko"
           (
             cd "$INITRAMFS_DIR"
