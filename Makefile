@@ -27,6 +27,7 @@ lkmdbg-mem-y := \
 	mem/lkmdbg_pte.o \
 	mem/lkmdbg_remote_alloc.o \
 	mem/lkmdbg_remote_map.o \
+	mem/lkmdbg_view_region.o \
 	mem/lkmdbg_target.o \
 	mem/lkmdbg_target_vm.o \
 	mem/lkmdbg_image.o \

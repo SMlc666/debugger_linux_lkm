@@ -209,3 +209,123 @@ int write_physical_memory_flags(int session_fd, uint64_t phys_addr,
 
 	return req.ops_done == 1 || !op.bytes_done ? 0 : -1;
 }
+
+int create_view_region(int session_fd, uintptr_t base_addr, uint64_t length,
+		       uint32_t access_mask, uint32_t backend,
+		       uint32_t fault_policy, uint32_t sync_policy,
+		       uint32_t writeback_policy,
+		       struct lkmdbg_view_region_request *reply_out)
+{
+	struct lkmdbg_view_region_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.base_addr = base_addr,
+		.length = length,
+		.access_mask = access_mask,
+		.backend = backend,
+		.fault_policy = fault_policy,
+		.sync_policy = sync_policy,
+		.writeback_policy = writeback_policy,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_CREATE_VIEW_REGION, &req) < 0) {
+		lkmdbg_log_errorf("CREATE_VIEW_REGION failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int set_view_region_read_backing(int session_fd, uint64_t region_id,
+				 const void *buf, uint64_t length,
+				 uint32_t backing_type,
+				 struct lkmdbg_view_backing_request *reply_out)
+{
+	struct lkmdbg_view_backing_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.region_id = region_id,
+		.view_kind = LKMDBG_VIEW_KIND_READ,
+		.backing_type = backing_type,
+		.source_addr = (uintptr_t)buf,
+		.source_length = length,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_SET_VIEW_BACKING, &req) < 0) {
+		lkmdbg_log_errorf("SET_VIEW_BACKING failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int set_view_region_policy(int session_fd, uint64_t region_id, uint32_t backend,
+			   uint32_t fault_policy, uint32_t sync_policy,
+			   uint32_t writeback_policy,
+			   struct lkmdbg_view_policy_request *reply_out)
+{
+	struct lkmdbg_view_policy_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.region_id = region_id,
+		.backend = backend,
+		.fault_policy = fault_policy,
+		.sync_policy = sync_policy,
+		.writeback_policy = writeback_policy,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_SET_VIEW_POLICY, &req) < 0) {
+		lkmdbg_log_errorf("SET_VIEW_POLICY failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int remove_view_region(int session_fd, uint64_t region_id,
+		       struct lkmdbg_view_region_handle_request *reply_out)
+{
+	struct lkmdbg_view_region_handle_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.region_id = region_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_VIEW_REGION, &req) < 0) {
+		lkmdbg_log_errorf("REMOVE_VIEW_REGION failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int query_view_regions(int session_fd, uint64_t start_id,
+		       struct lkmdbg_view_region_entry *entries,
+		       uint32_t max_entries,
+		       struct lkmdbg_view_region_query_request *reply_out)
+{
+	struct lkmdbg_view_region_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = max_entries,
+		.start_id = start_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_VIEW_REGIONS, &req) < 0) {
+		lkmdbg_log_errorf("QUERY_VIEW_REGIONS failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}

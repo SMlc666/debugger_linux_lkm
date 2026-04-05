@@ -45,6 +45,7 @@
 #define EXAMPLE_REMOTE_ALLOC_RW_TOOL "/lkmdbg_example_remote_alloc_rw"
 #define EXAMPLE_PHYS_TRANSLATE_READ_TOOL "/lkmdbg_example_phys_translate_read"
 #define EXAMPLE_PERF_BASELINE_TOOL "/lkmdbg_example_perf_baseline"
+#define EXAMPLE_VIEW_EXTERNAL_READ_TOOL "/lkmdbg_example_view_external_read"
 #define INPUT_QUERY_BATCH 16U
 #define QEMU_HOOK_SELFTEST_STRESS_REPEATS 5U
 #define QEMU_PROC_VERSION_REPEATS 5U
@@ -1150,6 +1151,10 @@ static void qemu_run_transport_extended_tools(void)
 		NULL,
 	};
 	char *const ex_perf_baseline_argv[] = { EXAMPLE_PERF_BASELINE_TOOL, NULL };
+	char *const ex_view_external_read_argv[] = {
+		EXAMPLE_VIEW_EXTERNAL_READ_TOOL,
+		NULL,
+	};
 
 	qemu_cluster_begin("transport-extended-tools");
 	qemu_run_tool(ex_sysrule_combo_argv);
@@ -1157,6 +1162,7 @@ static void qemu_run_transport_extended_tools(void)
 	qemu_run_tool(ex_remote_alloc_rw_argv);
 	qemu_run_tool(ex_phys_translate_read_argv);
 	qemu_run_tool(ex_perf_baseline_argv);
+	qemu_run_tool(ex_view_external_read_argv);
 	if (qemu_status_debugfs_available) {
 		printf("LKMDBG_QEMU_HWPOINT_STATUS callback=%llu breakpoint_callback=%llu watchpoint_callback=%llu stop_reads=%llu breakpoint_reads=%llu watchpoint_reads=%llu last_reason=%llu last_type=0x%llx last_addr=0x%llx last_ip=0x%llx\n",
 		       qemu_read_status_u64("hwpoint_callback_total="),

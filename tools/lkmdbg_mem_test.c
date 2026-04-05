@@ -19,6 +19,7 @@
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -1691,6 +1692,178 @@ restore:
 				    &bytes_done, 0);
 out:
 	free(buf.entries);
+	return ret;
+}
+
+static int verify_view_external_read(int session_fd, pid_t child,
+				     const struct child_info *info, int cmd_fd,
+				     int resp_fd)
+{
+	struct lkmdbg_view_region_request region_reply;
+	struct lkmdbg_view_backing_request backing_reply;
+	struct lkmdbg_view_backing_request reset_reply;
+	struct lkmdbg_view_region_query_request query_reply;
+	struct lkmdbg_view_region_handle_request remove_reply;
+	struct lkmdbg_view_region_entry entry;
+	struct iovec local_iov;
+	struct iovec remote_iov;
+	uint8_t *fake_buf = NULL;
+	uint8_t *child_buf = NULL;
+	uint8_t *kernel_buf = NULL;
+	uint8_t *external_buf = NULL;
+	uintptr_t region_addr;
+	uint32_t bytes_done = 0;
+	int region_active = 0;
+	int ret = -1;
+
+	memset(&region_reply, 0, sizeof(region_reply));
+	memset(&backing_reply, 0, sizeof(backing_reply));
+	memset(&reset_reply, 0, sizeof(reset_reply));
+	memset(&query_reply, 0, sizeof(query_reply));
+	memset(&remove_reply, 0, sizeof(remove_reply));
+	memset(&entry, 0, sizeof(entry));
+
+	region_addr = info->large_addr + (info->page_size * 12U);
+	if (region_addr + info->page_size > info->large_addr + info->large_len) {
+		fprintf(stderr, "view external read region outside test mapping\n");
+		return -1;
+	}
+
+	fake_buf = malloc(info->page_size);
+	child_buf = malloc(info->page_size);
+	kernel_buf = malloc(info->page_size);
+	external_buf = malloc(info->page_size);
+	if (!fake_buf || !child_buf || !kernel_buf || !external_buf) {
+		fprintf(stderr, "view external read allocation failed\n");
+		goto out;
+	}
+
+	if (child_fill_remote_range(cmd_fd, resp_fd, region_addr, info->page_size,
+				    0x44U) < 0)
+		goto out;
+	memset(fake_buf, 0xC3, info->page_size);
+
+	if (create_view_region(session_fd, region_addr, info->page_size,
+			       LKMDBG_VIEW_ACCESS_READ |
+				       LKMDBG_VIEW_ACCESS_EXEC,
+			       LKMDBG_VIEW_BACKEND_AUTO,
+			       LKMDBG_VIEW_FAULT_POLICY_TRAP_ONLY,
+			       LKMDBG_VIEW_SYNC_NONE,
+			       LKMDBG_VIEW_WRITEBACK_DISCARD,
+			       &region_reply) < 0) {
+		if (errno == EOPNOTSUPP || errno == ENOENT) {
+			printf("selftest view external read skipped: backend unavailable errno=%d\n",
+			       errno);
+			ret = 0;
+			goto out;
+		}
+		goto out;
+	}
+	region_active = 1;
+
+	if (set_view_region_read_backing(session_fd, region_reply.region_id, fake_buf,
+					 info->page_size,
+					 LKMDBG_VIEW_BACKING_USER_BUFFER,
+					 &backing_reply) < 0)
+		goto out;
+
+	if (query_view_regions(session_fd, region_reply.region_id, &entry, 1,
+			       &query_reply) < 0)
+		goto out;
+	if (query_reply.entries_filled != 1 ||
+	    entry.region_id != region_reply.region_id ||
+	    entry.active_backend != LKMDBG_VIEW_BACKEND_EXTERNAL_READ ||
+	    entry.read_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER) {
+		fprintf(stderr,
+			"bad view region query filled=%u backend=%u read_backing=%u region=%" PRIu64 "\n",
+			query_reply.entries_filled, entry.active_backend,
+			entry.read_backing_type, (uint64_t)entry.region_id);
+		goto out;
+	}
+
+	if (child_read_remote_range(cmd_fd, resp_fd, region_addr, child_buf,
+				    info->page_size) < 0)
+		goto out;
+
+	if (read_target_memory(session_fd, region_addr, kernel_buf, info->page_size,
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != info->page_size) {
+		fprintf(stderr, "view external read READ_MEM failed bytes_done=%u\n",
+			bytes_done);
+		goto out;
+	}
+	if (memcmp(child_buf, kernel_buf, info->page_size) != 0) {
+		fprintf(stderr,
+			"view external read actual mismatch between child and READ_MEM\n");
+		goto out;
+	}
+	if (memcmp(kernel_buf, fake_buf, info->page_size) == 0) {
+		fprintf(stderr,
+			"view external read kernel path unexpectedly returned fake backing\n");
+		goto out;
+	}
+
+	local_iov.iov_base = external_buf;
+	local_iov.iov_len = info->page_size;
+	remote_iov.iov_base = (void *)region_addr;
+	remote_iov.iov_len = info->page_size;
+	if (process_vm_readv(child, &local_iov, 1, &remote_iov, 1, 0) !=
+	    (ssize_t)info->page_size) {
+		fprintf(stderr,
+			"view external read process_vm_readv failed errno=%d\n",
+			errno);
+		goto out;
+	}
+	if (memcmp(external_buf, fake_buf, info->page_size) != 0) {
+		fprintf(stderr, "view external read fake overlay mismatch\n");
+		goto out;
+	}
+
+	if (set_view_region_read_backing(session_fd, region_reply.region_id, NULL,
+					 0, LKMDBG_VIEW_BACKING_ORIGINAL,
+					 &reset_reply) < 0)
+		goto out;
+
+	memset(&entry, 0, sizeof(entry));
+	memset(&query_reply, 0, sizeof(query_reply));
+	if (query_view_regions(session_fd, region_reply.region_id, &entry, 1,
+			       &query_reply) < 0)
+		goto out;
+	if (query_reply.entries_filled != 1 ||
+	    entry.read_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	    entry.read_source_id != 0) {
+		fprintf(stderr,
+			"view external read reset query mismatch filled=%u read_backing=%u source=%" PRIu64 "\n",
+			query_reply.entries_filled, entry.read_backing_type,
+			(uint64_t)entry.read_source_id);
+		goto out;
+	}
+
+	memset(external_buf, 0, info->page_size);
+	if (process_vm_readv(child, &local_iov, 1, &remote_iov, 1, 0) !=
+	    (ssize_t)info->page_size) {
+		fprintf(stderr,
+			"view external read post-reset process_vm_readv failed errno=%d\n",
+			errno);
+		goto out;
+	}
+	if (memcmp(external_buf, child_buf, info->page_size) != 0) {
+		fprintf(stderr, "view external read reset did not restore original bytes\n");
+		goto out;
+	}
+
+	ret = 0;
+	printf("selftest view external read ok region=%" PRIu64 " backend=%u source=%" PRIu64 "\n",
+	       (uint64_t)region_reply.region_id, entry.active_backend,
+	       (uint64_t)entry.read_source_id);
+
+out:
+	if (region_active)
+		remove_view_region(session_fd, region_reply.region_id, &remove_reply);
+	free(external_buf);
+	free(kernel_buf);
+	free(child_buf);
+	free(fake_buf);
 	return ret;
 }
 
@@ -6945,6 +7118,17 @@ static int run_selftest(const char *prog)
 	}
 
 	if (verify_physical_memory_api(session_fd, &info) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	if (verify_view_external_read(session_fd, child, &info, cmd_pipe[1],
+				      resp_pipe[0]) < 0) {
 		close(session_fd);
 		close(info_pipe[0]);
 		close(cmd_pipe[1]);

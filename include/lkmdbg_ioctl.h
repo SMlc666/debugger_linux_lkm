@@ -163,6 +163,48 @@
 
 #define LKMDBG_REMOTE_THREAD_CREATE_FLAG_SET_TLS 0x00000001U
 
+#define LKMDBG_VIEW_ACCESS_READ 0x00000001U
+#define LKMDBG_VIEW_ACCESS_WRITE 0x00000002U
+#define LKMDBG_VIEW_ACCESS_EXEC 0x00000004U
+
+#define LKMDBG_VIEW_BACKING_ORIGINAL 0U
+#define LKMDBG_VIEW_BACKING_ANON 1U
+#define LKMDBG_VIEW_BACKING_USER_BUFFER 2U
+#define LKMDBG_VIEW_BACKING_REMOTE_MAP 3U
+#define LKMDBG_VIEW_BACKING_REMOTE_ALLOC 4U
+
+#define LKMDBG_VIEW_FAULT_POLICY_TRAP_ONLY 0U
+#define LKMDBG_VIEW_FAULT_POLICY_SWITCH_ON_FAULT 1U
+#define LKMDBG_VIEW_FAULT_POLICY_EMULATE_READ 2U
+#define LKMDBG_VIEW_FAULT_POLICY_EMULATE_WRITE 3U
+
+#define LKMDBG_VIEW_SYNC_NONE 0U
+#define LKMDBG_VIEW_SYNC_WRITE_TO_READ 1U
+#define LKMDBG_VIEW_SYNC_WRITE_TO_EXEC 2U
+#define LKMDBG_VIEW_SYNC_WRITE_TO_ALL 3U
+
+#define LKMDBG_VIEW_WRITEBACK_DISCARD 0U
+#define LKMDBG_VIEW_WRITEBACK_COMMIT_ORIGINAL 1U
+#define LKMDBG_VIEW_WRITEBACK_COMMIT_READ_VIEW 2U
+#define LKMDBG_VIEW_WRITEBACK_COMMIT_EXEC_VIEW 3U
+
+#define LKMDBG_VIEW_KIND_READ 1U
+#define LKMDBG_VIEW_KIND_WRITE 2U
+#define LKMDBG_VIEW_KIND_EXEC 3U
+
+/*
+ * AUTO lets the kernel pick the narrowest backend that satisfies the region
+ * semantics. The explicit modes let advanced callers force a specific path.
+ */
+#define LKMDBG_VIEW_BACKEND_AUTO 0U
+#define LKMDBG_VIEW_BACKEND_EXTERNAL_READ 1U
+#define LKMDBG_VIEW_BACKEND_WXSHADOW 2U
+#define LKMDBG_VIEW_BACKEND_GENERIC_SWITCH 3U
+
+#define LKMDBG_VIEW_REGION_STATE_ACTIVE 0x00000001U
+#define LKMDBG_VIEW_REGION_STATE_MUTATED 0x00000002U
+#define LKMDBG_VIEW_REGION_STATE_FAULTED 0x00000004U
+
 #define LKMDBG_VMA_PROT_READ 0x00000001U
 #define LKMDBG_VMA_PROT_WRITE 0x00000002U
 #define LKMDBG_VMA_PROT_EXEC 0x00000004U
@@ -603,6 +645,99 @@ struct lkmdbg_remote_thread_create_request {
 	__s64 result;
 	__s32 created_tid;
 	__u32 reserved1;
+};
+
+/*
+ * A view region describes one virtual-address range whose effective backing can
+ * vary by access type. For example, user-mode reads can observe one backing
+ * while instruction fetches execute from another.
+ */
+struct lkmdbg_view_region_request {
+	__u32 version;
+	__u32 size;
+	__u64 region_id;
+	__u64 base_addr;
+	__u64 length;
+	__u32 access_mask;
+	__u32 flags;
+	__u32 backend;
+	__u32 fault_policy;
+	__u32 sync_policy;
+	__u32 writeback_policy;
+	__u32 reserved0;
+	__u32 reserved1;
+};
+
+struct lkmdbg_view_region_handle_request {
+	__u32 version;
+	__u32 size;
+	__u64 region_id;
+	__u32 flags;
+	__u32 reserved0;
+};
+
+struct lkmdbg_view_policy_request {
+	__u32 version;
+	__u32 size;
+	__u64 region_id;
+	__u32 flags;
+	__u32 backend;
+	__u32 fault_policy;
+	__u32 sync_policy;
+	__u32 writeback_policy;
+	__u32 reserved0;
+};
+
+struct lkmdbg_view_backing_request {
+	__u32 version;
+	__u32 size;
+	__u64 region_id;
+	__u32 view_kind;
+	__u32 backing_type;
+	__u32 flags;
+	__u32 reserved0;
+	__u64 source_addr;
+	__u64 source_length;
+	__u64 source_id;
+	__s32 source_fd;
+	__u32 reserved1;
+};
+
+struct lkmdbg_view_region_entry {
+	__u64 region_id;
+	__u64 base_addr;
+	__u64 length;
+	__u64 original_pte;
+	__u64 current_pte;
+	__u64 fault_count;
+	__u64 read_source_id;
+	__u64 write_source_id;
+	__u64 exec_source_id;
+	__u32 access_mask;
+	__u32 flags;
+	__u32 requested_backend;
+	__u32 active_backend;
+	__u32 fault_policy;
+	__u32 sync_policy;
+	__u32 writeback_policy;
+	__u32 state;
+	__u32 last_fault_access;
+	__u32 read_backing_type;
+	__u32 write_backing_type;
+	__u32 exec_backing_type;
+	__u32 reserved0;
+};
+
+struct lkmdbg_view_region_query_request {
+	__u32 version;
+	__u32 size;
+	__u64 entries_addr;
+	__u32 max_entries;
+	__u32 flags;
+	__u64 start_id;
+	__u32 entries_filled;
+	__u32 done;
+	__u64 next_id;
 };
 
 struct lkmdbg_page_entry {
@@ -1049,5 +1184,15 @@ struct lkmdbg_input_event {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x3E, struct lkmdbg_syscall_rule_handle_request)
 #define LKMDBG_IOC_QUERY_SYSCALL_RULES \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x3F, struct lkmdbg_syscall_rule_query_request)
+#define LKMDBG_IOC_CREATE_VIEW_REGION \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x40, struct lkmdbg_view_region_request)
+#define LKMDBG_IOC_REMOVE_VIEW_REGION \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x41, struct lkmdbg_view_region_handle_request)
+#define LKMDBG_IOC_SET_VIEW_BACKING \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x42, struct lkmdbg_view_backing_request)
+#define LKMDBG_IOC_SET_VIEW_POLICY \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x43, struct lkmdbg_view_policy_request)
+#define LKMDBG_IOC_QUERY_VIEW_REGIONS \
+	_IOWR(LKMDBG_IOC_MAGIC, 0x44, struct lkmdbg_view_region_query_request)
 
 #endif

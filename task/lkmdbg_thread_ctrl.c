@@ -1176,6 +1176,9 @@ static ssize_t __nocfi lkmdbg_process_vm_rw_replacement(
 		      lkmdbg_process_vm_rw_orig(pid, lvec, liovcnt, rvec,
 						riovcnt, flags, vm_write) :
 		      -ENOENT;
+	if (!vm_write && ret > 0)
+		lkmdbg_view_region_overlay_process_vm_read(pid, lvec, liovcnt,
+							    rvec, riovcnt, ret);
 	if (vm_write && ret > 0)
 		lkmdbg_mmu_recover_after_process_vm_write(pid, rvec, riovcnt,
 							  ret);
@@ -1215,6 +1218,8 @@ lkmdbg_access_remote_vm_replacement(struct mm_struct *mm, unsigned long addr,
 	ret = lkmdbg_access_remote_vm_orig ?
 		      lkmdbg_access_remote_vm_orig(mm, addr, buf, len, gup_flags) :
 		      -ENOENT;
+	if (ret > 0 && !(gup_flags & FOLL_WRITE))
+		lkmdbg_view_region_overlay_remote_vm_read(mm, addr, buf, ret);
 	if (ret > 0 && (gup_flags & FOLL_WRITE))
 		lkmdbg_mmu_recover_after_remote_vm_write(mm, addr, ret);
 	if (atomic_dec_and_test(&lkmdbg_remote_vm_write_inflight))
@@ -1233,6 +1238,8 @@ static int __nocfi lkmdbg_access_remote_vm_inner_replacement(
 		      lkmdbg_access_remote_vm_inner_orig(mm, addr, buf, len,
 							 gup_flags) :
 		      -ENOENT;
+	if (ret > 0 && !(gup_flags & FOLL_WRITE))
+		lkmdbg_view_region_overlay_remote_vm_read(mm, addr, buf, ret);
 	if (ret > 0 && (gup_flags & FOLL_WRITE))
 		lkmdbg_mmu_recover_after_remote_vm_write(mm, addr, ret);
 	if (atomic_dec_and_test(&lkmdbg_remote_vm_write_inflight))
@@ -1352,6 +1359,21 @@ static int lkmdbg_mmu_install_remote_vm_write_hook(void)
 	return 0;
 }
 
+int lkmdbg_external_read_hooks_ensure(void)
+{
+	int ret;
+
+	ret = lkmdbg_mmu_install_process_vm_write_hook();
+	if (ret && ret != -ENOENT)
+		return ret;
+
+	ret = lkmdbg_mmu_install_remote_vm_write_hook();
+	if (ret && ret != -ENOENT)
+		return ret;
+
+	return 0;
+}
+
 static void lkmdbg_disable_user_single_step_tid(pid_t tid)
 {
 	struct task_struct *task;
@@ -1437,12 +1459,8 @@ static int lkmdbg_register_mmu_hwpoint(struct lkmdbg_session *session,
 	if (ret)
 		return ret;
 
-	ret = lkmdbg_mmu_install_process_vm_write_hook();
-	if (ret && ret != -ENOENT)
-		return ret;
-
-	ret = lkmdbg_mmu_install_remote_vm_write_hook();
-	if (ret && ret != -ENOENT)
+	ret = lkmdbg_external_read_hooks_ensure();
+	if (ret)
 		return ret;
 
 	ret = lkmdbg_get_target_thread(session, req->tid, &task);
@@ -3059,6 +3077,8 @@ void lkmdbg_thread_ctrl_release(struct lkmdbg_session *session)
 		mutex_lock(&session->lock);
 	}
 	mutex_unlock(&session->lock);
+
+	lkmdbg_view_region_release(session);
 
 #ifdef CONFIG_ARM64
 	if (fallback_active) {

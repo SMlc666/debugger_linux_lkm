@@ -44,4 +44,24 @@ int write_physical_memory_flags(int session_fd, uint64_t phys_addr,
 				uint32_t op_flags, uint32_t *bytes_done_out,
 				int verbose);
 
+int create_view_region(int session_fd, uintptr_t base_addr, uint64_t length,
+		       uint32_t access_mask, uint32_t backend,
+		       uint32_t fault_policy, uint32_t sync_policy,
+		       uint32_t writeback_policy,
+		       struct lkmdbg_view_region_request *reply_out);
+int set_view_region_read_backing(int session_fd, uint64_t region_id,
+				 const void *buf, uint64_t length,
+				 uint32_t backing_type,
+				 struct lkmdbg_view_backing_request *reply_out);
+int set_view_region_policy(int session_fd, uint64_t region_id, uint32_t backend,
+			   uint32_t fault_policy, uint32_t sync_policy,
+			   uint32_t writeback_policy,
+			   struct lkmdbg_view_policy_request *reply_out);
+int remove_view_region(int session_fd, uint64_t region_id,
+		       struct lkmdbg_view_region_handle_request *reply_out);
+int query_view_regions(int session_fd, uint64_t start_id,
+		       struct lkmdbg_view_region_entry *entries,
+		       uint32_t max_entries,
+		       struct lkmdbg_view_region_query_request *reply_out);
+
 #endif

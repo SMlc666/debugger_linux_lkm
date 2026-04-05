@@ -2109,13 +2109,15 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		old_calls = !!(session->stop_state.flags & LKMDBG_STOP_FLAG_ACTIVE) ||
 			    session->syscall_control.active;
 		mutex_unlock(&session->lock);
-		if (old_calls)
-			return -EBUSY;
-		if (lkmdbg_remote_call_blocks_target_change(session))
-			return -EBUSY;
-		if (lkmdbg_session_freeze_on_target_change(session))
-			return -EBUSY;
-		return lkmdbg_mem_set_target(session, argp);
+			if (old_calls)
+				return -EBUSY;
+			if (lkmdbg_remote_call_blocks_target_change(session))
+				return -EBUSY;
+			if (lkmdbg_view_region_blocks_target_change(session))
+				return -EBUSY;
+			if (lkmdbg_session_freeze_on_target_change(session))
+				return -EBUSY;
+			return lkmdbg_mem_set_target(session, argp);
 	case LKMDBG_IOC_READ_MEM:
 		return lkmdbg_mem_read(session, argp);
 	case LKMDBG_IOC_WRITE_MEM:
@@ -2202,12 +2204,22 @@ long lkmdbg_session_ioctl(struct file *file, unsigned int cmd,
 		return lkmdbg_rearm_hwpoint(session, argp);
 	case LKMDBG_IOC_SINGLE_STEP:
 		return lkmdbg_single_step(session, argp);
-	case LKMDBG_IOC_REMOTE_CALL:
-		return lkmdbg_remote_call(session, argp);
-	case LKMDBG_IOC_REMOTE_THREAD_CREATE:
-		return lkmdbg_remote_thread_create(session, argp);
-	case LKMDBG_IOC_FREEZE_THREADS:
-		return lkmdbg_freeze_threads(session, argp);
+		case LKMDBG_IOC_REMOTE_CALL:
+			return lkmdbg_remote_call(session, argp);
+		case LKMDBG_IOC_REMOTE_THREAD_CREATE:
+			return lkmdbg_remote_thread_create(session, argp);
+		case LKMDBG_IOC_CREATE_VIEW_REGION:
+			return lkmdbg_create_view_region(session, argp);
+		case LKMDBG_IOC_REMOVE_VIEW_REGION:
+			return lkmdbg_remove_view_region(session, argp);
+		case LKMDBG_IOC_SET_VIEW_BACKING:
+			return lkmdbg_set_view_backing(session, argp);
+		case LKMDBG_IOC_SET_VIEW_POLICY:
+			return lkmdbg_set_view_policy(session, argp);
+		case LKMDBG_IOC_QUERY_VIEW_REGIONS:
+			return lkmdbg_query_view_regions(session, argp);
+		case LKMDBG_IOC_FREEZE_THREADS:
+			return lkmdbg_freeze_threads(session, argp);
 	case LKMDBG_IOC_THAW_THREADS:
 		mutex_lock(&session->lock);
 		old_calls = session->syscall_control.active;
@@ -2269,6 +2281,7 @@ int lkmdbg_open_session(void __user *argp)
 	INIT_LIST_HEAD(&session->pte_patches);
 	INIT_LIST_HEAD(&session->remote_maps);
 	INIT_LIST_HEAD(&session->remote_allocs);
+	INIT_LIST_HEAD(&session->view_regions);
 	INIT_LIST_HEAD(&session->input_channels);
 	INIT_LIST_HEAD(&session->syscall_rules);
 	INIT_WORK(&session->stop_work, lkmdbg_session_stop_workfn);

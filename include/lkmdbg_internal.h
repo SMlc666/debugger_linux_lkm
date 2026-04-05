@@ -14,6 +14,7 @@
 #include <linux/task_work.h>
 #include <linux/types.h>
 #include <linux/uaccess.h>
+#include <linux/uio.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
 
@@ -290,6 +291,9 @@ struct lkmdbg_session {
 	u64 next_remote_map_id;
 	struct list_head remote_allocs;
 	u64 next_remote_alloc_id;
+	struct list_head view_regions;
+	u64 next_view_region_id;
+	u64 next_view_source_id;
 	struct list_head input_channels;
 	u64 next_input_channel_id;
 	u64 event_mask_words[LKMDBG_EVENT_MASK_WORDS];
@@ -620,6 +624,20 @@ long lkmdbg_single_step(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_remote_call(struct lkmdbg_session *session, void __user *argp);
 long lkmdbg_remote_thread_create(struct lkmdbg_session *session,
 				 void __user *argp);
+long lkmdbg_create_view_region(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_remove_view_region(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_set_view_backing(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_set_view_policy(struct lkmdbg_session *session, void __user *argp);
+long lkmdbg_query_view_regions(struct lkmdbg_session *session, void __user *argp);
+bool lkmdbg_view_region_blocks_target_change(struct lkmdbg_session *session);
+void lkmdbg_view_region_release(struct lkmdbg_session *session);
+void lkmdbg_view_region_overlay_process_vm_read(
+	pid_t pid, const struct iovec __user *lvec, unsigned long liovcnt,
+	const struct iovec __user *rvec, unsigned long riovcnt, ssize_t bytes_done);
+void lkmdbg_view_region_overlay_remote_vm_read(struct mm_struct *mm,
+					       unsigned long addr, void *buf,
+					       int len);
+int lkmdbg_external_read_hooks_ensure(void);
 u32 lkmdbg_remote_call_thread_flags(struct lkmdbg_session *session, pid_t tid);
 int lkmdbg_remote_call_prepare_continue(struct lkmdbg_session *session,
 					const struct lkmdbg_stop_state *stop);
