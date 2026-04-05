@@ -2056,8 +2056,8 @@ static int verify_view_wxshadow(int session_fd, pid_t child,
 			bytes_done);
 		goto out;
 	}
-	if (memcmp(kernel_buf, original_buf, info->page_size) != 0) {
-		fprintf(stderr, "view wxshadow READ_MEM overlay mismatch\n");
+	if (memcmp(kernel_buf, shadow_buf, info->page_size) != 0) {
+		fprintf(stderr, "view wxshadow READ_MEM shadow mismatch\n");
 		goto out;
 	}
 

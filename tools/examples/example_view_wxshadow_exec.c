@@ -265,7 +265,7 @@ int main(void)
 	if (read_target_memory(session_fd, (uintptr_t)page, kernel_read, page_size,
 			       &bytes_done, 0) < 0 ||
 	    bytes_done != page_size ||
-	    memcmp(kernel_read, original_page, page_size) != 0) {
+	    memcmp(kernel_read, shadow_page, page_size) != 0) {
 		fprintf(stderr,
 			"example_view_wxshadow_exec: READ_MEM mismatch bytes_done=%u\n",
 			bytes_done);
