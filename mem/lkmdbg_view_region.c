@@ -121,6 +121,43 @@ static bool lkmdbg_view_region_shadow_requested(u32 write_backing_type,
 	       exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL;
 }
 
+static int lkmdbg_view_region_resolve_shadow_source(
+	u32 write_backing_type, const u8 *write_bytes, u32 exec_backing_type,
+	const u8 *exec_bytes, u64 length, const u8 **shadow_source_out)
+{
+	bool write_shadow;
+	bool exec_shadow;
+
+	if (!shadow_source_out)
+		return -EINVAL;
+
+	write_shadow = write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL;
+	exec_shadow = exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL;
+	if (!write_shadow && !exec_shadow)
+		return -EINVAL;
+
+	if (write_shadow && exec_shadow) {
+		if (!write_bytes || !exec_bytes)
+			return -EINVAL;
+		if (length && memcmp(write_bytes, exec_bytes, (size_t)length) != 0)
+			return -EOPNOTSUPP;
+		*shadow_source_out = exec_bytes;
+		return 0;
+	}
+
+	if (exec_shadow) {
+		if (!exec_bytes)
+			return -EINVAL;
+		*shadow_source_out = exec_bytes;
+		return 0;
+	}
+
+	if (!write_bytes)
+		return -EINVAL;
+	*shadow_source_out = write_bytes;
+	return 0;
+}
+
 static const u8 *lkmdbg_view_region_overlay_bytes(
 	const struct lkmdbg_view_region *region)
 {
@@ -689,7 +726,7 @@ static int lkmdbg_view_region_select_wxshadow(
 			return -EOPNOTSUPP;
 		shadow_count++;
 	}
-	if (shadow_count != 1)
+	if (!shadow_count)
 		return -EOPNOTSUPP;
 
 	if (access_mask & LKMDBG_VIEW_ACCESS_READ) {
@@ -1094,24 +1131,31 @@ long lkmdbg_set_view_backing(struct lkmdbg_session *session, void __user *argp)
 	}
 
 	if (need_shadow && (!had_shadow || target_shadow_changed)) {
-		const u8 *shadow_source =
-			exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ?
-				new_exec_bytes :
-				new_write_bytes;
+		const u8 *shadow_source = NULL;
+
+		ret = lkmdbg_view_region_resolve_shadow_source(
+			write_backing_type, new_write_bytes, exec_backing_type,
+			new_exec_bytes, region->length, &shadow_source);
+		if (ret) {
+			mutex_unlock(&session->lock);
+			goto out_free;
+		}
 
 		ret = lkmdbg_view_region_install_wxshadow(
 			region, region->access_mask, shadow_source);
 		if (ret) {
 			if (had_shadow) {
-				const u8 *old_shadow_source =
-					region->exec_backing_type !=
-							LKMDBG_VIEW_BACKING_ORIGINAL ?
-						region->exec_bytes :
-						region->write_bytes;
+				const u8 *old_shadow_source = NULL;
 
-				(void)lkmdbg_view_region_install_wxshadow(
-					region, region->access_mask,
-					old_shadow_source);
+				if (!lkmdbg_view_region_resolve_shadow_source(
+					    region->write_backing_type,
+					    region->write_bytes,
+					    region->exec_backing_type,
+					    region->exec_bytes, region->length,
+					    &old_shadow_source))
+					(void)lkmdbg_view_region_install_wxshadow(
+						region, region->access_mask,
+						old_shadow_source);
 			}
 			mutex_unlock(&session->lock);
 			goto out_free;
@@ -1210,10 +1254,16 @@ long lkmdbg_set_view_policy(struct lkmdbg_session *session, void __user *argp)
 			return ret;
 		}
 	} else if (!had_shadow && need_shadow) {
-		const u8 *shadow_source =
-			region->exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ?
-				region->exec_bytes :
-				region->write_bytes;
+		const u8 *shadow_source = NULL;
+
+		ret = lkmdbg_view_region_resolve_shadow_source(
+			region->write_backing_type, region->write_bytes,
+			region->exec_backing_type, region->exec_bytes,
+			region->length, &shadow_source);
+		if (ret) {
+			mutex_unlock(&session->lock);
+			return ret;
+		}
 
 		ret = lkmdbg_view_region_install_wxshadow(
 			region, region->access_mask, shadow_source);

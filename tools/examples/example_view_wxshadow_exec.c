@@ -70,22 +70,25 @@ static const uint32_t view_exec_shadow_code[] = {
 };
 #endif
 
-static int build_exec_page(uint8_t *buf, size_t len, int shadow)
+static int build_exec_page(uint8_t *buf, size_t len, uint16_t retval)
 {
 #if defined(__aarch64__)
-	const void *src = shadow ? (const void *)view_exec_shadow_code :
-				    (const void *)view_exec_original_code;
+	uint32_t insn[2];
 
 	if (!buf || len < 8U)
 		return -1;
 
+	(void)view_exec_original_code;
+	(void)view_exec_shadow_code;
+	insn[0] = 0xd2800000U | ((uint32_t)retval << 5);
+	insn[1] = 0xd65f03c0U;
 	memset(buf, 0, len);
-	memcpy(buf, src, 8U);
+	memcpy(buf, insn, sizeof(insn));
 	return 0;
 #else
 	(void)buf;
 	(void)len;
-	(void)shadow;
+	(void)retval;
 	return -1;
 #endif
 }
@@ -113,10 +116,12 @@ int main(void)
 	uint8_t *page = MAP_FAILED;
 	uint8_t *original_page = NULL;
 	uint8_t *shadow_page = NULL;
+	uint8_t *patch_page = NULL;
 	uint8_t *kernel_read = NULL;
 	uint8_t *external_read = NULL;
 	struct lkmdbg_view_region_request region_reply;
-	struct lkmdbg_view_backing_request backing_reply;
+	struct lkmdbg_view_backing_request write_backing_reply;
+	struct lkmdbg_view_backing_request exec_backing_reply;
 	struct lkmdbg_view_backing_request reset_reply;
 	struct lkmdbg_view_region_query_request query_reply;
 	struct lkmdbg_view_region_handle_request remove_reply;
@@ -132,7 +137,8 @@ int main(void)
 	uint64_t retval = 0;
 
 	memset(&region_reply, 0, sizeof(region_reply));
-	memset(&backing_reply, 0, sizeof(backing_reply));
+	memset(&write_backing_reply, 0, sizeof(write_backing_reply));
+	memset(&exec_backing_reply, 0, sizeof(exec_backing_reply));
 	memset(&reset_reply, 0, sizeof(reset_reply));
 	memset(&query_reply, 0, sizeof(query_reply));
 	memset(&remove_reply, 0, sizeof(remove_reply));
@@ -152,13 +158,16 @@ int main(void)
 
 	original_page = malloc(page_size);
 	shadow_page = malloc(page_size);
+	patch_page = malloc(page_size);
 	kernel_read = malloc(page_size);
 	external_read = malloc(page_size);
-	if (!original_page || !shadow_page || !kernel_read || !external_read)
+	if (!original_page || !shadow_page || !patch_page || !kernel_read ||
+	    !external_read)
 		goto out;
 
-	if (build_exec_page(original_page, page_size, 0) < 0 ||
-	    build_exec_page(shadow_page, page_size, 1) < 0)
+	if (build_exec_page(original_page, page_size, 17U) < 0 ||
+	    build_exec_page(shadow_page, page_size, 34U) < 0 ||
+	    build_exec_page(patch_page, page_size, 51U) < 0)
 		goto out;
 	memcpy(page, original_page, page_size);
 
@@ -217,7 +226,9 @@ int main(void)
 	}
 
 	if (create_view_region(session_fd, (uintptr_t)page, page_size,
-			       LKMDBG_VIEW_ACCESS_READ | LKMDBG_VIEW_ACCESS_EXEC,
+			       LKMDBG_VIEW_ACCESS_READ |
+				       LKMDBG_VIEW_ACCESS_WRITE |
+				       LKMDBG_VIEW_ACCESS_EXEC,
 			       LKMDBG_VIEW_BACKEND_AUTO,
 			       LKMDBG_VIEW_FAULT_POLICY_TRAP_ONLY,
 			       LKMDBG_VIEW_SYNC_NONE,
@@ -225,10 +236,15 @@ int main(void)
 			       &region_reply) < 0)
 		goto out;
 
+	if (set_view_region_write_backing(session_fd, region_reply.region_id,
+					  shadow_page, page_size,
+					  LKMDBG_VIEW_BACKING_USER_BUFFER,
+					  &write_backing_reply) < 0)
+		goto out;
 	if (set_view_region_exec_backing(session_fd, region_reply.region_id,
 					 shadow_page, page_size,
 					 LKMDBG_VIEW_BACKING_USER_BUFFER,
-					 &backing_reply) < 0)
+					 &exec_backing_reply) < 0)
 		goto out;
 
 	if (query_view_regions(session_fd, region_reply.region_id, &entry, 1,
@@ -237,11 +253,13 @@ int main(void)
 	if (query_reply.entries_filled != 1 ||
 	    entry.active_backend != LKMDBG_VIEW_BACKEND_WXSHADOW ||
 	    entry.read_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	    entry.write_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER ||
 	    entry.exec_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER) {
 		fprintf(stderr,
-			"example_view_wxshadow_exec: bad query backend=%u read=%u exec=%u filled=%u\n",
+			"example_view_wxshadow_exec: bad query backend=%u read=%u write=%u exec=%u filled=%u\n",
 			entry.active_backend, entry.read_backing_type,
-			entry.exec_backing_type, query_reply.entries_filled);
+			entry.write_backing_type, entry.exec_backing_type,
+			query_reply.entries_filled);
 		goto out;
 	}
 
@@ -280,6 +298,42 @@ int main(void)
 		goto out;
 	}
 
+	bytes_done = 0;
+	if (write_target_memory(session_fd, (uintptr_t)page, patch_page, page_size,
+				&bytes_done, 0) < 0 ||
+	    bytes_done != page_size ||
+	    read_target_memory(session_fd, (uintptr_t)page, kernel_read, page_size,
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != page_size ||
+	    memcmp(kernel_read, patch_page, page_size) != 0) {
+		fprintf(stderr,
+			"example_view_wxshadow_exec: WRITE_MEM patch mismatch bytes_done=%u\n",
+			bytes_done);
+		goto out;
+	}
+
+	memset(external_read, 0, page_size);
+	if (process_vm_readv(child, &local_iov, 1, &remote_iov, 1, 0) !=
+	    (ssize_t)page_size ||
+	    memcmp(external_read, original_page, page_size) != 0) {
+		fprintf(stderr,
+			"example_view_wxshadow_exec: patched external read mismatch errno=%d\n",
+			errno);
+		goto out;
+	}
+
+	if (child_call0(cmd_pipe[1], resp_pipe[0], (uintptr_t)page, &retval) < 0 ||
+	    retval != 51U) {
+		fprintf(stderr,
+			"example_view_wxshadow_exec: patched retval mismatch got=%" PRIu64 "\n",
+			retval);
+		goto out;
+	}
+
+	if (set_view_region_write_backing(session_fd, region_reply.region_id, NULL,
+					  0, LKMDBG_VIEW_BACKING_ORIGINAL,
+					  &reset_reply) < 0)
+		goto out;
 	if (set_view_region_exec_backing(session_fd, region_reply.region_id, NULL,
 					 0, LKMDBG_VIEW_BACKING_ORIGINAL,
 					 &reset_reply) < 0)
@@ -291,11 +345,14 @@ int main(void)
 			       &query_reply) < 0)
 		goto out;
 	if (query_reply.entries_filled != 1 ||
+	    entry.write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	    entry.write_source_id != 0 ||
 	    entry.exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
 	    entry.exec_source_id != 0) {
 		fprintf(stderr,
-			"example_view_wxshadow_exec: reset query mismatch filled=%u exec=%u source=%" PRIu64 "\n",
-			query_reply.entries_filled, entry.exec_backing_type,
+			"example_view_wxshadow_exec: reset query mismatch filled=%u write=%u write_source=%" PRIu64 " exec=%u exec_source=%" PRIu64 "\n",
+			query_reply.entries_filled, entry.write_backing_type,
+			(uint64_t)entry.write_source_id, entry.exec_backing_type,
 			(uint64_t)entry.exec_source_id);
 		goto out;
 	}
@@ -319,9 +376,10 @@ int main(void)
 	}
 
 	status = 0;
-	printf("example_view_wxshadow_exec: ok region=%" PRIu64 " source=%" PRIu64 "\n",
+	printf("example_view_wxshadow_exec: ok region=%" PRIu64 " write_source=%" PRIu64 " exec_source=%" PRIu64 "\n",
 	       (uint64_t)region_reply.region_id,
-	       (uint64_t)backing_reply.source_id);
+	       (uint64_t)write_backing_reply.source_id,
+	       (uint64_t)exec_backing_reply.source_id);
 
 out:
 	if (cmd_pipe[1] >= 0) {
@@ -345,6 +403,7 @@ out:
 		waitpid(child, NULL, 0);
 	free(external_read);
 	free(kernel_read);
+	free(patch_page);
 	free(shadow_page);
 	free(original_page);
 	if (page != MAP_FAILED)

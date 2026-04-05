@@ -648,30 +648,23 @@ static void fill_pattern(unsigned char *buf, size_t len, unsigned int seed)
 		buf[i] = pattern_byte(i, seed);
 }
 
-static int build_view_exec_page(unsigned char *buf, size_t len, int shadow)
+static int build_view_exec_page(unsigned char *buf, size_t len, uint16_t retval)
 {
 #if defined(__aarch64__)
-	static const uint32_t original_code[] = {
-		0xd2800220U,
-		0xd65f03c0U,
-	};
-	static const uint32_t shadow_code[] = {
-		0xd2800440U,
-		0xd65f03c0U,
-	};
-	const void *src = shadow ? (const void *)shadow_code :
-				    (const void *)original_code;
+	uint32_t insn[2];
 
 	if (!buf || len < 8U)
 		return -1;
 
+	insn[0] = 0xd2800000U | ((uint32_t)retval << 5);
+	insn[1] = 0xd65f03c0U;
 	memset(buf, 0, len);
-	memcpy(buf, src, 8U);
+	memcpy(buf, insn, sizeof(insn));
 	return 0;
 #else
 	(void)buf;
 	(void)len;
-	(void)shadow;
+	(void)retval;
 	return -1;
 #endif
 }
@@ -1942,7 +1935,8 @@ static int verify_view_wxshadow(int session_fd, pid_t child,
 	return 0;
 #else
 	struct lkmdbg_view_region_request region_reply;
-	struct lkmdbg_view_backing_request backing_reply;
+	struct lkmdbg_view_backing_request write_backing_reply;
+	struct lkmdbg_view_backing_request exec_backing_reply;
 	struct lkmdbg_view_backing_request reset_reply;
 	struct lkmdbg_view_region_query_request query_reply;
 	struct lkmdbg_view_region_handle_request remove_reply;
@@ -1951,6 +1945,7 @@ static int verify_view_wxshadow(int session_fd, pid_t child,
 	struct iovec remote_iov;
 	uint8_t *original_buf = NULL;
 	uint8_t *shadow_buf = NULL;
+	uint8_t *patch_buf = NULL;
 	uint8_t *kernel_buf = NULL;
 	uint8_t *external_buf = NULL;
 	uintptr_t region_addr = info->view_exec_addr;
@@ -1960,7 +1955,8 @@ static int verify_view_wxshadow(int session_fd, pid_t child,
 	int ret = -1;
 
 	memset(&region_reply, 0, sizeof(region_reply));
-	memset(&backing_reply, 0, sizeof(backing_reply));
+	memset(&write_backing_reply, 0, sizeof(write_backing_reply));
+	memset(&exec_backing_reply, 0, sizeof(exec_backing_reply));
 	memset(&reset_reply, 0, sizeof(reset_reply));
 	memset(&query_reply, 0, sizeof(query_reply));
 	memset(&remove_reply, 0, sizeof(remove_reply));
@@ -1968,15 +1964,18 @@ static int verify_view_wxshadow(int session_fd, pid_t child,
 
 	original_buf = malloc(info->page_size);
 	shadow_buf = malloc(info->page_size);
+	patch_buf = malloc(info->page_size);
 	kernel_buf = malloc(info->page_size);
 	external_buf = malloc(info->page_size);
-	if (!original_buf || !shadow_buf || !kernel_buf || !external_buf) {
+	if (!original_buf || !shadow_buf || !patch_buf || !kernel_buf ||
+	    !external_buf) {
 		fprintf(stderr, "view wxshadow allocation failed\n");
 		goto out;
 	}
 
-	if (build_view_exec_page(original_buf, info->page_size, 0) < 0 ||
-	    build_view_exec_page(shadow_buf, info->page_size, 1) < 0) {
+	if (build_view_exec_page(original_buf, info->page_size, 17U) < 0 ||
+	    build_view_exec_page(shadow_buf, info->page_size, 34U) < 0 ||
+	    build_view_exec_page(patch_buf, info->page_size, 51U) < 0) {
 		fprintf(stderr, "view wxshadow build exec pages failed\n");
 		goto out;
 	}
@@ -1995,6 +1994,7 @@ static int verify_view_wxshadow(int session_fd, pid_t child,
 
 	if (create_view_region(session_fd, region_addr, info->page_size,
 			       LKMDBG_VIEW_ACCESS_READ |
+				       LKMDBG_VIEW_ACCESS_WRITE |
 				       LKMDBG_VIEW_ACCESS_EXEC,
 			       LKMDBG_VIEW_BACKEND_AUTO,
 			       LKMDBG_VIEW_FAULT_POLICY_TRAP_ONLY,
@@ -2011,10 +2011,15 @@ static int verify_view_wxshadow(int session_fd, pid_t child,
 	}
 	region_active = 1;
 
+	if (set_view_region_write_backing(session_fd, region_reply.region_id,
+					  shadow_buf, info->page_size,
+					  LKMDBG_VIEW_BACKING_USER_BUFFER,
+					  &write_backing_reply) < 0)
+		goto out;
 	if (set_view_region_exec_backing(session_fd, region_reply.region_id,
 					 shadow_buf, info->page_size,
 					 LKMDBG_VIEW_BACKING_USER_BUFFER,
-					 &backing_reply) < 0)
+					 &exec_backing_reply) < 0)
 		goto out;
 
 	if (query_view_regions(session_fd, region_reply.region_id, &entry, 1,
@@ -2024,11 +2029,13 @@ static int verify_view_wxshadow(int session_fd, pid_t child,
 	    entry.region_id != region_reply.region_id ||
 	    entry.active_backend != LKMDBG_VIEW_BACKEND_WXSHADOW ||
 	    entry.read_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	    entry.write_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER ||
 	    entry.exec_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER) {
 		fprintf(stderr,
-			"bad wxshadow query filled=%u backend=%u read=%u exec=%u region=%" PRIu64 "\n",
+			"bad wxshadow query filled=%u backend=%u read=%u write=%u exec=%u region=%" PRIu64 "\n",
 			query_reply.entries_filled, entry.active_backend,
-			entry.read_backing_type, entry.exec_backing_type,
+			entry.read_backing_type, entry.write_backing_type,
+			entry.exec_backing_type,
 			(uint64_t)entry.region_id);
 		goto out;
 	}
@@ -2070,6 +2077,48 @@ static int verify_view_wxshadow(int session_fd, pid_t child,
 		goto out;
 	}
 
+	bytes_done = 0;
+	if (write_target_memory(session_fd, region_addr, patch_buf, info->page_size,
+				&bytes_done, 0) < 0 ||
+	    bytes_done != info->page_size) {
+		fprintf(stderr, "view wxshadow WRITE_MEM failed bytes_done=%u\n",
+			bytes_done);
+		goto out;
+	}
+
+	memset(kernel_buf, 0, info->page_size);
+	bytes_done = 0;
+	if (read_target_memory(session_fd, region_addr, kernel_buf, info->page_size,
+			       &bytes_done, 0) < 0 ||
+	    bytes_done != info->page_size ||
+	    memcmp(kernel_buf, patch_buf, info->page_size) != 0) {
+		fprintf(stderr, "view wxshadow patched READ_MEM mismatch bytes_done=%u\n",
+			bytes_done);
+		goto out;
+	}
+
+	memset(external_buf, 0, info->page_size);
+	if (process_vm_readv(child, &local_iov, 1, &remote_iov, 1, 0) !=
+	    (ssize_t)info->page_size ||
+	    memcmp(external_buf, original_buf, info->page_size) != 0) {
+		fprintf(stderr, "view wxshadow patched external read mismatch errno=%d\n",
+			errno);
+		goto out;
+	}
+
+	if (child_call_remote0(cmd_fd, resp_fd, region_addr, &retval) < 0)
+		goto out;
+	if (retval != 51U) {
+		fprintf(stderr,
+			"view wxshadow patched retval mismatch got=%" PRIu64 "\n",
+			retval);
+		goto out;
+	}
+
+	if (set_view_region_write_backing(session_fd, region_reply.region_id, NULL,
+					  0, LKMDBG_VIEW_BACKING_ORIGINAL,
+					  &reset_reply) < 0)
+		goto out;
 	if (set_view_region_exec_backing(session_fd, region_reply.region_id, NULL,
 					 0, LKMDBG_VIEW_BACKING_ORIGINAL,
 					 &reset_reply) < 0)
@@ -2081,11 +2130,14 @@ static int verify_view_wxshadow(int session_fd, pid_t child,
 			       &query_reply) < 0)
 		goto out;
 	if (query_reply.entries_filled != 1 ||
+	    entry.write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	    entry.write_source_id != 0 ||
 	    entry.exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
 	    entry.exec_source_id != 0) {
 		fprintf(stderr,
-			"view wxshadow reset query mismatch filled=%u exec_backing=%u source=%" PRIu64 "\n",
-			query_reply.entries_filled, entry.exec_backing_type,
+			"view wxshadow reset query mismatch filled=%u write=%u write_source=%" PRIu64 " exec=%u exec_source=%" PRIu64 "\n",
+			query_reply.entries_filled, entry.write_backing_type,
+			(uint64_t)entry.write_source_id, entry.exec_backing_type,
 			(uint64_t)entry.exec_source_id);
 		goto out;
 	}
@@ -2113,15 +2165,17 @@ static int verify_view_wxshadow(int session_fd, pid_t child,
 	}
 
 	ret = 0;
-	printf("selftest view wxshadow ok region=%" PRIu64 " backend=%u exec_source=%" PRIu64 "\n",
+	printf("selftest view wxshadow ok region=%" PRIu64 " backend=%u write_source=%" PRIu64 " exec_source=%" PRIu64 "\n",
 	       (uint64_t)region_reply.region_id, entry.active_backend,
-	       (uint64_t)backing_reply.source_id);
+	       (uint64_t)write_backing_reply.source_id,
+	       (uint64_t)exec_backing_reply.source_id);
 
 out:
 	if (region_active)
 		remove_view_region(session_fd, region_reply.region_id, &remove_reply);
 	free(external_buf);
 	free(kernel_buf);
+	free(patch_buf);
 	free(shadow_buf);
 	free(original_buf);
 	return ret;
@@ -3477,7 +3531,7 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 			 "slot-%u-initial", i);
 	}
 	fill_pattern(large_map, SELFTEST_LARGE_MAP_LEN, 1);
-	if (build_view_exec_page(view_exec_map, page_size, 0) < 0)
+	if (build_view_exec_page(view_exec_map, page_size, 17U) < 0)
 		return 2;
 	*mmu_watch_map = 0x123456789abcdef0ULL;
 
