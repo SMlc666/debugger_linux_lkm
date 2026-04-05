@@ -273,7 +273,8 @@ lkmdbg_validate_view_backing_request(const struct lkmdbg_view_backing_request *r
 		return -EINVAL;
 	if (req->backing_type > LKMDBG_VIEW_BACKING_REMOTE_ALLOC)
 		return -EINVAL;
-	if (req->source_addr & ~PAGE_MASK)
+	if (req->backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER &&
+	    (req->source_addr & ~PAGE_MASK))
 		return -EINVAL;
 	if (req->source_addr + req->source_length < req->source_addr)
 		return -EINVAL;
