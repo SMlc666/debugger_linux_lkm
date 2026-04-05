@@ -29,6 +29,7 @@ struct lkmdbg_view_region {
 	struct lkmdbg_session *session;
 	u64 region_id;
 	pid_t target_tgid;
+	pid_t scope_tid;
 	u64 base_addr;
 	u64 length;
 	u64 read_source_id;
@@ -41,6 +42,7 @@ struct lkmdbg_view_region {
 	u32 fault_policy;
 	u32 sync_policy;
 	u32 writeback_policy;
+	u32 scope;
 	u32 state;
 	u32 read_backing_type;
 	u32 write_backing_type;
@@ -791,7 +793,7 @@ lkmdbg_validate_view_region_request(const struct lkmdbg_view_region_request *req
 	     ~(LKMDBG_VIEW_ACCESS_READ | LKMDBG_VIEW_ACCESS_WRITE |
 	       LKMDBG_VIEW_ACCESS_EXEC)))
 		return -EINVAL;
-	if (req->flags || req->reserved0 || req->reserved1)
+	if (req->flags)
 		return -EINVAL;
 	if (req->backend > LKMDBG_VIEW_BACKEND_GENERIC_SWITCH)
 		return -EINVAL;
@@ -801,6 +803,21 @@ lkmdbg_validate_view_region_request(const struct lkmdbg_view_region_request *req
 		return -EINVAL;
 	if (req->writeback_policy > LKMDBG_VIEW_WRITEBACK_COMMIT_EXEC_VIEW)
 		return -EINVAL;
+	if (req->scope > LKMDBG_VIEW_SCOPE_THREAD_SET)
+		return -EINVAL;
+	switch (req->scope) {
+	case LKMDBG_VIEW_SCOPE_PROCESS:
+		if (req->scope_tid)
+			return -EINVAL;
+		break;
+	case LKMDBG_VIEW_SCOPE_THREAD:
+	case LKMDBG_VIEW_SCOPE_THREAD_SET:
+		if (req->scope_tid <= 0)
+			return -EINVAL;
+		break;
+	default:
+		return -EINVAL;
+	}
 	return 0;
 }
 
@@ -883,6 +900,8 @@ long lkmdbg_create_view_region(struct lkmdbg_session *session, void __user *argp
 	mutex_unlock(&session->lock);
 	if (target_tgid <= 0)
 		return -ENODEV;
+	if (req.scope != LKMDBG_VIEW_SCOPE_PROCESS)
+		return -EOPNOTSUPP;
 
 	ret = lkmdbg_view_region_prepare_backend(
 		req.backend, req.access_mask, LKMDBG_VIEW_BACKING_ORIGINAL,
@@ -906,6 +925,7 @@ long lkmdbg_create_view_region(struct lkmdbg_session *session, void __user *argp
 	refcount_set(&region->refs, 1);
 	region->session = session;
 	region->target_tgid = target_tgid;
+	region->scope_tid = 0;
 	region->base_addr = req.base_addr;
 	region->length = req.length;
 	region->access_mask = req.access_mask;
@@ -915,6 +935,7 @@ long lkmdbg_create_view_region(struct lkmdbg_session *session, void __user *argp
 	region->fault_policy = req.fault_policy;
 	region->sync_policy = req.sync_policy;
 	region->writeback_policy = req.writeback_policy;
+	region->scope = req.scope;
 	region->read_backing_type = LKMDBG_VIEW_BACKING_ORIGINAL;
 	region->write_backing_type = LKMDBG_VIEW_BACKING_ORIGINAL;
 	region->exec_backing_type = LKMDBG_VIEW_BACKING_ORIGINAL;
@@ -1336,11 +1357,13 @@ long lkmdbg_query_view_regions(struct lkmdbg_session *session, void __user *argp
 		entries[filled].sync_policy = region->sync_policy;
 		entries[filled].writeback_policy = region->writeback_policy;
 		entries[filled].state = region->state;
+		entries[filled].last_fault_access = 0;
 		entries[filled].read_backing_type = region->read_backing_type;
 		entries[filled].write_backing_type = region->write_backing_type;
 		entries[filled].exec_backing_type = region->exec_backing_type;
+		entries[filled].scope = region->scope;
 		filled++;
-	}
+		}
 	mutex_unlock(&session->lock);
 
 	req.entries_filled = filled;
