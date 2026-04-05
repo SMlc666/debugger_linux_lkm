@@ -215,6 +215,7 @@ enum {
 	CHILD_OP_FILL_REMOTE = 9,
 	CHILD_OP_TRIGGER_SYSCALL = 10,
 	CHILD_OP_PING = 11,
+	CHILD_OP_WRITE_REMOTE = 12,
 };
 
 static int expect_stop_state(int session_fd, uint32_t reason,
@@ -227,6 +228,8 @@ static int child_trigger_syscall_ex(int cmd_fd, int resp_fd, long syscall_nr,
 				    int64_t *retval_out);
 static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   void *buf, size_t len);
+static int child_write_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
+				    const void *buf, size_t len);
 static int child_fill_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   size_t len, uint8_t value);
 static int query_target_pages_ex(int session_fd, uint64_t start_addr,
@@ -1708,12 +1711,14 @@ static int verify_view_external_read(int session_fd, pid_t child,
 	struct iovec local_iov;
 	struct iovec remote_iov;
 	uint8_t *fake_buf = NULL;
+	uint8_t *original_buf = NULL;
 	uint8_t *child_buf = NULL;
 	uint8_t *kernel_buf = NULL;
 	uint8_t *external_buf = NULL;
 	uintptr_t region_addr;
 	uint32_t bytes_done = 0;
 	int region_active = 0;
+	int remote_restore_needed = 0;
 	int ret = -1;
 
 	memset(&region_reply, 0, sizeof(region_reply));
@@ -1730,17 +1735,23 @@ static int verify_view_external_read(int session_fd, pid_t child,
 	}
 
 	fake_buf = malloc(info->page_size);
+	original_buf = malloc(info->page_size);
 	child_buf = malloc(info->page_size);
 	kernel_buf = malloc(info->page_size);
 	external_buf = malloc(info->page_size);
-	if (!fake_buf || !child_buf || !kernel_buf || !external_buf) {
+	if (!fake_buf || !original_buf || !child_buf || !kernel_buf ||
+	    !external_buf) {
 		fprintf(stderr, "view external read allocation failed\n");
 		goto out;
 	}
 
+	if (child_read_remote_range(cmd_fd, resp_fd, region_addr, original_buf,
+				    info->page_size) < 0)
+		goto out;
 	if (child_fill_remote_range(cmd_fd, resp_fd, region_addr, info->page_size,
 				    0x44U) < 0)
 		goto out;
+	remote_restore_needed = 1;
 	memset(fake_buf, 0xC3, info->page_size);
 
 	if (create_view_region(session_fd, region_addr, info->page_size,
@@ -1858,11 +1869,16 @@ static int verify_view_external_read(int session_fd, pid_t child,
 	       (uint64_t)entry.read_source_id);
 
 out:
+	if (remote_restore_needed) {
+		(void)child_write_remote_range(cmd_fd, resp_fd, region_addr,
+					       original_buf, info->page_size);
+	}
 	if (region_active)
 		remove_view_region(session_fd, region_reply.region_id, &remove_reply);
 	free(external_buf);
 	free(kernel_buf);
 	free(child_buf);
+	free(original_buf);
 	free(fake_buf);
 	return ret;
 }
@@ -3337,6 +3353,29 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 			    (ssize_t)sizeof(resident))
 				return 2;
 			break;
+		case CHILD_OP_WRITE_REMOTE:
+		{
+			void *tmp;
+
+			resident = 0;
+			if (!cmd.addr || !cmd.length ||
+			    cmd.length > SELFTEST_LARGE_MAP_LEN)
+				return 2;
+			tmp = malloc(cmd.length);
+			if (!tmp)
+				return 2;
+			if (read_full(cmd_fd, tmp, cmd.length) !=
+			    (ssize_t)cmd.length) {
+				free(tmp);
+				return 2;
+			}
+			memcpy((void *)(uintptr_t)cmd.addr, tmp, cmd.length);
+			free(tmp);
+			if (write_full(resp_fd, &resident, sizeof(resident)) !=
+			    (ssize_t)sizeof(resident))
+				return 2;
+			break;
+		}
 		case CHILD_OP_SPAWN_THREAD:
 		{
 			pthread_t temp_thread;
@@ -3511,6 +3550,39 @@ static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 
 	if (read_full(resp_fd, buf, len) != (ssize_t)len) {
 		fprintf(stderr, "failed to read child remote read reply\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int child_write_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
+				    const void *buf, size_t len)
+{
+	struct child_cmd cmd = {
+		.op = CHILD_OP_WRITE_REMOTE,
+		.addr = addr,
+		.length = (uint32_t)len,
+	};
+	int ret;
+
+	if (!buf || !len || len > UINT32_MAX)
+		return -1;
+
+	if (write_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
+		fprintf(stderr, "failed to send child remote write command\n");
+		return -1;
+	}
+	if (write_full(cmd_fd, buf, len) != (ssize_t)len) {
+		fprintf(stderr, "failed to send child remote write payload\n");
+		return -1;
+	}
+	if (read_full(resp_fd, &ret, sizeof(ret)) != (ssize_t)sizeof(ret)) {
+		fprintf(stderr, "failed to read child remote write reply\n");
+		return -1;
+	}
+	if (ret) {
+		fprintf(stderr, "child remote write failed ret=%d\n", ret);
 		return -1;
 	}
 
