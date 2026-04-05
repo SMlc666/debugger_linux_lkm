@@ -52,15 +52,6 @@ static const char *describe_stealth_flags(uint32_t flags, char *buf,
 	return buf;
 }
 
-static const char *describe_target_anchor(const struct lkmdbg_status_reply *reply)
-{
-	if (reply->target_tgid <= 0 || reply->target_tid <= 0)
-		return "none";
-	if (reply->target_tid == reply->target_tgid)
-		return "process-anchor";
-	return "thread-anchor";
-}
-
 static void print_status(const struct lkmdbg_status_reply *reply)
 {
 	char stealth_flags_buf[48];
@@ -73,7 +64,6 @@ static void print_status(const struct lkmdbg_status_reply *reply)
 	printf("owner_tgid=%d\n", reply->owner_tgid);
 	printf("target_tgid=%d\n", reply->target_tgid);
 	printf("target_tid=%d\n", reply->target_tid);
-	printf("target_anchor=%s\n", describe_target_anchor(reply));
 	printf("event_queue_depth=%u\n", reply->event_queue_depth);
 	printf("session_id=%" PRIu64 "\n", (uint64_t)reply->session_id);
 	printf("active_sessions=%" PRIu64 "\n",

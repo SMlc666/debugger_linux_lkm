@@ -192,10 +192,6 @@
 #define LKMDBG_VIEW_KIND_WRITE 2U
 #define LKMDBG_VIEW_KIND_EXEC 3U
 
-#define LKMDBG_VIEW_SCOPE_PROCESS 0U
-#define LKMDBG_VIEW_SCOPE_THREAD 1U
-#define LKMDBG_VIEW_SCOPE_THREAD_SET 2U
-
 /*
  * AUTO lets the kernel pick the narrowest backend that satisfies the region
  * semantics. The explicit modes let advanced callers force a specific path.
@@ -654,8 +650,7 @@ struct lkmdbg_remote_thread_create_request {
 /*
  * A view region describes one virtual-address range whose effective backing can
  * vary by access type. For example, user-mode reads can observe one backing
- * while instruction fetches execute from another. Scope is explicit even when
- * the current backend only installs process-wide state.
+ * while instruction fetches execute from another.
  */
 struct lkmdbg_view_region_request {
 	__u32 version;
@@ -669,8 +664,8 @@ struct lkmdbg_view_region_request {
 	__u32 fault_policy;
 	__u32 sync_policy;
 	__u32 writeback_policy;
-	__u32 scope;
-	__s32 scope_tid;
+	__u32 reserved0;
+	__u32 reserved1;
 };
 
 struct lkmdbg_view_region_handle_request {
@@ -730,7 +725,7 @@ struct lkmdbg_view_region_entry {
 	__u32 read_backing_type;
 	__u32 write_backing_type;
 	__u32 exec_backing_type;
-	__u32 scope;
+	__u32 reserved0;
 };
 
 struct lkmdbg_view_region_query_request {

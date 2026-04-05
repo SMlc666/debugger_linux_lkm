@@ -93,7 +93,6 @@ int main(void)
 
 	if (create_view_region(session_fd, (uintptr_t)page, page_size,
 			       LKMDBG_VIEW_ACCESS_READ | LKMDBG_VIEW_ACCESS_EXEC,
-			       LKMDBG_VIEW_SCOPE_PROCESS, 0,
 			       LKMDBG_VIEW_BACKEND_AUTO,
 			       LKMDBG_VIEW_FAULT_POLICY_TRAP_ONLY,
 			       LKMDBG_VIEW_SYNC_NONE,
@@ -118,18 +117,14 @@ int main(void)
 	if (query_view_regions(session_fd, region_reply.region_id, &entry, 1,
 			       &query_reply) < 0)
 		goto out;
-	if (region_reply.scope != LKMDBG_VIEW_SCOPE_PROCESS ||
-	    region_reply.scope_tid != 0 ||
-	    query_reply.entries_filled != 1 ||
+	if (query_reply.entries_filled != 1 ||
 	    entry.region_id != region_reply.region_id ||
 	    entry.active_backend != LKMDBG_VIEW_BACKEND_EXTERNAL_READ ||
-	    entry.scope != LKMDBG_VIEW_SCOPE_PROCESS ||
 	    entry.read_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER ||
 	    entry.write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
 	    entry.exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL) {
 		fprintf(stderr,
-			"example_view_external_read: bad query scope=%u scope_tid=%d entry_scope=%u active_backend=%u read=%u write=%u exec=%u filled=%u\n",
-			region_reply.scope, region_reply.scope_tid, entry.scope,
+			"example_view_external_read: bad query active_backend=%u read=%u write=%u exec=%u filled=%u\n",
 			entry.active_backend, entry.read_backing_type,
 			entry.write_backing_type, entry.exec_backing_type,
 			query_reply.entries_filled);

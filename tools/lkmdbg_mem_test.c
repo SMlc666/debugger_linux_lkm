@@ -1784,7 +1784,6 @@ static int verify_view_external_read(int session_fd, pid_t child,
 	if (create_view_region(session_fd, region_addr, info->page_size,
 			       LKMDBG_VIEW_ACCESS_READ |
 				       LKMDBG_VIEW_ACCESS_EXEC,
-			       LKMDBG_VIEW_SCOPE_PROCESS, 0,
 			       LKMDBG_VIEW_BACKEND_AUTO,
 			       LKMDBG_VIEW_FAULT_POLICY_TRAP_ONLY,
 			       LKMDBG_VIEW_SYNC_NONE,
@@ -1817,20 +1816,15 @@ static int verify_view_external_read(int session_fd, pid_t child,
 	if (query_view_regions(session_fd, region_reply.region_id, &entry, 1,
 			       &query_reply) < 0)
 		goto out;
-	if (region_reply.scope != LKMDBG_VIEW_SCOPE_PROCESS ||
-	    region_reply.scope_tid != 0 ||
-	    query_reply.entries_filled != 1 ||
+	if (query_reply.entries_filled != 1 ||
 	    entry.region_id != region_reply.region_id ||
 	    entry.active_backend != LKMDBG_VIEW_BACKEND_EXTERNAL_READ ||
-	    entry.scope != LKMDBG_VIEW_SCOPE_PROCESS ||
 	    entry.read_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER ||
 	    entry.write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
 	    entry.exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL) {
 		fprintf(stderr,
-			"bad view region query scope=%u scope_tid=%d filled=%u backend=%u entry_scope=%u read=%u write=%u exec=%u region=%" PRIu64 "\n",
-			region_reply.scope, region_reply.scope_tid,
+			"bad view region query filled=%u backend=%u read=%u write=%u exec=%u region=%" PRIu64 "\n",
 			query_reply.entries_filled, entry.active_backend,
-			entry.scope,
 			entry.read_backing_type, entry.write_backing_type,
 			entry.exec_backing_type, (uint64_t)entry.region_id);
 		goto out;
@@ -2002,7 +1996,6 @@ static int verify_view_wxshadow(int session_fd, pid_t child,
 			       LKMDBG_VIEW_ACCESS_READ |
 				       LKMDBG_VIEW_ACCESS_WRITE |
 				       LKMDBG_VIEW_ACCESS_EXEC,
-			       LKMDBG_VIEW_SCOPE_PROCESS, 0,
 			       LKMDBG_VIEW_BACKEND_AUTO,
 			       LKMDBG_VIEW_FAULT_POLICY_TRAP_ONLY,
 			       LKMDBG_VIEW_SYNC_NONE,
@@ -2032,20 +2025,15 @@ static int verify_view_wxshadow(int session_fd, pid_t child,
 	if (query_view_regions(session_fd, region_reply.region_id, &entry, 1,
 			       &query_reply) < 0)
 		goto out;
-	if (region_reply.scope != LKMDBG_VIEW_SCOPE_PROCESS ||
-	    region_reply.scope_tid != 0 ||
-	    query_reply.entries_filled != 1 ||
+	if (query_reply.entries_filled != 1 ||
 	    entry.region_id != region_reply.region_id ||
 	    entry.active_backend != LKMDBG_VIEW_BACKEND_WXSHADOW ||
-	    entry.scope != LKMDBG_VIEW_SCOPE_PROCESS ||
 	    entry.read_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
 	    entry.write_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER ||
 	    entry.exec_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER) {
 		fprintf(stderr,
-			"bad wxshadow query scope=%u scope_tid=%d filled=%u backend=%u entry_scope=%u read=%u write=%u exec=%u region=%" PRIu64 "\n",
-			region_reply.scope, region_reply.scope_tid,
+			"bad wxshadow query filled=%u backend=%u read=%u write=%u exec=%u region=%" PRIu64 "\n",
 			query_reply.entries_filled, entry.active_backend,
-			entry.scope,
 			entry.read_backing_type, entry.write_backing_type,
 			entry.exec_backing_type,
 			(uint64_t)entry.region_id);

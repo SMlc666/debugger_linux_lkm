@@ -211,8 +211,7 @@ int write_physical_memory_flags(int session_fd, uint64_t phys_addr,
 }
 
 int create_view_region(int session_fd, uintptr_t base_addr, uint64_t length,
-		       uint32_t access_mask, uint32_t scope, int32_t scope_tid,
-		       uint32_t backend,
+		       uint32_t access_mask, uint32_t backend,
 		       uint32_t fault_policy, uint32_t sync_policy,
 		       uint32_t writeback_policy,
 		       struct lkmdbg_view_region_request *reply_out)
@@ -223,8 +222,6 @@ int create_view_region(int session_fd, uintptr_t base_addr, uint64_t length,
 		.base_addr = base_addr,
 		.length = length,
 		.access_mask = access_mask,
-		.scope = scope,
-		.scope_tid = scope_tid,
 		.backend = backend,
 		.fault_policy = fault_policy,
 		.sync_policy = sync_policy,
