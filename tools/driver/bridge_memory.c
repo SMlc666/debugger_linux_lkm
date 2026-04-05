@@ -238,16 +238,16 @@ int create_view_region(int session_fd, uintptr_t base_addr, uint64_t length,
 	return 0;
 }
 
-int set_view_region_read_backing(int session_fd, uint64_t region_id,
-				 const void *buf, uint64_t length,
-				 uint32_t backing_type,
-				 struct lkmdbg_view_backing_request *reply_out)
+int set_view_region_backing(int session_fd, uint64_t region_id,
+			    uint32_t view_kind, const void *buf,
+			    uint64_t length, uint32_t backing_type,
+			    struct lkmdbg_view_backing_request *reply_out)
 {
 	struct lkmdbg_view_backing_request req = {
 		.version = LKMDBG_PROTO_VERSION,
 		.size = sizeof(req),
 		.region_id = region_id,
-		.view_kind = LKMDBG_VIEW_KIND_READ,
+		.view_kind = view_kind,
 		.backing_type = backing_type,
 		.source_addr = (uintptr_t)buf,
 		.source_length = length,
@@ -261,6 +261,36 @@ int set_view_region_read_backing(int session_fd, uint64_t region_id,
 	if (reply_out)
 		*reply_out = req;
 	return 0;
+}
+
+int set_view_region_read_backing(int session_fd, uint64_t region_id,
+				 const void *buf, uint64_t length,
+				 uint32_t backing_type,
+				 struct lkmdbg_view_backing_request *reply_out)
+{
+	return set_view_region_backing(session_fd, region_id,
+				       LKMDBG_VIEW_KIND_READ, buf, length,
+				       backing_type, reply_out);
+}
+
+int set_view_region_write_backing(int session_fd, uint64_t region_id,
+				  const void *buf, uint64_t length,
+				  uint32_t backing_type,
+				  struct lkmdbg_view_backing_request *reply_out)
+{
+	return set_view_region_backing(session_fd, region_id,
+				       LKMDBG_VIEW_KIND_WRITE, buf, length,
+				       backing_type, reply_out);
+}
+
+int set_view_region_exec_backing(int session_fd, uint64_t region_id,
+				 const void *buf, uint64_t length,
+				 uint32_t backing_type,
+				 struct lkmdbg_view_backing_request *reply_out)
+{
+	return set_view_region_backing(session_fd, region_id,
+				       LKMDBG_VIEW_KIND_EXEC, buf, length,
+				       backing_type, reply_out);
 }
 
 int set_view_region_policy(int session_fd, uint64_t region_id, uint32_t backend,

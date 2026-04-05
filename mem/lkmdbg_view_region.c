@@ -38,6 +38,20 @@ struct lkmdbg_view_region {
 static LIST_HEAD(lkmdbg_view_region_global_list);
 static DEFINE_SPINLOCK(lkmdbg_view_region_global_lock);
 
+static void lkmdbg_view_region_refresh_active_state(
+	struct lkmdbg_view_region *region)
+{
+	if (!region)
+		return;
+
+	if (region->read_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	    region->write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	    region->exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL)
+		region->state |= LKMDBG_VIEW_REGION_STATE_ACTIVE;
+	else
+		region->state &= ~LKMDBG_VIEW_REGION_STATE_ACTIVE;
+}
+
 static void lkmdbg_view_region_destroy(struct lkmdbg_view_region *region)
 {
 	if (!region)
@@ -179,26 +193,52 @@ static void lkmdbg_view_region_overlay_kernel(pid_t target_tgid, u64 remote_addr
 	}
 }
 
-static int lkmdbg_view_region_prepare_backend(u32 requested_backend,
-					      u32 *active_backend_out)
+static int lkmdbg_view_region_select_external_read(
+	u32 access_mask, u32 read_backing_type, u32 write_backing_type,
+	u32 exec_backing_type, u32 fault_policy, u32 sync_policy,
+	u32 writeback_policy, u32 *active_backend_out)
 {
-	u32 active_backend;
 	int ret;
 
-	switch (requested_backend) {
-	case LKMDBG_VIEW_BACKEND_AUTO:
-	case LKMDBG_VIEW_BACKEND_EXTERNAL_READ:
-		active_backend = LKMDBG_VIEW_BACKEND_EXTERNAL_READ;
-		break;
-	default:
+	if (!(access_mask & LKMDBG_VIEW_ACCESS_READ))
 		return -EOPNOTSUPP;
-	}
+	if (read_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL &&
+	    read_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER)
+		return -EOPNOTSUPP;
+	if (write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	    exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL)
+		return -EOPNOTSUPP;
+	if (fault_policy != LKMDBG_VIEW_FAULT_POLICY_TRAP_ONLY)
+		return -EOPNOTSUPP;
+	if (sync_policy != LKMDBG_VIEW_SYNC_NONE)
+		return -EOPNOTSUPP;
+	if (writeback_policy != LKMDBG_VIEW_WRITEBACK_DISCARD)
+		return -EOPNOTSUPP;
 
 	ret = lkmdbg_external_read_hooks_ensure();
 	if (ret)
 		return ret;
 
-	*active_backend_out = active_backend;
+	*active_backend_out = LKMDBG_VIEW_BACKEND_EXTERNAL_READ;
+	return 0;
+}
+
+static int lkmdbg_view_region_prepare_backend(
+	u32 requested_backend, u32 access_mask, u32 read_backing_type,
+	u32 write_backing_type, u32 exec_backing_type, u32 fault_policy,
+	u32 sync_policy, u32 writeback_policy, u32 *active_backend_out)
+{
+	switch (requested_backend) {
+	case LKMDBG_VIEW_BACKEND_AUTO:
+	case LKMDBG_VIEW_BACKEND_EXTERNAL_READ:
+		return lkmdbg_view_region_select_external_read(
+			access_mask, read_backing_type, write_backing_type,
+			exec_backing_type, fault_policy, sync_policy,
+			writeback_policy, active_backend_out);
+	default:
+		return -EOPNOTSUPP;
+	}
+
 	return 0;
 }
 
@@ -313,7 +353,11 @@ long lkmdbg_create_view_region(struct lkmdbg_session *session, void __user *argp
 	if (target_tgid <= 0)
 		return -ENODEV;
 
-	ret = lkmdbg_view_region_prepare_backend(req.backend, &active_backend);
+	ret = lkmdbg_view_region_prepare_backend(
+		req.backend, req.access_mask, LKMDBG_VIEW_BACKING_ORIGINAL,
+		LKMDBG_VIEW_BACKING_ORIGINAL, LKMDBG_VIEW_BACKING_ORIGINAL,
+		req.fault_policy, req.sync_policy, req.writeback_policy,
+		&active_backend);
 	if (ret)
 		return ret;
 
@@ -420,6 +464,12 @@ long lkmdbg_set_view_backing(struct lkmdbg_session *session, void __user *argp)
 	struct lkmdbg_view_region *region;
 	u8 *backing = NULL;
 	u8 *old_backing = NULL;
+	u32 read_backing_type;
+	u32 write_backing_type;
+	u32 exec_backing_type;
+	u32 active_backend;
+	u32 *kind_type = NULL;
+	u64 requested_backend;
 	int ret = 0;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
@@ -435,56 +485,83 @@ long lkmdbg_set_view_backing(struct lkmdbg_session *session, void __user *argp)
 	if (!region)
 		return -ENOENT;
 
-	if (region->active_backend != LKMDBG_VIEW_BACKEND_EXTERNAL_READ) {
-		ret = -EOPNOTSUPP;
-		goto out_put;
-	}
-	if (req.view_kind != LKMDBG_VIEW_KIND_READ) {
-		ret = -EOPNOTSUPP;
-		goto out_put;
-	}
-
-	switch (req.backing_type) {
-	case LKMDBG_VIEW_BACKING_ORIGINAL:
-		mutex_lock(&session->lock);
-		old_backing = region->read_bytes;
-		region->read_bytes = NULL;
-		region->read_source_id = 0;
-		region->read_backing_type = LKMDBG_VIEW_BACKING_ORIGINAL;
-		region->state &= ~LKMDBG_VIEW_REGION_STATE_ACTIVE;
-		mutex_unlock(&session->lock);
-		kfree(old_backing);
-		break;
-	case LKMDBG_VIEW_BACKING_USER_BUFFER:
+	if (req.backing_type == LKMDBG_VIEW_BACKING_USER_BUFFER) {
 		if (!req.source_addr || req.source_length != region->length) {
 			ret = -EINVAL;
 			goto out_put;
 		}
-		backing = kmalloc(region->length, GFP_KERNEL);
-		if (!backing) {
-			ret = -ENOMEM;
-			goto out_put;
+		if (req.view_kind == LKMDBG_VIEW_KIND_READ) {
+			backing = kmalloc(region->length, GFP_KERNEL);
+			if (!backing) {
+				ret = -ENOMEM;
+				goto out_put;
+			}
+			if (copy_from_user(backing, u64_to_user_ptr(req.source_addr),
+					   region->length)) {
+				ret = -EFAULT;
+				goto out_free;
+			}
 		}
-		if (copy_from_user(backing, u64_to_user_ptr(req.source_addr),
-				   region->length)) {
-			ret = -EFAULT;
-			goto out_free;
-		}
-		mutex_lock(&session->lock);
-		old_backing = region->read_bytes;
-		session->next_view_source_id++;
-		region->read_source_id = session->next_view_source_id;
-		region->read_bytes = backing;
-		backing = NULL;
-		region->read_backing_type = LKMDBG_VIEW_BACKING_USER_BUFFER;
-		region->state |= LKMDBG_VIEW_REGION_STATE_ACTIVE;
-		mutex_unlock(&session->lock);
-		kfree(old_backing);
+	}
+
+	mutex_lock(&session->lock);
+	requested_backend = region->requested_backend;
+	read_backing_type = region->read_backing_type;
+	write_backing_type = region->write_backing_type;
+	exec_backing_type = region->exec_backing_type;
+	switch (req.view_kind) {
+	case LKMDBG_VIEW_KIND_READ:
+		kind_type = &read_backing_type;
+		break;
+	case LKMDBG_VIEW_KIND_WRITE:
+		kind_type = &write_backing_type;
+		break;
+	case LKMDBG_VIEW_KIND_EXEC:
+		kind_type = &exec_backing_type;
 		break;
 	default:
-		ret = -EOPNOTSUPP;
-		goto out_put;
+		mutex_unlock(&session->lock);
+		ret = -EINVAL;
+		goto out_free;
 	}
+	*kind_type = req.backing_type;
+	ret = lkmdbg_view_region_prepare_backend(
+		(u32)requested_backend, region->access_mask, read_backing_type,
+		write_backing_type, exec_backing_type, region->fault_policy,
+		region->sync_policy, region->writeback_policy, &active_backend);
+	if (ret) {
+		mutex_unlock(&session->lock);
+		goto out_free;
+	}
+
+	region->active_backend = active_backend;
+	switch (req.view_kind) {
+	case LKMDBG_VIEW_KIND_READ:
+		old_backing = region->read_bytes;
+		if (req.backing_type == LKMDBG_VIEW_BACKING_ORIGINAL) {
+			region->read_bytes = NULL;
+			region->read_source_id = 0;
+			region->read_backing_type = LKMDBG_VIEW_BACKING_ORIGINAL;
+		} else {
+			session->next_view_source_id++;
+			region->read_source_id = session->next_view_source_id;
+			region->read_bytes = backing;
+			backing = NULL;
+			region->read_backing_type = LKMDBG_VIEW_BACKING_USER_BUFFER;
+		}
+		break;
+	case LKMDBG_VIEW_KIND_WRITE:
+		region->write_source_id = 0;
+		region->write_backing_type = LKMDBG_VIEW_BACKING_ORIGINAL;
+		break;
+	case LKMDBG_VIEW_KIND_EXEC:
+		region->exec_source_id = 0;
+		region->exec_backing_type = LKMDBG_VIEW_BACKING_ORIGINAL;
+		break;
+	}
+	lkmdbg_view_region_refresh_active_state(region);
+	mutex_unlock(&session->lock);
+	kfree(old_backing);
 
 	if (copy_to_user(argp, &req, sizeof(req))) {
 		ret = -EFAULT;
@@ -517,7 +594,11 @@ long lkmdbg_set_view_policy(struct lkmdbg_session *session, void __user *argp)
 		mutex_unlock(&session->lock);
 		return -ENOENT;
 	}
-	ret = lkmdbg_view_region_prepare_backend(req.backend, &active_backend);
+	ret = lkmdbg_view_region_prepare_backend(
+		req.backend, region->access_mask, region->read_backing_type,
+		region->write_backing_type, region->exec_backing_type,
+		req.fault_policy, req.sync_policy, req.writeback_policy,
+		&active_backend);
 	if (ret) {
 		mutex_unlock(&session->lock);
 		return ret;

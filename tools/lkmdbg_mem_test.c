@@ -1704,6 +1704,7 @@ static int verify_view_external_read(int session_fd, pid_t child,
 {
 	struct lkmdbg_view_region_request region_reply;
 	struct lkmdbg_view_backing_request backing_reply;
+	struct lkmdbg_view_backing_request policy_backing_reply;
 	struct lkmdbg_view_backing_request reset_reply;
 	struct lkmdbg_view_region_query_request query_reply;
 	struct lkmdbg_view_region_handle_request remove_reply;
@@ -1723,6 +1724,7 @@ static int verify_view_external_read(int session_fd, pid_t child,
 
 	memset(&region_reply, 0, sizeof(region_reply));
 	memset(&backing_reply, 0, sizeof(backing_reply));
+	memset(&policy_backing_reply, 0, sizeof(policy_backing_reply));
 	memset(&reset_reply, 0, sizeof(reset_reply));
 	memset(&query_reply, 0, sizeof(query_reply));
 	memset(&remove_reply, 0, sizeof(remove_reply));
@@ -1777,6 +1779,14 @@ static int verify_view_external_read(int session_fd, pid_t child,
 					 LKMDBG_VIEW_BACKING_USER_BUFFER,
 					 &backing_reply) < 0)
 		goto out;
+	if (set_view_region_write_backing(session_fd, region_reply.region_id, NULL,
+					  0, LKMDBG_VIEW_BACKING_ORIGINAL,
+					  &policy_backing_reply) < 0)
+		goto out;
+	if (set_view_region_exec_backing(session_fd, region_reply.region_id, NULL,
+					 0, LKMDBG_VIEW_BACKING_ORIGINAL,
+					 &policy_backing_reply) < 0)
+		goto out;
 
 	if (query_view_regions(session_fd, region_reply.region_id, &entry, 1,
 			       &query_reply) < 0)
@@ -1784,11 +1794,14 @@ static int verify_view_external_read(int session_fd, pid_t child,
 	if (query_reply.entries_filled != 1 ||
 	    entry.region_id != region_reply.region_id ||
 	    entry.active_backend != LKMDBG_VIEW_BACKEND_EXTERNAL_READ ||
-	    entry.read_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER) {
+	    entry.read_backing_type != LKMDBG_VIEW_BACKING_USER_BUFFER ||
+	    entry.write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
+	    entry.exec_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL) {
 		fprintf(stderr,
-			"bad view region query filled=%u backend=%u read_backing=%u region=%" PRIu64 "\n",
+			"bad view region query filled=%u backend=%u read=%u write=%u exec=%u region=%" PRIu64 "\n",
 			query_reply.entries_filled, entry.active_backend,
-			entry.read_backing_type, (uint64_t)entry.region_id);
+			entry.read_backing_type, entry.write_backing_type,
+			entry.exec_backing_type, (uint64_t)entry.region_id);
 		goto out;
 	}
 

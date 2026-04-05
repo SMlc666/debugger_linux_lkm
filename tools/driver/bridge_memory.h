@@ -49,7 +49,19 @@ int create_view_region(int session_fd, uintptr_t base_addr, uint64_t length,
 		       uint32_t fault_policy, uint32_t sync_policy,
 		       uint32_t writeback_policy,
 		       struct lkmdbg_view_region_request *reply_out);
+int set_view_region_backing(int session_fd, uint64_t region_id,
+			    uint32_t view_kind, const void *buf,
+			    uint64_t length, uint32_t backing_type,
+			    struct lkmdbg_view_backing_request *reply_out);
 int set_view_region_read_backing(int session_fd, uint64_t region_id,
+				 const void *buf, uint64_t length,
+				 uint32_t backing_type,
+				 struct lkmdbg_view_backing_request *reply_out);
+int set_view_region_write_backing(int session_fd, uint64_t region_id,
+				  const void *buf, uint64_t length,
+				  uint32_t backing_type,
+				  struct lkmdbg_view_backing_request *reply_out);
+int set_view_region_exec_backing(int session_fd, uint64_t region_id,
 				 const void *buf, uint64_t length,
 				 uint32_t backing_type,
 				 struct lkmdbg_view_backing_request *reply_out);
