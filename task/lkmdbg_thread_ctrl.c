@@ -1391,6 +1391,11 @@ static void lkmdbg_disable_user_single_step_tid(pid_t tid)
 #endif
 
 #ifndef CONFIG_ARM64
+int lkmdbg_external_read_hooks_ensure(void)
+{
+	return -EOPNOTSUPP;
+}
+
 static int lkmdbg_unregister_mmu_hwpoint(struct lkmdbg_hwpoint *entry)
 {
 	(void)entry;
