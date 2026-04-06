@@ -1,14 +1,11 @@
 package com.smlc666.lkmdbg.overlay.ui.screens
 
-import androidx.compose.ui.res.painterResource
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Icon
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import androidx.compose.runtime.remember
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,15 +18,29 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import com.smlc666.lkmdbg.R
+import com.smlc666.lkmdbg.data.MemoryPage
+import com.smlc666.lkmdbg.data.MemoryPreviewRow
+import com.smlc666.lkmdbg.data.MemorySearchResult
+import com.smlc666.lkmdbg.data.SessionBridgeState
+import com.smlc666.lkmdbg.data.WorkspaceSection
 
 @Composable
 fun WorkingBar(
@@ -49,7 +60,6 @@ fun WorkingBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // "||" pause icon simulation
             Icon(
                 painter = painterResource(id = R.drawable.ic_lkmdbg_terminal),
                 contentDescription = "Pause",
@@ -76,7 +86,7 @@ fun WorkingBar(
                 modifier = Modifier.weight(1f),
                 maxLines = 1
             )
-            
+
             IconButton(onClick = onToggleMemoryTools, modifier = Modifier.width(36.dp).height(36.dp)) {
                 Icon(
                     painter = painterResource(id = R.drawable.ic_lkmdbg_radar),
@@ -88,16 +98,6 @@ fun WorkingBar(
         }
     }
 }
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
-import com.smlc666.lkmdbg.R
-import com.smlc666.lkmdbg.data.MemoryPage
-import com.smlc666.lkmdbg.data.MemoryPreviewRow
-import com.smlc666.lkmdbg.data.MemorySearchResult
-import com.smlc666.lkmdbg.data.SessionBridgeState
-import com.smlc666.lkmdbg.data.WorkspaceSection
 
 private const val MEMORY_VIEW_MODE_PAGE = 0
 private const val MEMORY_VIEW_MODE_RESULTS = 1
@@ -373,7 +373,7 @@ fun AppListButton(state: SessionBridgeState, onClick: () -> Unit) {
         if (packageName.isNotBlank() && packageName != "None") {
             val context = androidx.compose.ui.platform.LocalContext.current
             val iconLoader = remember(context) { com.smlc666.lkmdbg.shell.AppIconLoader(context) }
-            val icon = remember(packageName) { iconLoader.loadIcon(packageName) }
+            val icon = remember(packageName) { iconLoader.load(packageName) }
             
             if (icon != null) {
                 val imageBitmap = remember(icon) {
