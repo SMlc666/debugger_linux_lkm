@@ -39,42 +39,51 @@ fun WorkingBar(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        tonalElevation = 2.dp
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+        tonalElevation = 0.dp
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // "||" pause icon simulation
+            Icon(
+                painter = painterResource(id = R.drawable.ic_lkmdbg_terminal),
+                contentDescription = "Pause",
+                modifier = Modifier.width(18.dp).height(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
             val currentProcess = state.processes.find { it.pid == state.snapshot.targetPid }
             val processName = currentProcess?.processName ?: ""
             val statusText = buildString {
-                append("PID: ")
+                append("[")
                 append(state.snapshot.targetPid)
+                append("] ")
                 if (processName.isNotBlank()) {
-                    append(" [")
                     append(processName)
-                    append("]")
+                } else {
+                    append("Select Target")
                 }
             }
             Text(
                 text = statusText,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                maxLines = 1
             )
             
-            OutlinedButton(onClick = onToggleMemoryTools) {
+            IconButton(onClick = onToggleMemoryTools, modifier = Modifier.width(36.dp).height(36.dp)) {
                 Icon(
-                    painter = painterResource(id = R.drawable.ic_lkmdbg_terminal),
+                    painter = painterResource(id = R.drawable.ic_lkmdbg_radar),
                     contentDescription = "Tools",
-                    modifier = Modifier.width(16.dp).height(16.dp)
+                    modifier = Modifier.fillMaxSize().padding(4.dp),
+                    tint = MaterialTheme.colorScheme.primary
                 )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Tools")
             }
         }
     }
