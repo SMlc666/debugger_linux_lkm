@@ -83,8 +83,8 @@ class LkmdbgOverlayService : LifecycleService() {
                 lifecycleScope.launch {
                     action()
                     if (repository.state.value.workspaceSection == WorkspaceSection.Memory) {
-                        setMemoryViewMode(0)
-                        setMemoryToolsOpen(false)
+                        updateMemoryViewMode(0)
+                        updateMemoryToolsVisibility(false)
                     }
                 }
             }
@@ -95,13 +95,13 @@ class LkmdbgOverlayService : LifecycleService() {
                     lifecycleScope.launch { action() }
                 },
                 onShowMemoryResults = {
-                    setMemoryViewMode(1)
+                    updateMemoryViewMode(1)
                 },
                 onShowMemoryPage = {
-                    setMemoryViewMode(0)
+                    updateMemoryViewMode(0)
                 },
                 onDismiss = {
-                    setMemoryToolsOpen(false)
+                    updateMemoryToolsVisibility(false)
                 },
             )
             
@@ -172,13 +172,13 @@ class LkmdbgOverlayService : LifecycleService() {
                             onStepMemoryPage = { direction ->
                                 lifecycleScope.launch {
                                     repository.stepMemoryPage(direction)
-                                    setMemoryViewMode(0)
+                                    updateMemoryViewMode(0)
                                 }
                             },
                             onSelectMemoryAddress = { address ->
                                 lifecycleScope.launch {
                                     repository.selectMemoryAddress(address)
-                                    setMemoryViewMode(0)
+                                    updateMemoryViewMode(0)
                                 }
                             },
                             onCycleMemorySearchValueType = { repository.cycleMemorySearchValueType() },
@@ -187,21 +187,21 @@ class LkmdbgOverlayService : LifecycleService() {
                             onRunMemorySearch = {
                                 lifecycleScope.launch {
                                     repository.runMemorySearch()
-                                    setMemoryViewMode(1)
+                                    updateMemoryViewMode(1)
                                 }
                             },
                             onRefineMemorySearch = {
                                 lifecycleScope.launch {
                                     repository.refineMemorySearch()
-                                    setMemoryViewMode(1)
+                                    updateMemoryViewMode(1)
                                 }
                             },
-                            onShowMemoryResults = { setMemoryViewMode(1) },
-                            onShowMemoryPage = { setMemoryViewMode(0) },
+                            onShowMemoryResults = { updateMemoryViewMode(1) },
+                            onShowMemoryPage = { updateMemoryViewMode(0) },
                             onPreviewSelectedPc = {
                                 lifecycleScope.launch {
                                     repository.previewSelectedPc()
-                                    setMemoryViewMode(0)
+                                    updateMemoryViewMode(0)
                                 }
                             },
                         )
@@ -347,14 +347,14 @@ class LkmdbgOverlayService : LifecycleService() {
         renderOverlayState()
     }
 
-    private fun setMemoryToolsOpen(open: Boolean) {
+    private fun updateMemoryToolsVisibility(open: Boolean) {
         if (memoryToolsOpen == open)
             return
         memoryToolsOpen = open
         renderOverlayState()
     }
 
-    private fun setMemoryViewMode(mode: Int) {
+    private fun updateMemoryViewMode(mode: Int) {
         if (memoryViewMode == mode)
             return
         memoryViewMode = mode
