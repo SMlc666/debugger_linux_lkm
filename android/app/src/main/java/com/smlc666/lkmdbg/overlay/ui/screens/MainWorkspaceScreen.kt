@@ -1,5 +1,10 @@
 package com.smlc666.lkmdbg.overlay.ui.screens
 
+import androidx.compose.foundation.Image
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -155,7 +160,7 @@ fun MainWorkspaceScreen(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.TopEnd
         ) {
-            AppListButton(onClick = onToggleProcessPicker)
+            AppListButton(state = state, onClick = onToggleProcessPicker)
         }
     }
 }
@@ -243,9 +248,40 @@ fun CategoryRow(
 }
 
 @Composable
-fun AppListButton(onClick: () -> Unit) {
+fun AppListButton(state: SessionBridgeState, onClick: () -> Unit) {
     androidx.compose.material3.IconButton(onClick = onClick) {
-        Text("📱")
+        val targetPid = state.snapshot.targetPid
+        val currentProcess = state.processes.find { it.pid == targetPid }
+        val packageName = currentProcess?.iconPackageName ?: ""
+        
+        if (packageName.isNotBlank() && packageName != "None") {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val iconLoader = remember(context) { com.smlc666.lkmdbg.shell.AppIconLoader(context) }
+            val icon = remember(packageName) { iconLoader.loadIcon(packageName) }
+            
+            if (icon != null) {
+                val imageBitmap = remember(icon) {
+                    val bitmap = Bitmap.createBitmap(
+                        icon.intrinsicWidth.coerceAtLeast(1),
+                        icon.intrinsicHeight.coerceAtLeast(1),
+                        Bitmap.Config.ARGB_8888
+                    )
+                    val canvas = Canvas(bitmap)
+                    icon.setBounds(0, 0, canvas.width, canvas.height)
+                    icon.draw(canvas)
+                    bitmap.asImageBitmap()
+                }
+                Image(
+                    bitmap = imageBitmap,
+                    contentDescription = "App Icon",
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Text("📱")
+            }
+        } else {
+            Text("📱")
+        }
     }
 }
 
@@ -275,7 +311,7 @@ fun MainContentArea(
 
         WorkspaceSection.Processes -> {
             Text(
-                text = "Select a process from the picker above.",
+                text = "Select a process from the picker using the app icon on the top right.",
                 color = MaterialTheme.colorScheme.onBackground,
             )
         }

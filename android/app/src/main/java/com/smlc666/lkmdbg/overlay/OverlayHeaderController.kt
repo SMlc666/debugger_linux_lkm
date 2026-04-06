@@ -28,13 +28,7 @@ internal class OverlayHeaderController(
         density: Float,
         onCollapse: () -> Unit,
         onClose: () -> Unit,
-        onConnect: suspend () -> Unit,
-        onOpenSession: suspend () -> Unit,
-        onRefreshStatus: suspend () -> Unit,
-        onRefreshProcesses: suspend () -> Unit,
-        onToggleProcessPicker: () -> Unit,
-        onToggleMemoryTools: () -> Unit,
-        onRefreshEvents: suspend () -> Unit,
+        onToggleMemoryTools: () -> Unit = {},
     ): LinearLayout {
         val header = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -75,42 +69,8 @@ internal class OverlayHeaderController(
         statusRow.addView(collapseButton)
         statusRow.addView(closeButton)
 
-        val actionRowTop = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            )
-            setPadding(0, (6f * density).toInt(), 0, 0)
-        }
-        val actionRowBottom = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            )
-            setPadding(0, (4f * density).toInt(), 0, 0)
-        }
-        val newMemoryToolsButton = makeActionButton(R.string.memory_action_tools) {
-            onToggleMemoryTools()
-        }
-        actionRowTop.addView(makeActionButton(R.string.session_action_connect, onConnect))
-        actionRowTop.addView(makeActionButton(R.string.session_action_open_session, onOpenSession))
-        actionRowTop.addView(makeActionButton(R.string.session_action_refresh, onRefreshStatus))
-        actionRowBottom.addView(makeActionButton(R.string.process_action_refresh, onRefreshProcesses))
-        actionRowBottom.addView(
-            makeActionButton(R.string.process_action_attach) {
-                onToggleProcessPicker()
-            },
-        )
-        actionRowBottom.addView(newMemoryToolsButton)
-        actionRowBottom.addView(makeActionButton(R.string.event_action_refresh, onRefreshEvents))
-
         header.addView(statusRow)
-        header.addView(actionRowTop)
-        header.addView(actionRowBottom)
         statusView = newStatusView
-        memoryToolsButton = newMemoryToolsButton
         return header
     }
 

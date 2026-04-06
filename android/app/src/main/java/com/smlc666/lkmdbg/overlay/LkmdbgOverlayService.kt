@@ -249,19 +249,6 @@ class LkmdbgOverlayService : LifecycleService() {
                 density = density,
                 onCollapse = { updateExpandedState(false) },
                 onClose = { stopSelf() },
-                onConnect = { repository.connect() },
-                onOpenSession = { repository.openSession() },
-                onRefreshStatus = { repository.refreshStatus() },
-                onRefreshProcesses = { repository.refreshProcesses() },
-                onToggleProcessPicker = {
-                    repository.updateWorkspaceSection(WorkspaceSection.Processes)
-                    handleSectionSelection(WorkspaceSection.Processes)
-                    processPickerController.toggle(repository.state.value)
-                },
-                onToggleMemoryTools = {
-                    toggleMemoryTools()
-                },
-                onRefreshEvents = { repository.refreshEvents(timeoutMs = 0, maxEvents = 16) },
             )
             val body = FrameLayout(overlayContext).apply {
                 layoutParams = LinearLayout.LayoutParams(
