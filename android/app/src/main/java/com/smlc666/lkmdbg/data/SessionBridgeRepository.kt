@@ -67,6 +67,8 @@ data class SessionBridgeState(
     val memoryWriteAsmInput: String = "",
     val memoryPage: MemoryPage? = null,
     val memorySearch: MemorySearchUiState = MemorySearchUiState(),
+    val memoryToolsOpen: Boolean = false,
+    val memoryViewMode: Int = 0,
 )
 
 class SessionBridgeRepository(
@@ -145,8 +147,22 @@ class SessionBridgeRepository(
         }
     }
 
+    fun updateMemoryToolsOpen(open: Boolean) {
+        _state.update { current -> current.copy(memoryToolsOpen = open) }
+    }
+
+    fun updateMemoryViewMode(mode: Int) {
+        _state.update { current -> current.copy(memoryViewMode = mode) }
+    }
+
     fun updateWorkspaceSection(section: WorkspaceSection) {
-        _state.update { current -> current.copy(workspaceSection = section) }
+        _state.update { current ->
+            current.copy(
+                workspaceSection = section,
+                memoryToolsOpen = if (section != WorkspaceSection.Memory) false else current.memoryToolsOpen,
+                memoryViewMode = if (section != WorkspaceSection.Memory) 0 else current.memoryViewMode
+            )
+        }
     }
 
     fun updateProcessFilter(filter: ProcessFilter) {

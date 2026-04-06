@@ -12,9 +12,6 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.LifecycleService
@@ -54,8 +51,6 @@ class LkmdbgOverlayService : LifecycleService() {
     private var overlayJob: Job? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var expanded = false
-    private var memoryToolsOpen by mutableStateOf(false)
-    private var memoryViewMode by mutableIntStateOf(0)
 
     override fun onBind(intent: Intent): IBinder? = super.onBind(intent)
 
@@ -84,27 +79,28 @@ class LkmdbgOverlayService : LifecycleService() {
                     action()
                     if (repository.state.value.workspaceSection == WorkspaceSection.Memory) {
                         updateMemoryViewMode(0)
-                        updateMemoryToolsVisibility(false)
+                        repository.updateMemoryToolsOpen(false)
+                        renderOverlayState()
                     }
-                }
-            }
-            memoryToolboxController = OverlayMemoryToolboxController(
-                context = overlayContext,
-                repository = repository,
-                launchAction = { action ->
+                    }
+                    }
+                    memoryToolboxController = OverlayMemoryToolboxController(
+                    context = overlayContext,
+                    repository = repository,
+                    launchAction = { action ->
                     lifecycleScope.launch { action() }
-                },
-                onShowMemoryResults = {
+                    },
+                    onShowMemoryResults = {
                     updateMemoryViewMode(1)
-                },
-                onShowMemoryPage = {
+                    },
+                    onShowMemoryPage = {
                     updateMemoryViewMode(0)
-                },
-                onDismiss = {
-                    updateMemoryToolsVisibility(false)
-                },
-            )
-            
+                    },
+                    onDismiss = {
+                    repository.updateMemoryToolsOpen(false)
+                    renderOverlayState()
+                    },
+                    )            
             stateBinder = OverlayStateBinder(
                 repository = repository,
                 onStateChanged = { state ->
@@ -163,8 +159,8 @@ class LkmdbgOverlayService : LifecycleService() {
                     if (expanded) {
                         MainWorkspaceScreen(
                             state = state,
-                            memoryViewMode = memoryViewMode,
-                            memoryToolsOpen = memoryToolsOpen,
+                            memoryViewMode = state.memoryViewMode,
+                            memoryToolsOpen = state.memoryToolsOpen,
                             onSectionSelected = { section ->
                                 repository.updateWorkspaceSection(section)
                                 handleSectionSelection(section)
@@ -331,21 +327,14 @@ class LkmdbgOverlayService : LifecycleService() {
     private fun toggleMemoryTools() {
         if (repository.state.value.workspaceSection != WorkspaceSection.Memory)
             return
-        memoryToolsOpen = !memoryToolsOpen
-        renderOverlayState()
-    }
-
-    private fun updateMemoryToolsVisibility(open: Boolean) {
-        if (memoryToolsOpen == open)
-            return
-        memoryToolsOpen = open
+        repository.updateMemoryToolsOpen(!repository.state.value.memoryToolsOpen)
         renderOverlayState()
     }
 
     private fun updateMemoryViewMode(mode: Int) {
-        if (memoryViewMode == mode)
+        if (repository.state.value.memoryViewMode == mode)
             return
-        memoryViewMode = mode
+        repository.updateMemoryViewMode(mode)
         renderOverlayState()
     }
 
