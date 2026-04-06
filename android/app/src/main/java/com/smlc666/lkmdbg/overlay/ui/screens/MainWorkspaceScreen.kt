@@ -120,6 +120,8 @@ fun MainWorkspaceScreen(
     onShowMemoryResults: () -> Unit,
     onShowMemoryPage: () -> Unit,
     onPreviewSelectedPc: () -> Unit,
+    onClose: () -> Unit,
+    onCollapse: () -> Unit,
 ) {
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -152,7 +154,12 @@ fun MainWorkspaceScreen(
                         .weight(1f)
                         .fillMaxHeight()
                 ) {
-                    Spacer(modifier = Modifier.height(48.dp).fillMaxWidth())
+                    TopBarArea(
+                        onClose = onClose,
+                        onCollapse = onCollapse,
+                        state = state,
+                        onToggleProcessPicker = onToggleProcessPicker
+                    )
 
                     if (state.workspaceSection == WorkspaceSection.Memory) {
                         WorkingBar(
@@ -201,6 +208,13 @@ fun MainWorkspaceScreen(
                     Spacer(modifier = Modifier.width(48.dp))
                 }
 
+                TopBarArea(
+                    onClose = onClose,
+                    onCollapse = onCollapse,
+                    state = state,
+                    onToggleProcessPicker = onToggleProcessPicker
+                )
+
                 if (state.workspaceSection == WorkspaceSection.Memory) {
                     WorkingBar(
                         state = state,
@@ -234,11 +248,35 @@ fun MainWorkspaceScreen(
             }
         }
 
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.TopEnd
-        ) {
+    }
+}
+
+@Composable
+fun TopBarArea(
+    onClose: () -> Unit,
+    onCollapse: () -> Unit,
+    state: SessionBridgeState,
+    onToggleProcessPicker: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f))
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(modifier = Modifier.width(36.dp).height(36.dp)) {
             AppListButton(state = state, onClick = onToggleProcessPicker)
+        }
+        
+        Spacer(modifier = Modifier.weight(1f))
+        
+        IconButton(onClick = onCollapse) {
+            Text("—", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        IconButton(onClick = onClose) {
+            Text("X", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

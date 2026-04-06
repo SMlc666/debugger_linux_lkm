@@ -210,6 +210,8 @@ class LkmdbgOverlayService : LifecycleService() {
                                     updateMemoryViewMode(0)
                                 }
                             },
+                            onClose = { stopSelf() },
+                            onCollapse = { updateExpandedState(false) },
                         )
                     } else {
                         CollapsedWorkspaceScreen()
@@ -245,18 +247,12 @@ class LkmdbgOverlayService : LifecycleService() {
                     (10f * density).toInt(),
                     (10f * density).toInt(),
                 )
-            }
-            val header = headerController.build(
-                density = density,
-                onCollapse = { updateExpandedState(false) },
-                onClose = { stopSelf() },
-            )
             val body = FrameLayout(overlayContext).apply {
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                    0,
-                    1f,
-                ).apply {
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+            }
                     topMargin = (8f * density).toInt()
                 }
             }
@@ -279,7 +275,6 @@ class LkmdbgOverlayService : LifecycleService() {
                     ViewGroup.LayoutParams.MATCH_PARENT,
                 ),
             )
-            column.addView(header)
             column.addView(body)
             root.addView(column)
         } else {
