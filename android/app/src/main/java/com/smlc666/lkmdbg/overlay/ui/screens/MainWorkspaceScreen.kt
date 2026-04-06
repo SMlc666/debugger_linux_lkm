@@ -1,6 +1,8 @@
 package com.smlc666.lkmdbg.overlay.ui.screens
 
-import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.compose.runtime.remember
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -27,6 +30,55 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
+
+@Composable
+fun WorkingBar(
+    state: SessionBridgeState,
+    memoryToolsOpen: Boolean,
+    onToggleMemoryTools: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        tonalElevation = 2.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val currentProcess = state.processes.find { it.pid == state.snapshot.targetPid }
+            val processName = currentProcess?.processName ?: ""
+            val statusText = buildString {
+                append("PID: ")
+                append(state.snapshot.targetPid)
+                if (processName.isNotBlank()) {
+                    append(" [")
+                    append(processName)
+                    append("]")
+                }
+            }
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            
+            OutlinedButton(onClick = onToggleMemoryTools) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_lkmdbg_terminal),
+                    contentDescription = "Tools",
+                    modifier = Modifier.width(16.dp).height(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Tools")
+            }
+        }
+    }
+}
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
@@ -48,6 +100,7 @@ fun MainWorkspaceScreen(
     memoryToolsOpen: Boolean,
     onSectionSelected: (WorkspaceSection) -> Unit,
     onToggleProcessPicker: () -> Unit,
+    onToggleMemoryTools: () -> Unit,
     onStepMemoryPage: (Int) -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
     onCycleMemorySearchValueType: () -> Unit,
@@ -92,6 +145,14 @@ fun MainWorkspaceScreen(
                 ) {
                     Spacer(modifier = Modifier.height(48.dp).fillMaxWidth())
 
+                    if (state.workspaceSection == WorkspaceSection.Memory) {
+                        WorkingBar(
+                            state = state,
+                            memoryToolsOpen = memoryToolsOpen,
+                            onToggleMemoryTools = onToggleMemoryTools
+                        )
+                    }
+
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -129,6 +190,14 @@ fun MainWorkspaceScreen(
                         modifier = Modifier.weight(1f)
                     )
                     Spacer(modifier = Modifier.width(48.dp))
+                }
+
+                if (state.workspaceSection == WorkspaceSection.Memory) {
+                    WorkingBar(
+                        state = state,
+                        memoryToolsOpen = memoryToolsOpen,
+                        onToggleMemoryTools = onToggleMemoryTools
+                    )
                 }
 
                 Box(
@@ -191,14 +260,14 @@ fun CategoryColumn(
                     .clickable { onSectionSelected(section) },
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = section.name,
-                    color = if (isSelected) {
+                Icon(
+                    painter = painterResource(id = section.iconRes),
+                    contentDescription = stringResource(id = section.labelRes),
+                    tint = if (isSelected) {
                         MaterialTheme.colorScheme.onPrimaryContainer
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    style = MaterialTheme.typography.bodySmall,
+                    }
                 )
             }
         }
@@ -233,14 +302,14 @@ fun CategoryRow(
                     .clickable { onSectionSelected(section) },
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = section.name,
-                    color = if (isSelected) {
+                Icon(
+                    painter = painterResource(id = section.iconRes),
+                    contentDescription = stringResource(id = section.labelRes),
+                    tint = if (isSelected) {
                         MaterialTheme.colorScheme.onPrimaryContainer
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    style = MaterialTheme.typography.bodySmall,
+                    }
                 )
             }
         }

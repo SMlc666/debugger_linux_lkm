@@ -174,6 +174,7 @@ class LkmdbgOverlayService : LifecycleService() {
                                 handleSectionSelection(WorkspaceSection.Processes)
                                 processPickerController.toggle(repository.state.value)
                             },
+                            onToggleMemoryTools = { toggleMemoryTools() },
                             onStepMemoryPage = { direction ->
                                 lifecycleScope.launch {
                                     repository.stepMemoryPage(direction)
