@@ -3,6 +3,7 @@ import com.smlc666.gradle.BuildBundledAgentTask
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.compose.compiler)
 }
 
 val bundledAgentAssetRoot = layout.buildDirectory.dir("generated/assets/bundledAgent/main")
@@ -43,6 +44,10 @@ android {
                 arguments += "-DANDROID_STL=c++_shared"
             }
         }
+    }
+
+    buildFeatures {
+        compose = true
     }
 
     buildTypes {
@@ -100,6 +105,14 @@ dependencies {
     implementation(libs.androidx.lifecycle.service)
     implementation(libs.google.material)
     implementation(libs.kotlinx.coroutines.android)
+
+    val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
+    implementation(composeBom)
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.activity:activity-compose:1.9.3")
 
     testImplementation(libs.junit4)
     testImplementation(libs.robolectric)

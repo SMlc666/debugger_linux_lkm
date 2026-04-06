@@ -15,6 +15,7 @@ import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.data.ResolvedProcessRecord
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.data.SessionBridgeState
+import com.smlc666.lkmdbg.data.WorkspaceSection
 import com.smlc666.lkmdbg.shell.AppIconLoader
 import com.smlc666.lkmdbg.ui.theme.LkmdbgButtonTone
 import com.smlc666.lkmdbg.ui.theme.copyAlpha
@@ -113,6 +114,10 @@ internal class OverlayProcessPickerController(
 
     fun hide() {
         container?.visibility = View.GONE
+    }
+
+    fun isVisible(): Boolean {
+        return container?.visibility == View.VISIBLE
     }
 
     fun render(state: SessionBridgeState) {
@@ -245,7 +250,9 @@ internal class OverlayProcessPickerController(
             addView(kindView)
             setOnClickListener {
                 launchAction {
-                    repository.attachProcess(process.pid)
+                    if (repository.attachProcess(process.pid)) {
+                        repository.updateWorkspaceSection(WorkspaceSection.Memory)
+                    }
                     hide()
                 }
             }

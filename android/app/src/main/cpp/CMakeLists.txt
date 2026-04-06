@@ -28,28 +28,9 @@ set(KEYSTONE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/keystone
 add_subdirectory(${KEYSTONE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/keystone)
 
 add_library(lkmdbg_native SHARED
-	native_disassembler.cpp
-	nativeui/egl_window_context.cpp
-	nativeui/imgui_controls.cpp
-	nativeui/imgui_workspace_renderer.cpp
-	nativeui/ui_tree.cpp
-	nativeui/ui_format.cpp
-	nativeui/workspace_theme.cpp
-	nativeui/workspace_animation.cpp
-	nativeui/workspace_layout.cpp
-	nativeui/workspace_view_model.cpp
-	nativeui/native_workspace_jni.cpp)
-target_compile_definitions(lkmdbg_native PRIVATE CAPSTONE_STATIC FMT_HEADER_ONLY)
+	native_disassembler.cpp)
+target_compile_definitions(lkmdbg_native PRIVATE CAPSTONE_STATIC)
 target_include_directories(lkmdbg_native PRIVATE
 	${KEYSTONE_DIR}/include
-	${CMAKE_CURRENT_SOURCE_DIR}
-	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/fmt/include
-	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui
-	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui/backends)
-target_sources(lkmdbg_native PRIVATE
-	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui/imgui.cpp
-	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui/imgui_draw.cpp
-	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui/imgui_tables.cpp
-	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui/imgui_widgets.cpp
-	${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/imgui/backends/imgui_impl_opengl3.cpp)
-target_link_libraries(lkmdbg_native PRIVATE capstone_static keystone EGL GLESv3 android jnigraphics log)
+	${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(lkmdbg_native PRIVATE capstone_static keystone log)
