@@ -42,6 +42,7 @@ fun MainWorkspaceScreen(
     memoryViewMode: Int,
     memoryToolsOpen: Boolean,
     onSectionSelected: (WorkspaceSection) -> Unit,
+    onToggleProcessPicker: () -> Unit,
     onStepMemoryPage: (Int) -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
     onCycleMemorySearchValueType: () -> Unit,
@@ -53,108 +54,262 @@ fun MainWorkspaceScreen(
     onShowMemoryPage: () -> Unit,
     onPreviewSelectedPc: () -> Unit,
 ) {
-    Row(
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val sections = listOf(
+        WorkspaceSection.Session,
+        WorkspaceSection.Processes,
+        WorkspaceSection.Memory,
+        WorkspaceSection.Threads,
+        WorkspaceSection.Events,
+    )
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
-        Column(
-            modifier = Modifier
-                .width(80.dp)
-                .fillMaxHeight()
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-        ) {
-            val sections = listOf(
-                WorkspaceSection.Session,
-                WorkspaceSection.Processes,
-                WorkspaceSection.Memory,
-                WorkspaceSection.Threads,
-                WorkspaceSection.Events,
-            )
+        if (isLandscape) {
+            Row(modifier = Modifier.fillMaxSize()) {
+                CategoryColumn(
+                    sections = sections,
+                    selectedSection = state.workspaceSection,
+                    onSectionSelected = onSectionSelected,
+                    modifier = Modifier
+                        .width(80.dp)
+                        .fillMaxHeight()
+                )
 
-            sections.forEach { section ->
-                val isSelected = state.workspaceSection == section
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                ) {
+                    Spacer(modifier = Modifier.height(48.dp).fillMaxWidth())
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(8.dp),
+                    ) {
+                        MainContentArea(
+                            state = state,
+                            memoryViewMode = memoryViewMode,
+                            memoryToolsOpen = memoryToolsOpen,
+                            onStepMemoryPage = onStepMemoryPage,
+                            onSelectMemoryAddress = onSelectMemoryAddress,
+                            onCycleMemorySearchValueType = onCycleMemorySearchValueType,
+                            onCycleMemorySearchRefineMode = onCycleMemorySearchRefineMode,
+                            onCycleMemoryRegionPreset = onCycleMemoryRegionPreset,
+                            onRunMemorySearch = onRunMemorySearch,
+                            onRefineMemorySearch = onRefineMemorySearch,
+                            onShowMemoryResults = onShowMemoryResults,
+                            onShowMemoryPage = onShowMemoryPage,
+                            onPreviewSelectedPc = onPreviewSelectedPc,
+                        )
+                    }
+                }
+            }
+        } else {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CategoryRow(
+                        sections = sections,
+                        selectedSection = state.workspaceSection,
+                        onSectionSelected = onSectionSelected,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(48.dp))
+                }
+
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
                         .weight(1f)
-                        .background(
-                            if (isSelected) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                Color.Transparent
-                            },
-                        )
-                        .clickable { onSectionSelected(section) },
-                    contentAlignment = Alignment.Center,
+                        .fillMaxWidth()
+                        .padding(8.dp),
                 ) {
-                    Text(
-                        text = section.name,
-                        color = if (isSelected) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        style = MaterialTheme.typography.bodySmall,
+                    MainContentArea(
+                        state = state,
+                        memoryViewMode = memoryViewMode,
+                        memoryToolsOpen = memoryToolsOpen,
+                        onStepMemoryPage = onStepMemoryPage,
+                        onSelectMemoryAddress = onSelectMemoryAddress,
+                        onCycleMemorySearchValueType = onCycleMemorySearchValueType,
+                        onCycleMemorySearchRefineMode = onCycleMemorySearchRefineMode,
+                        onCycleMemoryRegionPreset = onCycleMemoryRegionPreset,
+                        onRunMemorySearch = onRunMemorySearch,
+                        onRefineMemorySearch = onRefineMemorySearch,
+                        onShowMemoryResults = onShowMemoryResults,
+                        onShowMemoryPage = onShowMemoryPage,
+                        onPreviewSelectedPc = onPreviewSelectedPc,
                     )
                 }
             }
         }
 
         Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .padding(8.dp),
-            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.TopEnd
         ) {
-            when (state.workspaceSection) {
-                WorkspaceSection.Session -> {
-                    Text(
-                        text = "Session Overview (PID: ${state.snapshot.targetPid})",
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                }
+            AppListButton(onClick = onToggleProcessPicker)
+        }
+    }
+}
 
-                WorkspaceSection.Processes -> {
-                    Text(
-                        text = "Select a process from the picker above.",
-                        color = MaterialTheme.colorScheme.onBackground,
+@Composable
+fun CategoryColumn(
+    sections: List<WorkspaceSection>,
+    selectedSection: WorkspaceSection,
+    onSectionSelected: (WorkspaceSection) -> Unit,
+    modifier: Modifier
+) {
+    Column(
+        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        sections.forEach { section ->
+            val isSelected = selectedSection == section
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(
+                        if (isSelected) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            Color.Transparent
+                        },
                     )
-                }
-
-                WorkspaceSection.Memory -> {
-                    MemorySectionContent(
-                        state = state,
-                        memoryToolsOpen = memoryToolsOpen,
-                        viewMode = memoryViewMode,
-                        onStepPage = onStepMemoryPage,
-                        onSelectAddress = onSelectMemoryAddress,
-                        onCycleValueType = onCycleMemorySearchValueType,
-                        onCycleRefineMode = onCycleMemorySearchRefineMode,
-                        onCycleRegionPreset = onCycleMemoryRegionPreset,
-                        onRunSearch = onRunMemorySearch,
-                        onRefineSearch = onRefineMemorySearch,
-                        onShowResults = onShowMemoryResults,
-                        onShowPage = onShowMemoryPage,
-                        onPreviewSelectedPc = onPreviewSelectedPc,
-                    )
-                }
-
-                WorkspaceSection.Threads -> {
-                    Text(
-                        text = "Threads not implemented yet.",
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                }
-
-                WorkspaceSection.Events -> {
-                    Text(
-                        text = "Events not implemented yet.",
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                }
+                    .clickable { onSectionSelected(section) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = section.name,
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
+        }
+    }
+}
+
+@Composable
+fun CategoryRow(
+    sections: List<WorkspaceSection>,
+    selectedSection: WorkspaceSection,
+    onSectionSelected: (WorkspaceSection) -> Unit,
+    modifier: Modifier
+) {
+    Row(
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .height(48.dp)
+    ) {
+        sections.forEach { section ->
+            val isSelected = selectedSection == section
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .background(
+                        if (isSelected) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            Color.Transparent
+                        },
+                    )
+                    .clickable { onSectionSelected(section) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = section.name,
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun AppListButton(onClick: () -> Unit) {
+    androidx.compose.material3.IconButton(onClick = onClick) {
+        Text("📱")
+    }
+}
+
+@Composable
+fun MainContentArea(
+    state: SessionBridgeState,
+    memoryViewMode: Int,
+    memoryToolsOpen: Boolean,
+    onStepMemoryPage: (Int) -> Unit,
+    onSelectMemoryAddress: (ULong) -> Unit,
+    onCycleMemorySearchValueType: () -> Unit,
+    onCycleMemorySearchRefineMode: () -> Unit,
+    onCycleMemoryRegionPreset: () -> Unit,
+    onRunMemorySearch: () -> Unit,
+    onRefineMemorySearch: () -> Unit,
+    onShowMemoryResults: () -> Unit,
+    onShowMemoryPage: () -> Unit,
+    onPreviewSelectedPc: () -> Unit,
+) {
+    when (state.workspaceSection) {
+        WorkspaceSection.Session -> {
+            Text(
+                text = "Session Overview (PID: ${state.snapshot.targetPid})",
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+        }
+
+        WorkspaceSection.Processes -> {
+            Text(
+                text = "Select a process from the picker above.",
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+        }
+
+        WorkspaceSection.Memory -> {
+            MemorySectionContent(
+                state = state,
+                memoryToolsOpen = memoryToolsOpen,
+                viewMode = memoryViewMode,
+                onStepPage = onStepMemoryPage,
+                onSelectAddress = onSelectMemoryAddress,
+                onCycleValueType = onCycleMemorySearchValueType,
+                onCycleRefineMode = onCycleMemorySearchRefineMode,
+                onCycleRegionPreset = onCycleMemoryRegionPreset,
+                onRunSearch = onRunMemorySearch,
+                onRefineSearch = onRefineMemorySearch,
+                onShowResults = onShowMemoryResults,
+                onShowPage = onShowMemoryPage,
+                onPreviewSelectedPc = onPreviewSelectedPc,
+            )
+        }
+
+        WorkspaceSection.Threads -> {
+            Text(
+                text = "Threads not implemented yet.",
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+        }
+
+        WorkspaceSection.Events -> {
+            Text(
+                text = "Events not implemented yet.",
+                color = MaterialTheme.colorScheme.onBackground,
+            )
         }
     }
 }
