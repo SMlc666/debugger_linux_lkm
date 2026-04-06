@@ -247,12 +247,12 @@ class LkmdbgOverlayService : LifecycleService() {
                     (10f * density).toInt(),
                     (10f * density).toInt(),
                 )
+            }
             val body = FrameLayout(overlayContext).apply {
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                )
-            }
+                ).apply {
                     topMargin = (8f * density).toInt()
                 }
             }
