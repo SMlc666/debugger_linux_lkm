@@ -10,13 +10,16 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import androidx.compose.ui.platform.ComposeView
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.ViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeLifecycleOwner
-import androidx.savedstate.ViewTreeSavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.smlc666.lkmdbg.CrashLogger
 import com.smlc666.lkmdbg.LkmdbgApplication
@@ -44,14 +47,15 @@ class LkmdbgOverlayService : LifecycleService() {
     private lateinit var gestureController: OverlayGestureController
     private lateinit var processPickerController: OverlayProcessPickerController
     private lateinit var memoryToolboxController: OverlayMemoryToolboxController
-        private lateinit var stateBinder: OverlayStateBinder
+    private lateinit var stateBinder: OverlayStateBinder
+    private lateinit var overlaySavedStateOwner: OverlaySavedStateOwner
     private var rootView: FrameLayout? = null
     private var workspaceView: ComposeView? = null
     private var overlayJob: Job? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var expanded = false
-    private var memoryToolsOpen = false
-    private var memoryViewMode = 0
+    private var memoryToolsOpen by mutableStateOf(false)
+    private var memoryViewMode by mutableIntStateOf(0)
 
     override fun onBind(intent: Intent): IBinder? = super.onBind(intent)
 
@@ -63,6 +67,7 @@ class LkmdbgOverlayService : LifecycleService() {
             automation = SessionAutomationController(repository)
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             overlayContext = ContextThemeWrapper(this, R.style.Theme_Lkmdbg)
+            overlaySavedStateOwner = OverlaySavedStateOwner(this)
             windowController = OverlayWindowController(resources, windowManager)
             gestureController = OverlayGestureController(
                 clickSlopPx = 12f * resources.displayMetrics.density,
@@ -75,13 +80,12 @@ class LkmdbgOverlayService : LifecycleService() {
                 repository = repository,
                 iconLoader = AppIconLoader(this),
             ) { action ->
-                lifecycleScope.launch { 
+                lifecycleScope.launch {
                     action()
-                    // When attach process happens, it usually updates state.
-                    // We need to switch back to Memory section after a successful attach.
-                    // The easiest way is to observe if the repository state has a targetPid
-                    // and switch. But action() is a lambda from the controller.
-                    // Let's just look at what the controller does.
+                    if (repository.state.value.workspaceSection == WorkspaceSection.Memory) {
+                        setMemoryViewMode(0)
+                        setMemoryToolsOpen(false)
+                    }
                 }
             }
             memoryToolboxController = OverlayMemoryToolboxController(
@@ -152,6 +156,7 @@ class LkmdbgOverlayService : LifecycleService() {
             )
         }
         val nativeView = ComposeView(overlayContext).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setContent {
                 val state = repository.state.collectAsState().value
                 LkmdbgTheme {
@@ -160,19 +165,45 @@ class LkmdbgOverlayService : LifecycleService() {
                             state = state,
                             memoryViewMode = memoryViewMode,
                             memoryToolsOpen = memoryToolsOpen,
-                            onSectionSelected = { section -> 
+                            onSectionSelected = { section ->
                                 repository.updateWorkspaceSection(section)
                                 handleSectionSelection(section)
                             },
-                            onStepMemoryPage = { forward ->
-                                lifecycleScope.launch { repository.stepMemoryPage(forward) }
+                            onStepMemoryPage = { direction ->
+                                lifecycleScope.launch {
+                                    repository.stepMemoryPage(direction)
+                                    setMemoryViewMode(0)
+                                }
                             },
                             onSelectMemoryAddress = { address ->
                                 lifecycleScope.launch {
                                     repository.selectMemoryAddress(address)
                                     setMemoryViewMode(0)
                                 }
-                            }
+                            },
+                            onCycleMemorySearchValueType = { repository.cycleMemorySearchValueType() },
+                            onCycleMemorySearchRefineMode = { repository.cycleMemorySearchRefineMode() },
+                            onCycleMemoryRegionPreset = { repository.cycleMemoryRegionPreset() },
+                            onRunMemorySearch = {
+                                lifecycleScope.launch {
+                                    repository.runMemorySearch()
+                                    setMemoryViewMode(1)
+                                }
+                            },
+                            onRefineMemorySearch = {
+                                lifecycleScope.launch {
+                                    repository.refineMemorySearch()
+                                    setMemoryViewMode(1)
+                                }
+                            },
+                            onShowMemoryResults = { setMemoryViewMode(1) },
+                            onShowMemoryPage = { setMemoryViewMode(0) },
+                            onPreviewSelectedPc = {
+                                lifecycleScope.launch {
+                                    repository.previewSelectedPc()
+                                    setMemoryViewMode(0)
+                                }
+                            },
                         )
                     } else {
                         CollapsedWorkspaceScreen()
@@ -271,7 +302,7 @@ class LkmdbgOverlayService : LifecycleService() {
         layoutParams = params
         
         root.setViewTreeLifecycleOwner(this)
-        root.setViewTreeSavedStateRegistryOwner(this)
+        root.setViewTreeSavedStateRegistryOwner(overlaySavedStateOwner)
         
         windowManager.addView(root, params)
         overlayJob?.cancel()
