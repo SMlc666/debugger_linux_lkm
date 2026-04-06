@@ -339,10 +339,6 @@ class LkmdbgOverlayService : LifecycleService() {
     }
 
     private fun handleSectionSelection(section: WorkspaceSection) {
-        if (section != WorkspaceSection.Memory) {
-            memoryToolsOpen = false
-            memoryViewMode = 0
-        }
         if (section != WorkspaceSection.Processes)
             processPickerController.hide()
         renderOverlayState()
@@ -352,21 +348,13 @@ class LkmdbgOverlayService : LifecycleService() {
         if (!expanded) {
             return
         }
-        if (state.workspaceSection != WorkspaceSection.Memory) {
-            memoryToolsOpen = false
-            memoryViewMode = 0
-        }
         if (state.workspaceSection != WorkspaceSection.Processes)
             processPickerController.hide()
-        headerController.render(
-            state = state,
-            text = BridgeStatusFormatter.formatOverlayStatus(overlayContext, state),
-            memoryToolsOpen = memoryToolsOpen,
-        )
+        
         processPickerController.render(state)
         memoryToolboxController.render(
             state = state,
-            visible = state.workspaceSection == WorkspaceSection.Memory && memoryToolsOpen,
+            visible = state.workspaceSection == WorkspaceSection.Memory && state.memoryToolsOpen,
         )
     }
 
