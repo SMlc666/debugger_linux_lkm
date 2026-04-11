@@ -1,4 +1,4 @@
-name: Build OnePlus_SukiSU Ultra All
+name: Build OnePlus SM8550 Ace2Pro Android13 GKI5.15
 
 on:
   push:
