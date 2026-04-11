@@ -1163,6 +1163,298 @@ static bool handle_search_memory(agent_state *state, const void *payload,
 			   static_cast<uint32_t>(out.size()));
 }
 
+static bool handle_get_stop_state(agent_state *state)
+{
+	lkmdbg_agent_stop_state_reply reply = {};
+	lkmdbg_stop_query_request req = {};
+
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(LKMDBG_AGENT_CMD_GET_STOP_STATE, &reply, sizeof(reply));
+	}
+
+	req.version = LKMDBG_PROTO_VERSION;
+	req.size = sizeof(req);
+	if (ioctl(state->session_fd, LKMDBG_IOC_GET_STOP_STATE, &req) < 0) {
+		reply.status = -errno;
+		copy_cstr(reply.message, sizeof(reply.message), "GET_STOP_STATE failed");
+		return write_frame(LKMDBG_AGENT_CMD_GET_STOP_STATE, &reply, sizeof(reply));
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.cookie = req.stop.cookie;
+	reply.reason = req.stop.reason;
+	reply.flags = req.stop.flags;
+	reply.tgid = req.stop.tgid;
+	reply.tid = req.stop.tid;
+	reply.event_flags = req.stop.event_flags;
+	reply.value0 = req.stop.value0;
+	reply.value1 = req.stop.value1;
+	reply.x0 = req.stop.regs.regs[0];
+	reply.x1 = req.stop.regs.regs[1];
+	reply.x29 = req.stop.regs.regs[29];
+	reply.x30 = req.stop.regs.regs[30];
+	reply.sp = req.stop.regs.sp;
+	reply.pc = req.stop.regs.pc;
+	reply.pstate = req.stop.regs.pstate;
+	reply.features = req.stop.regs.features;
+	reply.fpsr = req.stop.regs.fpsr;
+	reply.fpcr = req.stop.regs.fpcr;
+	copy_cstr(reply.message, sizeof(reply.message),
+		  req.stop.flags ? "stop state ready" : "no active stop");
+	return write_frame(LKMDBG_AGENT_CMD_GET_STOP_STATE, &reply, sizeof(reply));
+}
+
+static bool handle_thread_control(agent_state *state, const void *payload,
+				     uint32_t payload_size, uint32_t command,
+				     unsigned long ioctl_cmd,
+				     const char *ioctl_name,
+				     const char *success_message)
+{
+	lkmdbg_agent_thread_control_request request = {};
+	lkmdbg_agent_thread_control_reply reply = {};
+	lkmdbg_freeze_request req = {};
+
+	if (payload_size < sizeof(request)) {
+		reply.status = LKMDBG_AGENT_STATUS_INVALID_PAYLOAD;
+		copy_cstr(reply.message, sizeof(reply.message), "payload too small");
+		return write_frame(command, &reply, sizeof(reply));
+	}
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(command, &reply, sizeof(reply));
+	}
+
+	memcpy(&request, payload, sizeof(request));
+	req.version = LKMDBG_PROTO_VERSION;
+	req.size = sizeof(req);
+	req.flags = request.flags;
+	req.timeout_ms = request.timeout_ms;
+	if (ioctl(state->session_fd, ioctl_cmd, &req) < 0) {
+		reply.status = -errno;
+		copy_cstr(reply.message, sizeof(reply.message), ioctl_name);
+		return write_frame(command, &reply, sizeof(reply));
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.flags = req.flags;
+	reply.timeout_ms = req.timeout_ms;
+	reply.threads_total = req.threads_total;
+	reply.threads_settled = req.threads_settled;
+	reply.threads_parked = req.threads_parked;
+	copy_cstr(reply.message, sizeof(reply.message), success_message);
+	return write_frame(command, &reply, sizeof(reply));
+}
+
+static bool handle_continue_target(agent_state *state, const void *payload,
+				      uint32_t payload_size)
+{
+	lkmdbg_agent_continue_request request = {};
+	lkmdbg_agent_continue_reply reply = {};
+	lkmdbg_continue_request req = {};
+
+	if (payload_size < sizeof(request)) {
+		reply.status = LKMDBG_AGENT_STATUS_INVALID_PAYLOAD;
+		copy_cstr(reply.message, sizeof(reply.message), "payload too small");
+		return write_frame(LKMDBG_AGENT_CMD_CONTINUE_TARGET, &reply, sizeof(reply));
+	}
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(LKMDBG_AGENT_CMD_CONTINUE_TARGET, &reply, sizeof(reply));
+	}
+
+	memcpy(&request, payload, sizeof(request));
+	req.version = LKMDBG_PROTO_VERSION;
+	req.size = sizeof(req);
+	req.flags = request.flags;
+	req.timeout_ms = request.timeout_ms;
+	req.stop_cookie = request.stop_cookie;
+	if (ioctl(state->session_fd, LKMDBG_IOC_CONTINUE_TARGET, &req) < 0) {
+		reply.status = -errno;
+		copy_cstr(reply.message, sizeof(reply.message), "CONTINUE_TARGET failed");
+		return write_frame(LKMDBG_AGENT_CMD_CONTINUE_TARGET, &reply, sizeof(reply));
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.flags = req.flags;
+	reply.timeout_ms = req.timeout_ms;
+	reply.stop_cookie = req.stop_cookie;
+	reply.threads_total = req.threads_total;
+	reply.threads_settled = req.threads_settled;
+	reply.threads_parked = req.threads_parked;
+	copy_cstr(reply.message, sizeof(reply.message), "target continued");
+	return write_frame(LKMDBG_AGENT_CMD_CONTINUE_TARGET, &reply, sizeof(reply));
+}
+
+static bool handle_single_step(agent_state *state, const void *payload,
+				  uint32_t payload_size)
+{
+	lkmdbg_agent_single_step_request request = {};
+	lkmdbg_agent_single_step_reply reply = {};
+	lkmdbg_single_step_request req = {};
+
+	if (payload_size < sizeof(request)) {
+		reply.status = LKMDBG_AGENT_STATUS_INVALID_PAYLOAD;
+		copy_cstr(reply.message, sizeof(reply.message), "payload too small");
+		return write_frame(LKMDBG_AGENT_CMD_SINGLE_STEP, &reply, sizeof(reply));
+	}
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(LKMDBG_AGENT_CMD_SINGLE_STEP, &reply, sizeof(reply));
+	}
+
+	memcpy(&request, payload, sizeof(request));
+	req.version = LKMDBG_PROTO_VERSION;
+	req.size = sizeof(req);
+	req.tid = request.tid;
+	req.flags = request.flags;
+	if (ioctl(state->session_fd, LKMDBG_IOC_SINGLE_STEP, &req) < 0) {
+		reply.status = -errno;
+		reply.tid = request.tid;
+		reply.flags = request.flags;
+		copy_cstr(reply.message, sizeof(reply.message), "SINGLE_STEP failed");
+		return write_frame(LKMDBG_AGENT_CMD_SINGLE_STEP, &reply, sizeof(reply));
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.tid = req.tid;
+	reply.flags = req.flags;
+	copy_cstr(reply.message, sizeof(reply.message), "single-step armed");
+	return write_frame(LKMDBG_AGENT_CMD_SINGLE_STEP, &reply, sizeof(reply));
+}
+
+static bool handle_hwpoint_mutation(agent_state *state, const void *payload,
+				       uint32_t payload_size, uint32_t command,
+				       unsigned long ioctl_cmd,
+				       const char *failure_message,
+				       const char *success_message)
+{
+	lkmdbg_agent_hwpoint_request request = {};
+	lkmdbg_agent_hwpoint_reply reply = {};
+	lkmdbg_hwpoint_request req = {};
+
+	if (payload_size < sizeof(request)) {
+		reply.status = LKMDBG_AGENT_STATUS_INVALID_PAYLOAD;
+		copy_cstr(reply.message, sizeof(reply.message), "payload too small");
+		return write_frame(command, &reply, sizeof(reply));
+	}
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(command, &reply, sizeof(reply));
+	}
+
+	memcpy(&request, payload, sizeof(request));
+	req.version = LKMDBG_PROTO_VERSION;
+	req.size = sizeof(req);
+	req.id = request.id;
+	req.addr = request.addr;
+	req.tid = request.tid;
+	req.type = request.type;
+	req.len = request.len;
+	req.flags = request.flags;
+	req.trigger_hit_count = request.trigger_hit_count;
+	req.action_flags = request.action_flags;
+	if (ioctl(state->session_fd, ioctl_cmd, &req) < 0) {
+		reply.status = -errno;
+		reply.id = request.id;
+		reply.addr = request.addr;
+		reply.tid = request.tid;
+		reply.type = request.type;
+		reply.len = request.len;
+		reply.flags = request.flags;
+		reply.trigger_hit_count = request.trigger_hit_count;
+		reply.action_flags = request.action_flags;
+		copy_cstr(reply.message, sizeof(reply.message), failure_message);
+		return write_frame(command, &reply, sizeof(reply));
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.id = req.id;
+	reply.addr = req.addr;
+	reply.tid = req.tid;
+	reply.type = req.type;
+	reply.len = req.len;
+	reply.flags = req.flags;
+	reply.trigger_hit_count = req.trigger_hit_count;
+	reply.action_flags = req.action_flags;
+	copy_cstr(reply.message, sizeof(reply.message), success_message);
+	return write_frame(command, &reply, sizeof(reply));
+}
+
+static bool handle_query_hwpoints(agent_state *state)
+{
+	lkmdbg_agent_query_hwpoints_reply reply = {};
+	std::vector<lkmdbg_agent_hwpoint_record> records;
+	std::vector<char> payload;
+	uint64_t cursor = 0;
+
+	if (state->session_fd < 0) {
+		reply.status = LKMDBG_AGENT_STATUS_NO_SESSION;
+		copy_cstr(reply.message, sizeof(reply.message), "session not open");
+		return write_frame(LKMDBG_AGENT_CMD_QUERY_HWPOINTS, &reply, sizeof(reply));
+	}
+
+	for (;;) {
+		lkmdbg_hwpoint_query_request req = {};
+		lkmdbg_hwpoint_entry entries[64] = {};
+
+		req.version = LKMDBG_PROTO_VERSION;
+		req.size = sizeof(req);
+		req.entries_addr = reinterpret_cast<uintptr_t>(entries);
+		req.max_entries = static_cast<uint32_t>(sizeof(entries) / sizeof(entries[0]));
+		req.start_id = cursor;
+		if (ioctl(state->session_fd, LKMDBG_IOC_QUERY_HWPOINTS, &req) < 0) {
+			reply.status = -errno;
+			copy_cstr(reply.message, sizeof(reply.message), "QUERY_HWPOINTS failed");
+			return write_frame(LKMDBG_AGENT_CMD_QUERY_HWPOINTS, &reply, sizeof(reply));
+		}
+
+		for (uint32_t i = 0; i < req.entries_filled; ++i) {
+			lkmdbg_agent_hwpoint_record record = {};
+
+			record.id = entries[i].id;
+			record.addr = entries[i].addr;
+			record.hits = entries[i].hits;
+			record.trigger_hit_count = entries[i].trigger_hit_count;
+			record.tgid = entries[i].tgid;
+			record.tid = entries[i].tid;
+			record.type = entries[i].type;
+			record.len = entries[i].len;
+			record.flags = entries[i].flags;
+			record.state = entries[i].state;
+			record.action_flags = entries[i].action_flags;
+			records.push_back(record);
+		}
+
+		if (req.done)
+			break;
+		if (req.next_id <= cursor) {
+			reply.status = -EIO;
+			copy_cstr(reply.message, sizeof(reply.message),
+				  "QUERY_HWPOINTS cursor stalled");
+			return write_frame(LKMDBG_AGENT_CMD_QUERY_HWPOINTS, &reply, sizeof(reply));
+		}
+		cursor = req.next_id;
+	}
+
+	reply.status = LKMDBG_AGENT_STATUS_OK;
+	reply.count = static_cast<uint32_t>(records.size());
+	copy_cstr(reply.message, sizeof(reply.message), "hwpoints ready");
+	payload.resize(sizeof(reply) + records.size() * sizeof(records[0]));
+	memcpy(payload.data(), &reply, sizeof(reply));
+	if (!records.empty()) {
+		memcpy(payload.data() + sizeof(reply), records.data(),
+		       records.size() * sizeof(records[0]));
+	}
+	return write_frame(LKMDBG_AGENT_CMD_QUERY_HWPOINTS, payload.data(),
+			   static_cast<uint32_t>(payload.size()));
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -1268,6 +1560,70 @@ int main(int argc, char **argv)
 			break;
 		case LKMDBG_AGENT_CMD_SEARCH_MEMORY:
 			if (!handle_search_memory(&state, payload.data(), remaining)) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_GET_STOP_STATE:
+			if (!handle_get_stop_state(&state)) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_FREEZE_THREADS:
+			if (!handle_thread_control(&state, payload.data(), remaining,
+						   LKMDBG_AGENT_CMD_FREEZE_THREADS,
+						   LKMDBG_IOC_FREEZE_THREADS,
+						   "FREEZE_THREADS failed",
+						   "threads frozen")) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_THAW_THREADS:
+			if (!handle_thread_control(&state, payload.data(), remaining,
+						   LKMDBG_AGENT_CMD_THAW_THREADS,
+						   LKMDBG_IOC_THAW_THREADS,
+						   "THAW_THREADS failed",
+						   "threads thawed")) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_CONTINUE_TARGET:
+			if (!handle_continue_target(&state, payload.data(), remaining)) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_SINGLE_STEP:
+			if (!handle_single_step(&state, payload.data(), remaining)) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_QUERY_HWPOINTS:
+			if (!handle_query_hwpoints(&state)) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_ADD_HWPOINT:
+			if (!handle_hwpoint_mutation(&state, payload.data(), remaining,
+						     LKMDBG_AGENT_CMD_ADD_HWPOINT,
+						     LKMDBG_IOC_ADD_HWPOINT,
+						     "ADD_HWPOINT failed",
+						     "hwpoint added")) {
+				close_session(&state);
+				return 1;
+			}
+			break;
+		case LKMDBG_AGENT_CMD_REMOVE_HWPOINT:
+			if (!handle_hwpoint_mutation(&state, payload.data(), remaining,
+						     LKMDBG_AGENT_CMD_REMOVE_HWPOINT,
+						     LKMDBG_IOC_REMOVE_HWPOINT,
+						     "REMOVE_HWPOINT failed",
+						     "hwpoint removed")) {
 				close_session(&state);
 				return 1;
 			}

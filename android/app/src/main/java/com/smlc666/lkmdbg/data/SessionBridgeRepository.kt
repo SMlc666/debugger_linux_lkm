@@ -2,10 +2,16 @@ package com.smlc666.lkmdbg.data
 
 import android.content.Context
 import com.smlc666.lkmdbg.R
+import com.smlc666.lkmdbg.shared.BridgeContinueTargetRequest
 import com.smlc666.lkmdbg.shared.BridgeEventRecord
+import com.smlc666.lkmdbg.shared.BridgeFreezeThreadsRequest
 import com.smlc666.lkmdbg.shared.BridgeHelloReply
+import com.smlc666.lkmdbg.shared.BridgeHwpointRecord
+import com.smlc666.lkmdbg.shared.BridgeHwpointRequest
 import com.smlc666.lkmdbg.shared.BridgeImageRecord
+import com.smlc666.lkmdbg.shared.BridgeSingleStepRequest
 import com.smlc666.lkmdbg.shared.BridgeStatusSnapshot
+import com.smlc666.lkmdbg.shared.BridgeStopState
 import com.smlc666.lkmdbg.shared.BridgeThreadRecord
 import com.smlc666.lkmdbg.shared.BridgeThreadRegistersReply
 import com.smlc666.lkmdbg.shared.BridgeVmaRecord
@@ -14,12 +20,48 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
+private const val HWPOINT_TYPE_WRITE = 0x00000002u
+private const val HWPOINT_TYPE_EXEC = 0x00000004u
+private const val HWPOINT_FLAG_MMU = 0x00000002u
+
 data class SessionEventEntry(
     val record: BridgeEventRecord,
     val receivedAtMs: Long,
 )
 
 private val MEMORY_SELECTION_SIZES = listOf(1, 2, 4, 8, 16)
+
+enum class HwpointPreset(
+    val labelRes: Int,
+    val type: UInt,
+    val flags: UInt,
+    val defaultLength: Int,
+) {
+    ExecHardware(
+        labelRes = R.string.hwpoint_preset_exec_hw,
+        type = HWPOINT_TYPE_EXEC,
+        flags = 0u,
+        defaultLength = 4,
+    ),
+    ExecMmu(
+        labelRes = R.string.hwpoint_preset_exec_mmu,
+        type = HWPOINT_TYPE_EXEC,
+        flags = HWPOINT_FLAG_MMU,
+        defaultLength = 4,
+    ),
+    WriteHardware(
+        labelRes = R.string.hwpoint_preset_write_hw,
+        type = HWPOINT_TYPE_WRITE,
+        flags = 0u,
+        defaultLength = 4,
+    ),
+    WriteMmu(
+        labelRes = R.string.hwpoint_preset_write_mmu,
+        type = HWPOINT_TYPE_WRITE,
+        flags = HWPOINT_FLAG_MMU,
+        defaultLength = 4,
+    ),
+}
 
 data class MemorySearchUiState(
     val query: String = "",
@@ -33,9 +75,12 @@ data class MemorySearchUiState(
 
 data class SessionBridgeState(
     val busy: Boolean = false,
+    val sessionControlsBusy: Boolean = false,
     val agentPath: String,
     val workspaceSection: WorkspaceSection = WorkspaceSection.Memory,
     val targetPidInput: String = "",
+    val targetTidInput: String = "",
+    val selectedProcessPid: Int? = null,
     val hello: BridgeHelloReply? = null,
     val snapshot: BridgeStatusSnapshot = BridgeStatusSnapshot(
         status = 0,
@@ -51,6 +96,7 @@ data class SessionBridgeState(
         transport = "su->stdio-pipe",
         message = "idle",
     ),
+    val stopState: BridgeStopState? = null,
     val lastMessage: String,
     val processFilter: ProcessFilter = ProcessFilter.All,
     val processes: List<ResolvedProcessRecord> = emptyList(),
@@ -58,8 +104,14 @@ data class SessionBridgeState(
     val selectedThreadTid: Int? = null,
     val selectedThreadRegisters: BridgeThreadRegistersReply? = null,
     val recentEvents: List<SessionEventEntry> = emptyList(),
+    val eventsAutoPollEnabled: Boolean = false,
     val images: List<BridgeImageRecord> = emptyList(),
     val vmas: List<BridgeVmaRecord> = emptyList(),
+    val hwpoints: List<BridgeHwpointRecord> = emptyList(),
+    val selectedHwpointId: ULong? = null,
+    val hwpointAddressInput: String = "",
+    val hwpointLengthInput: String = HwpointPreset.ExecHardware.defaultLength.toString(),
+    val hwpointPreset: HwpointPreset = HwpointPreset.ExecHardware,
     val memoryAddressInput: String = "",
     val memorySelectionSize: Int = 4,
     val memoryWriteHexInput: String = "",
@@ -147,6 +199,12 @@ class SessionBridgeRepository(
         }
     }
 
+    fun updateTargetTidInput(value: String) {
+        _state.update { current ->
+            current.copy(targetTidInput = value.filter { it.isDigit() })
+        }
+    }
+
     fun updateMemoryToolsOpen(open: Boolean) {
         _state.update { current -> current.copy(memoryToolsOpen = open) }
     }
@@ -160,13 +218,17 @@ class SessionBridgeRepository(
             current.copy(
                 workspaceSection = section,
                 memoryToolsOpen = if (section != WorkspaceSection.Memory) false else current.memoryToolsOpen,
-                memoryViewMode = if (section != WorkspaceSection.Memory) 0 else current.memoryViewMode
+                memoryViewMode = if (section != WorkspaceSection.Memory) 0 else current.memoryViewMode,
             )
         }
     }
 
     fun updateProcessFilter(filter: ProcessFilter) {
         _state.update { current -> current.copy(processFilter = filter) }
+    }
+
+    fun selectProcess(pid: Int) {
+        _state.update { current -> current.copy(selectedProcessPid = pid) }
     }
 
     fun cycleProcessFilter() {
@@ -266,6 +328,38 @@ class SessionBridgeRepository(
         )
     }
 
+    fun updateHwpointAddressInput(value: String) {
+        val filtered = value.filter { it.isDigit() || it.lowercaseChar() in 'a'..'f' || it == 'x' || it == 'X' }
+        _state.update { current -> current.copy(hwpointAddressInput = filtered) }
+    }
+
+    fun updateHwpointLengthInput(value: String) {
+        _state.update { current -> current.copy(hwpointLengthInput = value.filter { it.isDigit() }) }
+    }
+
+    fun cycleHwpointPreset() {
+        val values = HwpointPreset.entries
+        _state.update { current ->
+            val next = values[(current.hwpointPreset.ordinal + 1) % values.size]
+            current.copy(
+                hwpointPreset = next,
+                hwpointLengthInput = next.defaultLength.toString(),
+            )
+        }
+    }
+
+    fun selectHwpoint(id: ULong) {
+        _state.update { current -> current.copy(selectedHwpointId = id) }
+    }
+
+    fun updateEventsAutoPollEnabled(enabled: Boolean) {
+        _state.update { current -> current.copy(eventsAutoPollEnabled = enabled) }
+    }
+
+    fun clearRecentEvents() {
+        _state.update { current -> current.copy(recentEvents = emptyList()) }
+    }
+
     suspend fun connect() {
         operationRunner.run { unsafeOps.connect() }
     }
@@ -276,17 +370,23 @@ class SessionBridgeRepository(
                 unsafeOps.connect()
             unsafeOps.openSession()
             unsafeOps.refreshStatus()
+            refreshStopStateUnsafe(updateMessage = false)
+            refreshHwpointsUnsafe(updateMessage = false)
             if (state.value.processes.isEmpty())
                 unsafeOps.refreshProcesses()
         }
     }
 
     suspend fun refreshStatus() {
-        operationRunner.run { unsafeOps.refreshStatus() }
+        operationRunner.run {
+            unsafeOps.refreshStatus()
+            refreshStopStateUnsafe(updateMessage = false)
+        }
     }
 
     suspend fun attachTarget() {
         val targetPid = state.value.targetPidInput.toIntOrNull()
+        val targetTid = state.value.targetTidInput.toIntOrNull() ?: 0
         if (targetPid == null || targetPid <= 0) {
             _state.update { current ->
                 current.copy(lastMessage = appContext.getString(R.string.session_error_invalid_pid))
@@ -295,7 +395,7 @@ class SessionBridgeRepository(
         }
 
         operationRunner.run {
-            attachTargetUnsafe(targetPid)
+            attachTargetUnsafe(targetPid, targetTid)
         }
     }
 
@@ -320,6 +420,10 @@ class SessionBridgeRepository(
         operationRunner.run { threadController.refreshRegisters(tid) }
     }
 
+    suspend fun selectThread(tid: Int) {
+        refreshThreadRegisters(tid)
+    }
+
     suspend fun refreshEvents(timeoutMs: Int = 0, maxEvents: Int = 16) {
         operationRunner.run {
             if (!state.value.snapshot.sessionOpen) {
@@ -327,6 +431,18 @@ class SessionBridgeRepository(
                 return@run
             }
             unsafeOps.refreshEvents(timeoutMs, maxEvents)
+        }
+    }
+
+    suspend fun refreshEventsBackground(timeoutMs: Int = 250, maxEvents: Int = 16) {
+        if (!state.value.snapshot.sessionOpen || state.value.busy)
+            return
+        runCatching {
+            val reply = client.pollEvents(timeoutMs, maxEvents)
+            ensureBridgeStatusOk(reply.status, reply.message, "POLL_EVENT")
+            mergeRecentEvents(reply.events, updateMessage = false)
+        }.onFailure {
+            updateEventsAutoPollEnabled(false)
         }
     }
 
@@ -349,6 +465,28 @@ class SessionBridgeRepository(
                 return@run
             }
             unsafeOps.refreshVmas()
+        }
+    }
+
+    suspend fun refreshStopState() {
+        operationRunner.run {
+            if (!state.value.snapshot.sessionOpen) {
+                _state.update { current -> current.copy(stopState = null) }
+                operationRunner.updateMessage(appContext.getString(R.string.event_error_no_session))
+                return@run
+            }
+            refreshStopStateUnsafe(updateMessage = true)
+        }
+    }
+
+    suspend fun refreshHwpoints() {
+        operationRunner.run {
+            if (!state.value.snapshot.sessionOpen) {
+                _state.update { current -> current.copy(hwpoints = emptyList(), selectedHwpointId = null) }
+                operationRunner.updateMessage(appContext.getString(R.string.event_error_no_session))
+                return@run
+            }
+            refreshHwpointsUnsafe(updateMessage = true)
         }
     }
 
@@ -470,10 +608,166 @@ class SessionBridgeRepository(
         }
     }
 
+    suspend fun useSelectedPcForHwpoint() {
+        operationRunner.run {
+            val pc = state.value.selectedThreadRegisters?.pc ?: state.value.threads.firstOrNull()?.userPc
+            if (pc == null || pc == 0uL)
+                throw IllegalStateException(appContext.getString(R.string.memory_error_no_pc))
+            _state.update { current -> current.copy(hwpointAddressInput = hex64(pc)) }
+        }
+    }
+
+    suspend fun useMemoryFocusForHwpoint() {
+        operationRunner.run {
+            val focus = state.value.memoryPage?.focusAddress
+                ?: throw IllegalStateException(appContext.getString(R.string.memory_error_no_page))
+            _state.update { current -> current.copy(hwpointAddressInput = hex64(focus)) }
+        }
+    }
+
+    suspend fun freezeThreads(timeoutMs: Int = 1500) {
+        runSessionControl {
+            ensureSessionReadyUnsafe()
+            if (!hasActiveTarget())
+                throw IllegalStateException(appContext.getString(R.string.thread_error_no_target))
+            val reply = client.freezeThreads(BridgeFreezeThreadsRequest(timeoutMs = timeoutMs))
+            ensureBridgeStatusOk(reply.status, reply.message, "FREEZE_THREADS")
+            refreshStopStateUnsafe(updateMessage = false)
+            _state.update { current ->
+                current.copy(
+                    lastMessage = reply.message.ifBlank {
+                        appContext.getString(
+                            R.string.session_message_threads_frozen,
+                            reply.threadsParked.toString(),
+                            reply.threadsTotal.toString(),
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    suspend fun thawThreads(timeoutMs: Int = 1500) {
+        runSessionControl {
+            ensureSessionReadyUnsafe()
+            if (!hasActiveTarget())
+                throw IllegalStateException(appContext.getString(R.string.thread_error_no_target))
+            val reply = client.thawThreads(BridgeFreezeThreadsRequest(timeoutMs = timeoutMs))
+            ensureBridgeStatusOk(reply.status, reply.message, "THAW_THREADS")
+            refreshStopStateUnsafe(updateMessage = false)
+            _state.update { current ->
+                current.copy(
+                    lastMessage = reply.message.ifBlank {
+                        appContext.getString(R.string.session_message_threads_thawed)
+                    },
+                )
+            }
+        }
+    }
+
+    suspend fun continueTarget(timeoutMs: Int = 1500) {
+        runSessionControl {
+            ensureSessionReadyUnsafe()
+            if (!hasActiveTarget())
+                throw IllegalStateException(appContext.getString(R.string.thread_error_no_target))
+            val reply = client.continueTarget(
+                BridgeContinueTargetRequest(
+                    stopCookie = state.value.stopState?.cookie ?: 0uL,
+                    timeoutMs = timeoutMs,
+                ),
+            )
+            ensureBridgeStatusOk(reply.status, reply.message, "CONTINUE_TARGET")
+            refreshStopStateUnsafe(updateMessage = false)
+            refreshThreadsPreservingSelection(updateMessage = false)
+            _state.update { current ->
+                current.copy(
+                    lastMessage = reply.message.ifBlank {
+                        appContext.getString(R.string.session_message_target_continued)
+                    },
+                )
+            }
+        }
+    }
+
+    suspend fun singleStepSelectedThread() {
+        runSessionControl {
+            ensureSessionReadyUnsafe()
+            val tid = currentSelectedTid()
+            if (tid <= 0)
+                throw IllegalStateException(appContext.getString(R.string.thread_error_no_selection))
+            val reply = client.singleStep(BridgeSingleStepRequest(tid = tid))
+            ensureBridgeStatusOk(reply.status, reply.message, "SINGLE_STEP")
+            refreshStopStateUnsafe(updateMessage = false)
+            _state.update { current ->
+                current.copy(
+                    lastMessage = reply.message.ifBlank {
+                        appContext.getString(R.string.session_message_single_step, tid)
+                    },
+                )
+            }
+        }
+    }
+
+    suspend fun addHwpoint() {
+        runSessionControl {
+            ensureSessionReadyUnsafe()
+            if (!hasActiveTarget())
+                throw IllegalStateException(appContext.getString(R.string.thread_error_no_target))
+            val request = buildHwpointRequest()
+            val reply = client.addHwpoint(request)
+            ensureBridgeStatusOk(reply.status, reply.message, "ADD_HWPOINT")
+            refreshHwpointsUnsafe(updateMessage = false)
+            _state.update { current ->
+                current.copy(
+                    selectedHwpointId = reply.id.takeIf { it != 0uL } ?: current.selectedHwpointId,
+                    lastMessage = reply.message.ifBlank {
+                        appContext.getString(R.string.hwpoint_message_added, hex64(reply.addr))
+                    },
+                )
+            }
+        }
+    }
+
+    suspend fun removeSelectedHwpoint() {
+        runSessionControl {
+            ensureSessionReadyUnsafe()
+            val selected = state.value.hwpoints.firstOrNull { it.id == state.value.selectedHwpointId }
+                ?: throw IllegalStateException(appContext.getString(R.string.hwpoint_error_no_selection))
+            val reply = client.removeHwpoint(
+                BridgeHwpointRequest(
+                    id = selected.id,
+                    addr = selected.addr,
+                    tid = selected.tid,
+                    type = selected.type,
+                    len = selected.len,
+                    flags = selected.flags,
+                    triggerHitCount = selected.triggerHitCount,
+                    actionFlags = selected.actionFlags,
+                ),
+            )
+            ensureBridgeStatusOk(reply.status, reply.message, "REMOVE_HWPOINT")
+            refreshHwpointsUnsafe(updateMessage = false)
+            _state.update { current ->
+                current.copy(
+                    selectedHwpointId = current.hwpoints.firstOrNull { it.id != selected.id }?.id,
+                    lastMessage = reply.message.ifBlank {
+                        appContext.getString(R.string.hwpoint_message_removed, selected.id.toString())
+                    },
+                )
+            }
+        }
+    }
+
     suspend fun attachProcess(targetPid: Int): Boolean =
         operationRunner.run {
-            _state.update { current -> current.copy(targetPidInput = targetPid.toString()) }
-            attachTargetUnsafe(targetPid)
+            _state.update { current ->
+                current.copy(
+                    selectedProcessPid = targetPid,
+                    targetPidInput = targetPid.toString(),
+                    targetTidInput = "",
+                )
+            }
+            attachTargetUnsafe(targetPid, 0)
             true
         } ?: false
 
@@ -487,12 +781,127 @@ class SessionBridgeRepository(
         unsafeOps.refreshStatus()
     }
 
-    private suspend fun attachTargetUnsafe(targetPid: Int) {
+    private suspend fun attachTargetUnsafe(targetPid: Int, targetTid: Int) {
         ensureSessionReadyUnsafe()
-        unsafeOps.attachTarget(targetPid)
-        unsafeOps.refreshThreads()
+        unsafeOps.attachTarget(targetPid, targetTid)
+        refreshThreadsPreservingSelection(updateMessage = false)
+        refreshStopStateUnsafe(updateMessage = false)
+        refreshHwpointsUnsafe(updateMessage = false)
         unsafeOps.refreshVmas()
         unsafeOps.refreshImages()
         unsafeOps.refreshEvents(timeoutMs = 0, maxEvents = 16)
+        _state.update { current ->
+            current.copy(
+                selectedProcessPid = targetPid,
+                targetPidInput = targetPid.toString(),
+                targetTidInput = targetTid.takeIf { it > 0 }?.toString().orEmpty(),
+            )
+        }
+    }
+
+    private suspend fun refreshThreadsPreservingSelection(updateMessage: Boolean) {
+        unsafeOps.refreshThreads(preferredTid = state.value.selectedThreadTid, updateMessage = updateMessage)
+    }
+
+    private suspend fun refreshStopStateUnsafe(updateMessage: Boolean) {
+        val reply = client.getStopState()
+        ensureBridgeStatusOk(reply.status, reply.message, "GET_STOP_STATE")
+        val normalized = normalizeStopState(reply.stop)
+        _state.update { current ->
+            current.copy(
+                stopState = normalized,
+                lastMessage = if (updateMessage) {
+                    reply.message.ifBlank {
+                        if (normalized == null) {
+                            appContext.getString(R.string.session_stop_state_idle)
+                        } else {
+                            appContext.getString(R.string.session_stop_state_ready, normalized.tid)
+                        }
+                    }
+                } else {
+                    current.lastMessage
+                },
+            )
+        }
+    }
+
+    private suspend fun refreshHwpointsUnsafe(updateMessage: Boolean) {
+        val reply = client.queryHwpoints()
+        ensureBridgeStatusOk(reply.status, reply.message, "QUERY_HWPOINTS")
+        _state.update { current ->
+            val selected = current.selectedHwpointId?.takeIf { selectedId ->
+                reply.hwpoints.any { it.id == selectedId }
+            } ?: reply.hwpoints.firstOrNull()?.id
+            current.copy(
+                hwpoints = reply.hwpoints,
+                selectedHwpointId = selected,
+                lastMessage = if (updateMessage) {
+                    reply.message.ifBlank {
+                        appContext.getString(R.string.hwpoint_message_listed, reply.hwpoints.size)
+                    }
+                } else {
+                    current.lastMessage
+                },
+            )
+        }
+    }
+
+    private fun mergeRecentEvents(events: List<BridgeEventRecord>, updateMessage: Boolean) {
+        val now = System.currentTimeMillis()
+        _state.update { current ->
+            val merged = buildList {
+                events.forEach { add(SessionEventEntry(it, now)) }
+                current.recentEvents.forEach { existing ->
+                    if (none { it.record.seq == existing.record.seq })
+                        add(existing)
+                }
+            }.take(256)
+            current.copy(
+                recentEvents = merged,
+                lastMessage = if (updateMessage && events.isNotEmpty()) {
+                    appContext.getString(R.string.event_message_refreshed, events.size)
+                } else {
+                    current.lastMessage
+                },
+            )
+        }
+    }
+
+    private fun normalizeStopState(stop: BridgeStopState): BridgeStopState? =
+        if (stop.cookie == 0uL && stop.flags == 0u && stop.tid == 0 && stop.reason == 0u) {
+            null
+        } else {
+            stop
+        }
+
+    private fun currentSelectedTid(): Int =
+        state.value.selectedThreadTid
+            ?: state.value.stopState?.tid
+            ?: state.value.snapshot.targetTid
+
+    private suspend fun runSessionControl(block: suspend () -> Unit) {
+        _state.update { current -> current.copy(sessionControlsBusy = true) }
+        try {
+            operationRunner.run(block)
+        } finally {
+            _state.update { current -> current.copy(sessionControlsBusy = false) }
+        }
+    }
+
+    private fun buildHwpointRequest(): BridgeHwpointRequest {
+        val current = state.value
+        val addr = memoryEditor.parseAddressInput(current.hwpointAddressInput)
+            ?: throw IllegalStateException(appContext.getString(R.string.hwpoint_error_invalid_address))
+        val len = current.hwpointLengthInput.toUIntOrNull()
+            ?: current.hwpointPreset.defaultLength.toUInt()
+        if (len == 0u)
+            throw IllegalStateException(appContext.getString(R.string.hwpoint_error_invalid_length))
+        return BridgeHwpointRequest(
+            addr = addr,
+            tid = current.selectedThreadTid ?: 0,
+            type = current.hwpointPreset.type,
+            len = len,
+            flags = current.hwpointPreset.flags,
+        )
     }
 }

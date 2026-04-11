@@ -4,8 +4,16 @@ import android.content.Context
 import android.os.Process as AndroidProcess
 import com.smlc666.lkmdbg.shared.BridgeCommand
 import com.smlc666.lkmdbg.shared.BridgeEventBatchReply
+import com.smlc666.lkmdbg.shared.BridgeFreezeThreadsReply
+import com.smlc666.lkmdbg.shared.BridgeFreezeThreadsRequest
 import com.smlc666.lkmdbg.shared.BridgeHelloReply
+import com.smlc666.lkmdbg.shared.BridgeGetStopStateReply
+import com.smlc666.lkmdbg.shared.BridgeHwpointListReply
+import com.smlc666.lkmdbg.shared.BridgeHwpointMutationReply
+import com.smlc666.lkmdbg.shared.BridgeHwpointRequest
 import com.smlc666.lkmdbg.shared.BridgeImageListReply
+import com.smlc666.lkmdbg.shared.BridgeContinueTargetReply
+import com.smlc666.lkmdbg.shared.BridgeContinueTargetRequest
 import com.smlc666.lkmdbg.shared.BridgeMemoryReadReply
 import com.smlc666.lkmdbg.shared.BridgeMemorySearchReply
 import com.smlc666.lkmdbg.shared.BridgeMemoryWriteReply
@@ -13,6 +21,8 @@ import com.smlc666.lkmdbg.shared.BridgeOpenSessionReply
 import com.smlc666.lkmdbg.shared.BridgeProcessListReply
 import com.smlc666.lkmdbg.shared.BridgeSetTargetReply
 import com.smlc666.lkmdbg.shared.BridgeSetTargetRequest
+import com.smlc666.lkmdbg.shared.BridgeSingleStepReply
+import com.smlc666.lkmdbg.shared.BridgeSingleStepRequest
 import com.smlc666.lkmdbg.shared.BridgeStatusCode
 import com.smlc666.lkmdbg.shared.BridgeStatusSnapshot
 import com.smlc666.lkmdbg.shared.BridgeThreadListReply
@@ -249,6 +259,120 @@ class PipeAgentClient(
         }
     }
 
+    suspend fun getStopState(): BridgeGetStopStateReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(requireOutputLocked(), BridgeCommand.GetStopState)
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.GetStopState.wireId) {
+                return@synchronized BridgeGetStopStateReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    stop = com.smlc666.lkmdbg.shared.BridgeStopState(
+                        cookie = 0uL,
+                        reason = 0u,
+                        flags = 0u,
+                        tgid = 0,
+                        tid = 0,
+                        eventFlags = 0u,
+                        value0 = 0uL,
+                        value1 = 0uL,
+                        x0 = 0uL,
+                        x1 = 0uL,
+                        x29 = 0uL,
+                        x30 = 0uL,
+                        sp = 0uL,
+                        pc = 0uL,
+                        pstate = 0uL,
+                        features = 0u,
+                        fpsr = 0u,
+                        fpcr = 0u,
+                    ),
+                    message = "unexpected get-stop-state reply command=${header.command}",
+                )
+            }
+            BridgeWireCodec.decodeGetStopStateReply(payload)
+        }
+    }
+
+    suspend fun freezeThreads(
+        request: BridgeFreezeThreadsRequest = BridgeFreezeThreadsRequest(),
+    ): BridgeFreezeThreadsReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(
+                requireOutputLocked(),
+                BridgeCommand.FreezeThreads,
+                BridgeWireCodec.encodeFreezeThreadsRequest(request),
+            )
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.FreezeThreads.wireId) {
+                return@synchronized BridgeFreezeThreadsReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    flags = request.flags,
+                    timeoutMs = request.timeoutMs,
+                    threadsTotal = 0u,
+                    threadsSettled = 0u,
+                    threadsParked = 0u,
+                    message = "unexpected freeze-threads reply command=${header.command}",
+                )
+            }
+            BridgeWireCodec.decodeFreezeThreadsReply(payload)
+        }
+    }
+
+    suspend fun thawThreads(
+        request: BridgeFreezeThreadsRequest = BridgeFreezeThreadsRequest(),
+    ): BridgeFreezeThreadsReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(
+                requireOutputLocked(),
+                BridgeCommand.ThawThreads,
+                BridgeWireCodec.encodeFreezeThreadsRequest(request),
+            )
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.ThawThreads.wireId) {
+                return@synchronized BridgeFreezeThreadsReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    flags = request.flags,
+                    timeoutMs = request.timeoutMs,
+                    threadsTotal = 0u,
+                    threadsSettled = 0u,
+                    threadsParked = 0u,
+                    message = "unexpected thaw-threads reply command=${header.command}",
+                )
+            }
+            BridgeWireCodec.decodeFreezeThreadsReply(payload)
+        }
+    }
+
+    suspend fun continueTarget(
+        request: BridgeContinueTargetRequest = BridgeContinueTargetRequest(),
+    ): BridgeContinueTargetReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(
+                requireOutputLocked(),
+                BridgeCommand.ContinueTarget,
+                BridgeWireCodec.encodeContinueTargetRequest(request),
+            )
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.ContinueTarget.wireId) {
+                return@synchronized BridgeContinueTargetReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    flags = request.flags,
+                    timeoutMs = request.timeoutMs,
+                    stopCookie = request.stopCookie,
+                    threadsTotal = 0u,
+                    threadsSettled = 0u,
+                    threadsParked = 0u,
+                    message = "unexpected continue-target reply command=${header.command}",
+                )
+            }
+            BridgeWireCodec.decodeContinueTargetReply(payload)
+        }
+    }
+
     suspend fun writeMemory(
         remoteAddr: ULong,
         data: ByteArray,
@@ -273,6 +397,64 @@ class PipeAgentClient(
                 )
             }
             BridgeWireCodec.decodeWriteMemoryReply(payload)
+        }
+    }
+
+    suspend fun addHwpoint(
+        request: BridgeHwpointRequest,
+    ): BridgeHwpointMutationReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(
+                requireOutputLocked(),
+                BridgeCommand.AddHwpoint,
+                BridgeWireCodec.encodeHwpointRequest(request),
+            )
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.AddHwpoint.wireId) {
+                return@synchronized BridgeHwpointMutationReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    id = request.id,
+                    addr = request.addr,
+                    tid = request.tid,
+                    type = request.type,
+                    len = request.len,
+                    flags = request.flags,
+                    triggerHitCount = request.triggerHitCount,
+                    actionFlags = request.actionFlags,
+                    message = "unexpected add-hwpoint reply command=${header.command}",
+                )
+            }
+            BridgeWireCodec.decodeHwpointMutationReply(payload)
+        }
+    }
+
+    suspend fun removeHwpoint(
+        request: BridgeHwpointRequest,
+    ): BridgeHwpointMutationReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(
+                requireOutputLocked(),
+                BridgeCommand.RemoveHwpoint,
+                BridgeWireCodec.encodeHwpointRequest(request),
+            )
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.RemoveHwpoint.wireId) {
+                return@synchronized BridgeHwpointMutationReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    id = request.id,
+                    addr = request.addr,
+                    tid = request.tid,
+                    type = request.type,
+                    len = request.len,
+                    flags = request.flags,
+                    triggerHitCount = request.triggerHitCount,
+                    actionFlags = request.actionFlags,
+                    message = "unexpected remove-hwpoint reply command=${header.command}",
+                )
+            }
+            BridgeWireCodec.decodeHwpointMutationReply(payload)
         }
     }
 
@@ -310,18 +492,58 @@ class PipeAgentClient(
                     tid = tid,
                     flags = 0u,
                     regs = ULongArray(31),
-                    sp = 0u,
-                    pc = 0u,
-                    pstate = 0u,
+                    sp = 0uL,
+                    pc = 0uL,
+                    pstate = 0uL,
                     features = 0u,
                     fpsr = 0u,
                     fpcr = 0u,
-                    v0Lo = 0u,
-                    v0Hi = 0u,
+                    v0Lo = 0uL,
+                    v0Hi = 0uL,
                     message = "unexpected get-registers reply command=${header.command}",
                 )
             }
             BridgeWireCodec.decodeGetRegistersReply(payload)
+        }
+    }
+
+    suspend fun singleStep(
+        request: BridgeSingleStepRequest,
+    ): BridgeSingleStepReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(
+                requireOutputLocked(),
+                BridgeCommand.SingleStep,
+                BridgeWireCodec.encodeSingleStepRequest(request),
+            )
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.SingleStep.wireId) {
+                return@synchronized BridgeSingleStepReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    tid = request.tid,
+                    flags = request.flags,
+                    message = "unexpected single-step reply command=${header.command}",
+                )
+            }
+            BridgeWireCodec.decodeSingleStepReply(payload)
+        }
+    }
+
+    suspend fun queryHwpoints(): BridgeHwpointListReply = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            ensureProcessLocked()
+            BridgeWireCodec.writeFrame(requireOutputLocked(), BridgeCommand.QueryHwpoints)
+            val (header, payload) = BridgeWireCodec.readFrame(requireInputLocked())
+            if (header.command != BridgeCommand.QueryHwpoints.wireId) {
+                return@synchronized BridgeHwpointListReply(
+                    status = BridgeStatusCode.InvalidHeader.wireValue,
+                    count = 0u,
+                    message = "unexpected query-hwpoints reply command=${header.command}",
+                    hwpoints = emptyList(),
+                )
+            }
+            BridgeWireCodec.decodeQueryHwpointsReply(payload)
         }
     }
 

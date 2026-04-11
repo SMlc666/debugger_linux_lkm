@@ -14,6 +14,7 @@ internal class SessionThreadController(
 
     suspend fun refreshRegisters(tid: Int) {
         val reply = client.getRegisters(tid)
+        ensureBridgeStatusOk(reply.status, reply.message, "GET_REGISTERS")
         stateFlow.update { current ->
             current.copy(
                 selectedThreadTid = tid,

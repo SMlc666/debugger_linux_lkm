@@ -67,12 +67,15 @@ internal class SessionBridgeUnsafeOps(
         return snapshot
     }
 
-    suspend fun attachTarget(targetPid: Int) {
+    suspend fun attachTarget(targetPid: Int, targetTid: Int = 0) {
         discardMemorySearchSnapshot()
-        val reply = client.setTarget(targetPid)
+        val reply = client.setTarget(targetPid, targetTid)
         ensureBridgeStatusOk(reply.status, reply.message, "SET_TARGET")
         stateFlow.update { current ->
             current.copy(
+                selectedProcessPid = targetPid,
+                targetPidInput = targetPid.toString(),
+                targetTidInput = targetTid.takeIf { it > 0 }?.toString().orEmpty(),
                 memorySearch = current.memorySearch.copy(
                     snapshotReady = false,
                     summary = "",
@@ -86,7 +89,7 @@ internal class SessionBridgeUnsafeOps(
         refreshStatus()
     }
 
-    suspend fun refreshThreads(preferredTid: Int? = null) {
+    suspend fun refreshThreads(preferredTid: Int? = null, updateMessage: Boolean = true) {
         val reply: BridgeThreadListReply = client.queryThreads()
         ensureBridgeStatusOk(reply.status, reply.message, "QUERY_THREADS")
         val selectedTid = selectThreadId(reply.threads, preferredTid)
@@ -102,8 +105,12 @@ internal class SessionBridgeUnsafeOps(
                 threads = reply.threads,
                 selectedThreadTid = selectedTid,
                 selectedThreadRegisters = registers,
-                lastMessage = reply.message.ifBlank {
-                    appContext.getString(R.string.thread_message_refreshed, reply.threads.size)
+                lastMessage = if (updateMessage) {
+                    reply.message.ifBlank {
+                        appContext.getString(R.string.thread_message_refreshed, reply.threads.size)
+                    }
+                } else {
+                    current.lastMessage
                 },
             )
         }

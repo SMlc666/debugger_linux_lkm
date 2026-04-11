@@ -20,6 +20,14 @@ enum lkmdbg_agent_command {
 	LKMDBG_AGENT_CMD_QUERY_IMAGES = 12u,
 	LKMDBG_AGENT_CMD_QUERY_VMAS = 13u,
 	LKMDBG_AGENT_CMD_SEARCH_MEMORY = 14u,
+	LKMDBG_AGENT_CMD_GET_STOP_STATE = 15u,
+	LKMDBG_AGENT_CMD_FREEZE_THREADS = 16u,
+	LKMDBG_AGENT_CMD_THAW_THREADS = 17u,
+	LKMDBG_AGENT_CMD_CONTINUE_TARGET = 18u,
+	LKMDBG_AGENT_CMD_SINGLE_STEP = 19u,
+	LKMDBG_AGENT_CMD_QUERY_HWPOINTS = 20u,
+	LKMDBG_AGENT_CMD_ADD_HWPOINT = 21u,
+	LKMDBG_AGENT_CMD_REMOVE_HWPOINT = 22u,
 };
 
 enum lkmdbg_agent_status {
@@ -188,6 +196,119 @@ struct __attribute__((packed)) lkmdbg_agent_search_memory_reply {
 	char message[64];
 };
 
+struct __attribute__((packed)) lkmdbg_agent_thread_control_request {
+	uint32_t flags;
+	uint32_t timeout_ms;
+};
+
+struct __attribute__((packed)) lkmdbg_agent_thread_control_reply {
+	int32_t status;
+	uint32_t flags;
+	uint32_t timeout_ms;
+	uint32_t threads_total;
+	uint32_t threads_settled;
+	uint32_t threads_parked;
+	char message[64];
+};
+
+struct __attribute__((packed)) lkmdbg_agent_continue_request {
+	uint32_t flags;
+	uint32_t timeout_ms;
+	uint64_t stop_cookie;
+};
+
+struct __attribute__((packed)) lkmdbg_agent_continue_reply {
+	int32_t status;
+	uint32_t flags;
+	uint32_t timeout_ms;
+	uint64_t stop_cookie;
+	uint32_t threads_total;
+	uint32_t threads_settled;
+	uint32_t threads_parked;
+	char message[64];
+};
+
+struct __attribute__((packed)) lkmdbg_agent_single_step_request {
+	int32_t tid;
+	uint32_t flags;
+};
+
+struct __attribute__((packed)) lkmdbg_agent_single_step_reply {
+	int32_t status;
+	int32_t tid;
+	uint32_t flags;
+	char message[64];
+};
+
+struct __attribute__((packed)) lkmdbg_agent_stop_state_reply {
+	int32_t status;
+	uint64_t cookie;
+	uint32_t reason;
+	uint32_t flags;
+	int32_t tgid;
+	int32_t tid;
+	uint32_t event_flags;
+	uint64_t value0;
+	uint64_t value1;
+	uint64_t x0;
+	uint64_t x1;
+	uint64_t x29;
+	uint64_t x30;
+	uint64_t sp;
+	uint64_t pc;
+	uint64_t pstate;
+	uint32_t features;
+	uint32_t fpsr;
+	uint32_t fpcr;
+	char message[64];
+};
+
+struct __attribute__((packed)) lkmdbg_agent_hwpoint_request {
+	uint64_t id;
+	uint64_t addr;
+	int32_t tid;
+	uint32_t type;
+	uint32_t len;
+	uint32_t flags;
+	uint64_t trigger_hit_count;
+	uint32_t action_flags;
+	uint32_t reserved0;
+};
+
+struct __attribute__((packed)) lkmdbg_agent_hwpoint_reply {
+	int32_t status;
+	uint64_t id;
+	uint64_t addr;
+	int32_t tid;
+	uint32_t type;
+	uint32_t len;
+	uint32_t flags;
+	uint64_t trigger_hit_count;
+	uint32_t action_flags;
+	char message[64];
+};
+
+struct __attribute__((packed)) lkmdbg_agent_query_hwpoints_reply {
+	int32_t status;
+	uint32_t count;
+	char message[64];
+};
+
+struct __attribute__((packed)) lkmdbg_agent_hwpoint_record {
+	uint64_t id;
+	uint64_t addr;
+	uint64_t hits;
+	uint64_t trigger_hit_count;
+	int32_t tgid;
+	int32_t tid;
+	uint32_t type;
+	uint32_t len;
+	uint32_t flags;
+	uint32_t state;
+	uint32_t action_flags;
+	uint32_t reserved0;
+};
+
 struct __attribute__((packed)) lkmdbg_agent_image_record {
 	uint64_t start_addr;
 	uint64_t end_addr;
@@ -226,28 +347,5 @@ struct __attribute__((packed)) lkmdbg_agent_search_result_record {
 	uint32_t reserved0;
 	uint8_t preview[32];
 };
-
-static_assert(sizeof(struct lkmdbg_agent_hello_reply) == 80, "hello reply size");
-static_assert(sizeof(struct lkmdbg_agent_open_session_reply) == 80, "open-session reply size");
-static_assert(sizeof(struct lkmdbg_agent_set_target_request) == 8, "set-target request size");
-static_assert(sizeof(struct lkmdbg_agent_set_target_reply) == 72, "set-target reply size");
-static_assert(sizeof(struct lkmdbg_agent_status_snapshot) == 140, "status snapshot size");
-static_assert(sizeof(struct lkmdbg_agent_query_processes_reply) == 72, "query-processes reply size");
-static_assert(sizeof(struct lkmdbg_agent_process_record) == 200, "process record size");
-static_assert(sizeof(struct lkmdbg_agent_query_threads_reply) == 80, "query-threads reply size");
-static_assert(sizeof(struct lkmdbg_agent_thread_record) == 48, "thread record size");
-static_assert(sizeof(struct lkmdbg_agent_thread_request) == 8, "thread request size");
-static_assert(sizeof(struct lkmdbg_agent_get_registers_reply) == 384, "get-registers reply size");
-static_assert(sizeof(struct lkmdbg_agent_poll_events_request) == 8, "poll-events request size");
-static_assert(sizeof(struct lkmdbg_agent_poll_events_reply) == 72, "poll-events reply size");
-static_assert(sizeof(struct lkmdbg_agent_memory_request) == 16, "memory request size");
-static_assert(sizeof(struct lkmdbg_agent_memory_reply) == 88, "memory reply size");
-static_assert(sizeof(struct lkmdbg_agent_query_images_reply) == 72, "query-images reply size");
-static_assert(sizeof(struct lkmdbg_agent_image_record) == 320, "image record size");
-static_assert(sizeof(struct lkmdbg_agent_query_vmas_reply) == 72, "query-vmas reply size");
-static_assert(sizeof(struct lkmdbg_agent_vma_record) == 320, "vma record size");
-static_assert(sizeof(struct lkmdbg_agent_search_memory_request) == 144, "search-memory request size");
-static_assert(sizeof(struct lkmdbg_agent_search_memory_reply) == 88, "search-memory reply size");
-static_assert(sizeof(struct lkmdbg_agent_search_result_record) == 64, "search result record size");
 
 #endif

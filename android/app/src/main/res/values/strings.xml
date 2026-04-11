@@ -250,4 +250,54 @@
     <string name="session_error_io">bridge I/O failed: %1$s</string>
     <string name="session_error_bridge">bridge rejected request: %1$s</string>
     <string name="session_error_unknown">unknown error</string>
+    <string name="process_select_prompt">Select target</string>
+    <string name="process_attached">Attached</string>
+    <string name="session_target_tid">Target TID</string>
+    <string name="session_action_refresh_stop">Refresh stop</string>
+    <string name="session_action_freeze">Freeze</string>
+    <string name="session_action_thaw">Thaw</string>
+    <string name="session_action_continue">Continue</string>
+    <string name="session_action_single_step">Single-step</string>
+    <string name="session_execution_title">Execution Control</string>
+    <string name="session_summary_transport">transport: %1$s</string>
+    <string name="session_summary_session_id">session id: %1$s</string>
+    <string name="session_summary_target">target pid=%1$d tid=%2$d</string>
+    <string name="session_stop_state_idle">No active stop state.</string>
+    <string name="session_stop_state_ready">stop state ready for tid=%1$d</string>
+    <string name="session_stop_reason">reason: %1$s</string>
+    <string name="session_stop_cookie">cookie: %1$s</string>
+    <string name="session_stop_tid">tgid=%1$d tid=%2$d</string>
+    <string name="session_stop_flags">flags: %1$s</string>
+    <string name="session_stop_event_flags">event flags: %1$s</string>
+    <string name="session_stop_values">value0=%1$s value1=%2$s</string>
+    <string name="session_message_threads_frozen">threads frozen: parked=%1$s total=%2$s</string>
+    <string name="session_message_threads_thawed">threads thawed</string>
+    <string name="session_message_target_continued">target continued</string>
+    <string name="session_message_single_step">single-step armed for tid=%1$d</string>
+    <string name="thread_action_refresh_registers">Refresh registers</string>
+    <string name="thread_error_no_selection">Select a thread first.</string>
+    <string name="event_action_autopoll_start">Auto poll on</string>
+    <string name="event_action_autopoll_stop">Auto poll off</string>
+    <string name="event_action_clear">Clear list</string>
+    <string name="event_filter_label">Filter events</string>
+    <string name="hwpoint_title">HWPoint Control</string>
+    <string name="hwpoint_field_address">Address</string>
+    <string name="hwpoint_field_length">Length</string>
+    <string name="hwpoint_action_use_pc">Use PC</string>
+    <string name="hwpoint_action_use_memory">Use memory focus</string>
+    <string name="hwpoint_action_add">Add</string>
+    <string name="hwpoint_action_remove_selected">Remove selected</string>
+    <string name="hwpoint_action_refresh">Refresh list</string>
+    <string name="hwpoint_empty">No active hwpoints.</string>
+    <string name="hwpoint_item_detail">id=%1$s tid=%2$d len=%3$d hits=%4$s state=%5$s</string>
+    <string name="hwpoint_preset_exec_hw">Exec HW</string>
+    <string name="hwpoint_preset_exec_mmu">Exec MMU</string>
+    <string name="hwpoint_preset_write_hw">Write HW</string>
+    <string name="hwpoint_preset_write_mmu">Write MMU</string>
+    <string name="hwpoint_error_invalid_address">Enter a valid hwpoint address.</string>
+    <string name="hwpoint_error_invalid_length">Enter a valid hwpoint length.</string>
+    <string name="hwpoint_error_no_selection">Select a hwpoint first.</string>
+    <string name="hwpoint_message_added">hwpoint added at %1$s</string>
+    <string name="hwpoint_message_removed">hwpoint removed id=%1$s</string>
+    <string name="hwpoint_message_listed">%1$d hwpoints refreshed</string>
 </resources>

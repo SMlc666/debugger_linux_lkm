@@ -149,7 +149,7 @@ internal class OverlayProcessPickerController(
             )
             return
         }
-        filtered.take(24).forEach { process ->
+        filtered.forEach { process ->
             currentList.addView(makeProcessRow(process))
         }
     }

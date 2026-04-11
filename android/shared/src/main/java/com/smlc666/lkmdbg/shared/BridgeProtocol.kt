@@ -36,6 +36,17 @@ object BridgeProtocol {
     const val SEARCH_MEMORY_REQUEST_SIZE: Int = 144
     const val SEARCH_MEMORY_REPLY_HEADER_SIZE: Int = 88
     const val SEARCH_MEMORY_RESULT_RECORD_SIZE: Int = 64
+    const val FREEZE_THREADS_REQUEST_SIZE: Int = 8
+    const val FREEZE_THREADS_REPLY_SIZE: Int = 88
+    const val CONTINUE_TARGET_REQUEST_SIZE: Int = 16
+    const val CONTINUE_TARGET_REPLY_SIZE: Int = 96
+    const val SINGLE_STEP_REQUEST_SIZE: Int = 8
+    const val SINGLE_STEP_REPLY_SIZE: Int = 76
+    const val GET_STOP_STATE_REPLY_SIZE: Int = 180
+    const val HWPOINT_REQUEST_SIZE: Int = 48
+    const val HWPOINT_MUTATION_REPLY_SIZE: Int = 112
+    const val QUERY_HWPOINTS_REPLY_HEADER_SIZE: Int = 72
+    const val QUERY_HWPOINT_RECORD_SIZE: Int = 64
 }
 
 enum class BridgeCommand(val wireId: UInt) {
@@ -53,6 +64,14 @@ enum class BridgeCommand(val wireId: UInt) {
     QueryImages(12u),
     QueryVmas(13u),
     SearchMemory(14u),
+    GetStopState(15u),
+    FreezeThreads(16u),
+    ThawThreads(17u),
+    ContinueTarget(18u),
+    SingleStep(19u),
+    QueryHwpoints(20u),
+    AddHwpoint(21u),
+    RemoveHwpoint(22u),
 }
 
 enum class BridgeStatusCode(val wireValue: Int) {
@@ -258,6 +277,122 @@ data class BridgeEventBatchReply(
     val events: List<BridgeEventRecord>,
 )
 
+data class BridgeFreezeThreadsRequest(
+    val timeoutMs: Int = 1000,
+    val flags: UInt = 0u,
+)
+
+data class BridgeFreezeThreadsReply(
+    val status: Int,
+    val flags: UInt,
+    val timeoutMs: Int,
+    val threadsTotal: UInt,
+    val threadsSettled: UInt,
+    val threadsParked: UInt,
+    val message: String,
+)
+
+data class BridgeContinueTargetRequest(
+    val stopCookie: ULong = 0uL,
+    val timeoutMs: Int = 1000,
+    val flags: UInt = 0u,
+)
+
+data class BridgeContinueTargetReply(
+    val status: Int,
+    val flags: UInt,
+    val timeoutMs: Int,
+    val stopCookie: ULong,
+    val threadsTotal: UInt,
+    val threadsSettled: UInt,
+    val threadsParked: UInt,
+    val message: String,
+)
+
+data class BridgeSingleStepRequest(
+    val tid: Int,
+    val flags: UInt = 0u,
+)
+
+data class BridgeSingleStepReply(
+    val status: Int,
+    val tid: Int,
+    val flags: UInt,
+    val message: String,
+)
+
+data class BridgeStopState(
+    val cookie: ULong,
+    val reason: UInt,
+    val flags: UInt,
+    val tgid: Int,
+    val tid: Int,
+    val eventFlags: UInt,
+    val value0: ULong,
+    val value1: ULong,
+    val x0: ULong,
+    val x1: ULong,
+    val x29: ULong,
+    val x30: ULong,
+    val sp: ULong,
+    val pc: ULong,
+    val pstate: ULong,
+    val features: UInt,
+    val fpsr: UInt,
+    val fpcr: UInt,
+)
+
+data class BridgeGetStopStateReply(
+    val status: Int,
+    val stop: BridgeStopState,
+    val message: String,
+)
+
+data class BridgeHwpointRequest(
+    val id: ULong = 0uL,
+    val addr: ULong,
+    val tid: Int = 0,
+    val type: UInt,
+    val len: UInt,
+    val flags: UInt = 0u,
+    val triggerHitCount: ULong = 0uL,
+    val actionFlags: UInt = 0u,
+)
+
+data class BridgeHwpointRecord(
+    val id: ULong,
+    val addr: ULong,
+    val hits: ULong,
+    val triggerHitCount: ULong,
+    val tgid: Int,
+    val tid: Int,
+    val type: UInt,
+    val len: UInt,
+    val flags: UInt,
+    val state: UInt,
+    val actionFlags: UInt,
+)
+
+data class BridgeHwpointMutationReply(
+    val status: Int,
+    val id: ULong,
+    val addr: ULong,
+    val tid: Int,
+    val type: UInt,
+    val len: UInt,
+    val flags: UInt,
+    val triggerHitCount: ULong,
+    val actionFlags: UInt,
+    val message: String,
+)
+
+data class BridgeHwpointListReply(
+    val status: Int,
+    val count: UInt,
+    val message: String,
+    val hwpoints: List<BridgeHwpointRecord>,
+)
+
 object BridgeWireCodec {
     fun writeFrame(output: OutputStream, command: BridgeCommand, payload: ByteArray = ByteArray(0)) {
         val header = ByteBuffer.allocate(BridgeProtocol.HEADER_SIZE)
@@ -348,6 +483,42 @@ object BridgeWireCodec {
         }
         return payload.array()
     }
+
+    fun encodeFreezeThreadsRequest(request: BridgeFreezeThreadsRequest): ByteArray =
+        ByteBuffer.allocate(BridgeProtocol.FREEZE_THREADS_REQUEST_SIZE)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(request.flags.toInt())
+            .putInt(request.timeoutMs)
+            .array()
+
+    fun encodeContinueTargetRequest(request: BridgeContinueTargetRequest): ByteArray =
+        ByteBuffer.allocate(BridgeProtocol.CONTINUE_TARGET_REQUEST_SIZE)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(request.flags.toInt())
+            .putInt(request.timeoutMs)
+            .putLong(request.stopCookie.toLong())
+            .array()
+
+    fun encodeSingleStepRequest(request: BridgeSingleStepRequest): ByteArray =
+        ByteBuffer.allocate(BridgeProtocol.SINGLE_STEP_REQUEST_SIZE)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(request.tid)
+            .putInt(request.flags.toInt())
+            .array()
+
+    fun encodeHwpointRequest(request: BridgeHwpointRequest): ByteArray =
+        ByteBuffer.allocate(BridgeProtocol.HWPOINT_REQUEST_SIZE)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putLong(request.id.toLong())
+            .putLong(request.addr.toLong())
+            .putInt(request.tid)
+            .putInt(request.type.toInt())
+            .putInt(request.len.toInt())
+            .putInt(request.flags.toInt())
+            .putLong(request.triggerHitCount.toLong())
+            .putInt(request.actionFlags.toInt())
+            .putInt(0)
+            .array()
 
     fun decodeHelloReply(payload: ByteArray): BridgeHelloReply {
         val buffer = payloadBuffer(payload, BridgeProtocol.HELLO_REPLY_SIZE)
@@ -475,8 +646,8 @@ object BridgeWireCodec {
         val buffer = payloadBuffer(payload, BridgeProtocol.QUERY_THREADS_REPLY_HEADER_SIZE)
         val status = buffer.int
         val count = buffer.int.toUInt()
-        val done = buffer.int != 0
         val nextTid = buffer.int
+        val done = buffer.int != 0
         val message = decodeCString(buffer, 64)
         val remaining = payload.size - BridgeProtocol.QUERY_THREADS_REPLY_HEADER_SIZE
         require(remaining >= count.toInt() * BridgeProtocol.QUERY_THREAD_RECORD_SIZE) {
@@ -695,6 +866,127 @@ object BridgeWireCodec {
             scannedBytes = scannedBytes,
             message = message,
             results = results,
+        )
+    }
+
+    fun decodeFreezeThreadsReply(payload: ByteArray): BridgeFreezeThreadsReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.FREEZE_THREADS_REPLY_SIZE)
+        return BridgeFreezeThreadsReply(
+            status = buffer.int,
+            flags = buffer.int.toUInt(),
+            timeoutMs = buffer.int,
+            threadsTotal = buffer.int.toUInt(),
+            threadsSettled = buffer.int.toUInt(),
+            threadsParked = buffer.int.toUInt(),
+            message = decodeCString(buffer, 64),
+        )
+    }
+
+    fun decodeContinueTargetReply(payload: ByteArray): BridgeContinueTargetReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.CONTINUE_TARGET_REPLY_SIZE)
+        return BridgeContinueTargetReply(
+            status = buffer.int,
+            flags = buffer.int.toUInt(),
+            timeoutMs = buffer.int,
+            stopCookie = buffer.long.toULong(),
+            threadsTotal = buffer.int.toUInt(),
+            threadsSettled = buffer.int.toUInt(),
+            threadsParked = buffer.int.toUInt(),
+            message = decodeCString(buffer, 64),
+        )
+    }
+
+    fun decodeSingleStepReply(payload: ByteArray): BridgeSingleStepReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.SINGLE_STEP_REPLY_SIZE)
+        return BridgeSingleStepReply(
+            status = buffer.int,
+            tid = buffer.int,
+            flags = buffer.int.toUInt(),
+            message = decodeCString(buffer, 64),
+        )
+    }
+
+    fun decodeGetStopStateReply(payload: ByteArray): BridgeGetStopStateReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.GET_STOP_STATE_REPLY_SIZE)
+        val status = buffer.int
+        val stop = BridgeStopState(
+            cookie = buffer.long.toULong(),
+            reason = buffer.int.toUInt(),
+            flags = buffer.int.toUInt(),
+            tgid = buffer.int,
+            tid = buffer.int,
+            eventFlags = buffer.int.toUInt(),
+            value0 = buffer.long.toULong(),
+            value1 = buffer.long.toULong(),
+            x0 = buffer.long.toULong(),
+            x1 = buffer.long.toULong(),
+            x29 = buffer.long.toULong(),
+            x30 = buffer.long.toULong(),
+            sp = buffer.long.toULong(),
+            pc = buffer.long.toULong(),
+            pstate = buffer.long.toULong(),
+            features = buffer.int.toUInt(),
+            fpsr = buffer.int.toUInt(),
+            fpcr = buffer.int.toUInt(),
+        )
+        val message = decodeCString(buffer, 64)
+        return BridgeGetStopStateReply(
+            status = status,
+            stop = stop,
+            message = message,
+        )
+    }
+
+    fun decodeHwpointMutationReply(payload: ByteArray): BridgeHwpointMutationReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.HWPOINT_MUTATION_REPLY_SIZE)
+        return BridgeHwpointMutationReply(
+            status = buffer.int,
+            id = buffer.long.toULong(),
+            addr = buffer.long.toULong(),
+            tid = buffer.int,
+            type = buffer.int.toUInt(),
+            len = buffer.int.toUInt(),
+            flags = buffer.int.toUInt(),
+            triggerHitCount = buffer.long.toULong(),
+            actionFlags = buffer.int.toUInt(),
+            message = decodeCString(buffer, 64),
+        )
+    }
+
+    fun decodeQueryHwpointsReply(payload: ByteArray): BridgeHwpointListReply {
+        val buffer = payloadBuffer(payload, BridgeProtocol.QUERY_HWPOINTS_REPLY_HEADER_SIZE)
+        val status = buffer.int
+        val count = buffer.int.toUInt()
+        val message = decodeCString(buffer, 64)
+        val remaining = payload.size - BridgeProtocol.QUERY_HWPOINTS_REPLY_HEADER_SIZE
+        require(remaining >= count.toInt() * BridgeProtocol.QUERY_HWPOINT_RECORD_SIZE) {
+            "hwpoint payload too small: got=${payload.size} count=$count"
+        }
+
+        val hwpoints = ArrayList<BridgeHwpointRecord>(count.toInt())
+        repeat(count.toInt()) {
+            val record = BridgeHwpointRecord(
+                id = buffer.long.toULong(),
+                addr = buffer.long.toULong(),
+                hits = buffer.long.toULong(),
+                triggerHitCount = buffer.long.toULong(),
+                tgid = buffer.int,
+                tid = buffer.int,
+                type = buffer.int.toUInt(),
+                len = buffer.int.toUInt(),
+                flags = buffer.int.toUInt(),
+                state = buffer.int.toUInt(),
+                actionFlags = buffer.int.toUInt(),
+            )
+            buffer.int
+            hwpoints += record
+        }
+
+        return BridgeHwpointListReply(
+            status = status,
+            count = count,
+            message = message,
+            hwpoints = hwpoints,
         )
     }
 
