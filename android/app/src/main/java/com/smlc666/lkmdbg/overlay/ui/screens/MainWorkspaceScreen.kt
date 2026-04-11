@@ -1253,6 +1253,13 @@ private fun MemorySectionContent(
     val refineModeLabel = stringResource(state.memorySearch.refineMode.labelRes)
     val regionPresetLabel = stringResource(state.memorySearch.regionPreset.labelRes)
     val toolsLabel = stringResource(R.string.memory_action_tools)
+    val selectionSizeLabels = mapOf(
+        1 to stringResource(R.string.memory_selection_size, 1),
+        2 to stringResource(R.string.memory_selection_size, 2),
+        4 to stringResource(R.string.memory_selection_size, 4),
+        8 to stringResource(R.string.memory_selection_size, 8),
+        16 to stringResource(R.string.memory_selection_size, 16),
+    )
     val selectionSummary = state.memoryPage?.let {
         stringResource(
             R.string.memory_selection_summary,
@@ -1390,7 +1397,7 @@ private fun MemorySectionContent(
                 FilterRow(
                     filters = listOf(1, 2, 4, 8, 16),
                     selectedFilter = state.memorySelectionSize,
-                    labelFor = { size -> stringResource(R.string.memory_selection_size, size) },
+                    labelFor = { size -> selectionSizeLabels.getValue(size) },
                     onSelected = onSelectionSizeChanged,
                 )
                 Spacer(modifier = Modifier.height(8.dp))
