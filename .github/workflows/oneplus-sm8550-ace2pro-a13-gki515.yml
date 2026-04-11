@@ -19,6 +19,7 @@ jobs:
       KERNEL_REPO_URL: https://github.com/OnePlusOSS/kernel_manifest.git
       KERNEL_WORKSPACE: ${{ github.workspace }}/kernel_workspace
       KERNEL_OUT_DIR: ${{ github.workspace }}/kernel_out
+      KERNEL_OUT_CACHE_REV: v1
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
@@ -33,6 +34,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             bc \
+            binutils-aarch64-linux-gnu \
             bison \
             build-essential \
             ccache \
@@ -46,6 +48,51 @@ jobs:
             llvm \
             python3
 
+      - name: Prepare cache directories
+        run: |
+          mkdir -p "$KERNEL_OUT_DIR"
+          mkdir -p "$CCACHE_DIR"
+
+      - name: Restore OnePlus kernel output cache
+        id: oneplus-kernel-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.KERNEL_OUT_DIR }}
+          key: ${{ runner.os }}-oneplus-sm8550-ace2pro-a13-gki5.15-kernel-out-${{ env.KERNEL_OUT_CACHE_REV }}
+
+      - name: Inspect restored OnePlus kernel cache
+        id: oneplus-kernel-cache-state
+        run: |
+          cache_complete=false
+          reuse_kernel=false
+          IMAGE_PATH="$KERNEL_OUT_DIR/arch/arm64/boot/Image"
+          SYMVERS_PATH="$KERNEL_OUT_DIR/Module.symvers"
+          CONFIG_PATH="$KERNEL_OUT_DIR/.config"
+          AUTOCONF_PATH="$KERNEL_OUT_DIR/include/generated/autoconf.h"
+          AUTO_CONF_PATH="$KERNEL_OUT_DIR/include/config/auto.conf"
+          FIXDEP_PATH="$KERNEL_OUT_DIR/scripts/basic/fixdep"
+          MODPOST_PATH="$KERNEL_OUT_DIR/scripts/mod/modpost"
+          CONFIG_MODULES_REQUIRED=false
+          if [ -f "$CONFIG_PATH" ]; then
+            grep -q '^CONFIG_MODULES=y$' "$CONFIG_PATH" && CONFIG_MODULES_REQUIRED=true
+          fi
+          if [ -f "$IMAGE_PATH" ] && \
+             [ -f "$SYMVERS_PATH" ] && \
+             [ -f "$CONFIG_PATH" ] && \
+             [ -f "$AUTOCONF_PATH" ] && \
+             [ -f "$AUTO_CONF_PATH" ] && \
+             [ -x "$FIXDEP_PATH" ] && \
+             [ -x "$MODPOST_PATH" ] && \
+             [ "$CONFIG_MODULES_REQUIRED" = "true" ]; then
+            cache_complete=true
+            reuse_kernel=true
+          fi
+          echo "cache_complete=$cache_complete" >>"$GITHUB_OUTPUT"
+          echo "reuse_kernel=$reuse_kernel" >>"$GITHUB_OUTPUT"
+          echo "cache-hit=${{ steps.oneplus-kernel-cache.outputs.cache-hit }}"
+          echo "cache-complete=$cache_complete"
+          echo "reuse-kernel=$reuse_kernel"
+
       - name: Restore ccache
         uses: actions/cache@v4
         with:
@@ -56,7 +103,6 @@ jobs:
 
       - name: Configure ccache
         run: |
-          mkdir -p "$CCACHE_DIR"
           ccache --set-config=max_size="$CCACHE_MAXSIZE"
           ccache --set-config=base_dir="$CCACHE_BASEDIR"
           ccache --set-config=compiler_check="$CCACHE_COMPILERCHECK"
@@ -104,15 +150,19 @@ jobs:
             HOSTCC="ccache clang"
           )
 
-          make "${COMMON_ARGS[@]}" gki_defconfig
-          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
-            -d LTO_CLANG \
-            -d LTO_CLANG_THIN \
-            -d LTO_CLANG_FULL \
-            -d THINLTO \
-            -e LTO_NONE || true
-          make "${COMMON_ARGS[@]}" olddefconfig
-          make "${COMMON_ARGS[@]}" -j"$(nproc)" Image modules
+          if [ "${{ steps.oneplus-kernel-cache-state.outputs.reuse_kernel }}" != "true" ]; then
+            make "${COMMON_ARGS[@]}" gki_defconfig
+            "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+              -d LTO_CLANG \
+              -d LTO_CLANG_THIN \
+              -d LTO_CLANG_FULL \
+              -d THINLTO \
+              -e LTO_NONE || true
+            make "${COMMON_ARGS[@]}" olddefconfig
+            make "${COMMON_ARGS[@]}" -j"$(nproc)" Image modules
+          else
+            echo "Reusing cached OnePlus kernel output from $OUT_DIR"
+          fi
 
       - name: Build external module against OnePlus android13-5.15 GKI tree
         run: |
@@ -134,6 +184,56 @@ jobs:
           )
 
           make "${MODULE_ARGS[@]}"
+
+      - name: Verify rebuilt OnePlus kernel cache
+        id: oneplus-kernel-cache-verify
+        if: always()
+        run: |
+          IMAGE_PATH="$KERNEL_OUT_DIR/arch/arm64/boot/Image"
+          SYMVERS_PATH="$KERNEL_OUT_DIR/Module.symvers"
+          CONFIG_PATH="$KERNEL_OUT_DIR/.config"
+          AUTOCONF_PATH="$KERNEL_OUT_DIR/include/generated/autoconf.h"
+          AUTO_CONF_PATH="$KERNEL_OUT_DIR/include/config/auto.conf"
+          FIXDEP_PATH="$KERNEL_OUT_DIR/scripts/basic/fixdep"
+          MODPOST_PATH="$KERNEL_OUT_DIR/scripts/mod/modpost"
+          if [ -f "$IMAGE_PATH" ] && \
+             [ -f "$SYMVERS_PATH" ] && \
+             [ -f "$CONFIG_PATH" ] && \
+             [ -f "$AUTOCONF_PATH" ] && \
+             [ -f "$AUTO_CONF_PATH" ] && \
+             [ -x "$FIXDEP_PATH" ] && \
+             [ -x "$MODPOST_PATH" ]; then
+            cache_complete=true
+          else
+            cache_complete=false
+          fi
+          echo "cache_complete=$cache_complete" >>"$GITHUB_OUTPUT"
+          echo "cache-complete=$cache_complete"
+
+      - name: Save OnePlus kernel output cache
+        if: always() && steps.oneplus-kernel-cache-state.outputs.reuse_kernel != 'true' && steps.oneplus-kernel-cache-verify.outputs.cache_complete == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.KERNEL_OUT_DIR }}
+          key: ${{ runner.os }}-oneplus-sm8550-ace2pro-a13-gki5.15-kernel-out-${{ env.KERNEL_OUT_CACHE_REV }}
+
+      - name: Build host helper smoke binaries
+        run: |
+          cc -O2 -Wall -Wextra -o tools/lkmdbg_open_session tools/lkmdbg_open_session.c tools/driver/bridge_c.c
+          cc -O2 -Wall -Wextra -o tools/lkmdbg_stealth_ctl tools/lkmdbg_stealth_ctl.c
+          cc -O2 -Wall -Wextra -pthread -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c tools/driver/bridge_c.c tools/driver/bridge_events.c tools/driver/bridge_memory.c tools/driver/bridge_control.c
+          cc -O2 -Wall -Wextra -o tools/lkmdbg_sysrule_ctl tools/lkmdbg_sysrule_ctl.c tools/driver/bridge_c.c tools/driver/bridge_control.c
+
+      - name: Run module and helper smoke checks
+        run: |
+          test -f "$GITHUB_WORKSPACE/lkmdbg.ko"
+          test -s "$GITHUB_WORKSPACE/lkmdbg.ko"
+          test -f "$KERNEL_OUT_DIR/Module.symvers"
+          test -x "$GITHUB_WORKSPACE/tools/lkmdbg_open_session"
+          test -x "$GITHUB_WORKSPACE/tools/lkmdbg_stealth_ctl"
+          test -x "$GITHUB_WORKSPACE/tools/lkmdbg_mem_test"
+          test -x "$GITHUB_WORKSPACE/tools/lkmdbg_sysrule_ctl"
+          aarch64-linux-gnu-readelf -h "$GITHUB_WORKSPACE/lkmdbg.ko" >/dev/null
 
       - name: Show ccache stats
         if: always()
