@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -59,14 +60,6 @@ import com.smlc666.lkmdbg.shared.BridgeThreadRecord
 
 private const val MEMORY_VIEW_MODE_PAGE = 0
 private const val MEMORY_VIEW_MODE_RESULTS = 1
-private const val THREAD_FLAG_FREEZE_PARKED = 0x00000010u
-private const val STOP_FLAG_ACTIVE = 0x00000001u
-private const val STOP_FLAG_FROZEN = 0x00000002u
-private const val STOP_FLAG_REARM_REQUIRED = 0x00000008u
-private const val STOP_FLAG_SYSCALL_CONTROL = 0x00000020u
-private const val HWPOINT_TYPE_EXEC = 0x00000004u
-private const val HWPOINT_TYPE_WRITE = 0x00000002u
-private const val HWPOINT_FLAG_MMU = 0x00000002u
 
 @Composable
 fun WorkingBar(
@@ -175,6 +168,7 @@ fun MainWorkspaceScreen(
     onRefreshEvents: () -> Unit,
     onToggleEventsAutoPoll: () -> Unit,
     onClearEvents: () -> Unit,
+    onTogglePinnedEvent: (ULong) -> Unit,
     onStepMemoryPage: (Int) -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
     onMemorySearchQueryChanged: (String) -> Unit,
@@ -266,6 +260,7 @@ fun MainWorkspaceScreen(
                     onRefreshEvents = onRefreshEvents,
                     onToggleEventsAutoPoll = onToggleEventsAutoPoll,
                     onClearEvents = onClearEvents,
+                    onTogglePinnedEvent = onTogglePinnedEvent,
                     onStepMemoryPage = onStepMemoryPage,
                     onSelectMemoryAddress = onSelectMemoryAddress,
                     onMemorySearchQueryChanged = onMemorySearchQueryChanged,
@@ -346,6 +341,7 @@ fun MainWorkspaceScreen(
                     onRefreshEvents = onRefreshEvents,
                     onToggleEventsAutoPoll = onToggleEventsAutoPoll,
                     onClearEvents = onClearEvents,
+                    onTogglePinnedEvent = onTogglePinnedEvent,
                     onStepMemoryPage = onStepMemoryPage,
                     onSelectMemoryAddress = onSelectMemoryAddress,
                     onMemorySearchQueryChanged = onMemorySearchQueryChanged,
@@ -417,6 +413,7 @@ private fun WorkspaceColumn(
     onRefreshEvents: () -> Unit,
     onToggleEventsAutoPoll: () -> Unit,
     onClearEvents: () -> Unit,
+    onTogglePinnedEvent: (ULong) -> Unit,
     onStepMemoryPage: (Int) -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
     onMemorySearchQueryChanged: (String) -> Unit,
@@ -506,6 +503,7 @@ private fun WorkspaceColumn(
                 onRefreshEvents = onRefreshEvents,
                 onToggleEventsAutoPoll = onToggleEventsAutoPoll,
                 onClearEvents = onClearEvents,
+                onTogglePinnedEvent = onTogglePinnedEvent,
                 onStepMemoryPage = onStepMemoryPage,
                 onSelectMemoryAddress = onSelectMemoryAddress,
                 onMemorySearchQueryChanged = onMemorySearchQueryChanged,
@@ -730,6 +728,7 @@ fun MainContentArea(
     onRefreshEvents: () -> Unit,
     onToggleEventsAutoPoll: () -> Unit,
     onClearEvents: () -> Unit,
+    onTogglePinnedEvent: (ULong) -> Unit,
     onStepMemoryPage: (Int) -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
     onMemorySearchQueryChanged: (String) -> Unit,
@@ -836,6 +835,7 @@ fun MainContentArea(
             onRefreshEvents = onRefreshEvents,
             onToggleEventsAutoPoll = onToggleEventsAutoPoll,
             onClearEvents = onClearEvents,
+            onTogglePinnedEvent = onTogglePinnedEvent,
         )
     }
 }
@@ -1093,6 +1093,10 @@ private fun ThreadsSectionContent(
     onPreviewSelectedPc: () -> Unit,
     onSingleStep: () -> Unit,
 ) {
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val selectedThread = state.threads.firstOrNull { it.tid == state.selectedThreadTid }
+    val parkedCount = state.threads.count { (it.flags and THREAD_FLAG_FREEZE_PARKED) != 0u }
     Column(modifier = Modifier.fillMaxSize()) {
         SectionIntro(
             title = stringResource(R.string.thread_panel_title),
@@ -1103,46 +1107,50 @@ private fun ThreadsSectionContent(
             listOf(
                 stringResource(R.string.thread_action_refresh) to onRefreshThreads,
                 stringResource(R.string.thread_action_refresh_registers) to onRefreshSelectedThreadRegisters,
+            ),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        ActionRow(
+            listOf(
                 stringResource(R.string.memory_action_preview_pc) to onPreviewSelectedPc,
                 stringResource(R.string.session_action_single_step) to onSingleStep,
             ),
         )
         Spacer(modifier = Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxSize(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Surface(
-                modifier = Modifier.weight(1f),
-                tonalElevation = 2.dp,
-                color = MaterialTheme.colorScheme.surface,
+        if (isLandscape) {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (state.threads.isEmpty()) {
-                    EmptyState(stringResource(R.string.thread_empty))
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        items(state.threads, key = { it.tid }) { thread ->
-                            ThreadRow(
-                                thread = thread,
-                                selected = state.selectedThreadTid == thread.tid,
-                                onClick = { onSelectThread(thread.tid) },
-                            )
-                        }
-                    }
-                }
-            }
-            Surface(
-                modifier = Modifier.weight(1f),
-                tonalElevation = 2.dp,
-                color = MaterialTheme.colorScheme.surface,
-            ) {
+                ThreadListPanel(
+                    state = state,
+                    selectedThread = selectedThread,
+                    parkedCount = parkedCount,
+                    onSelectThread = onSelectThread,
+                    modifier = Modifier.weight(1f),
+                )
                 ThreadRegistersPanel(
                     selectedTid = state.selectedThreadTid,
                     registers = state.selectedThreadRegisters,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ThreadListPanel(
+                    state = state,
+                    selectedThread = selectedThread,
+                    parkedCount = parkedCount,
+                    onSelectThread = onSelectThread,
+                    modifier = Modifier.weight(1f),
+                )
+                ThreadRegistersPanel(
+                    selectedTid = state.selectedThreadTid,
+                    registers = state.selectedThreadRegisters,
+                    modifier = Modifier.weight(1f),
                 )
             }
         }
@@ -1155,34 +1163,44 @@ private fun EventsSectionContent(
     onRefreshEvents: () -> Unit,
     onToggleEventsAutoPoll: () -> Unit,
     onClearEvents: () -> Unit,
+    onTogglePinnedEvent: (ULong) -> Unit,
 ) {
     var filterText by rememberSaveable { mutableStateOf("") }
-    val filtered = state.recentEvents.filter { eventMatchesFilter(it, filterText) }
+    var presetOrdinal by rememberSaveable { mutableStateOf(EventFilterPreset.All.ordinal) }
+    val preset = EventFilterPreset.entries[presetOrdinal.coerceIn(0, EventFilterPreset.entries.lastIndex)]
+    val presetLabels = mapOf(
+        EventFilterPreset.All to stringResource(R.string.event_filter_all),
+        EventFilterPreset.Pinned to stringResource(R.string.event_filter_pinned),
+        EventFilterPreset.Stops to stringResource(R.string.event_filter_stops),
+        EventFilterPreset.Signals to stringResource(R.string.event_filter_signals),
+        EventFilterPreset.Syscalls to stringResource(R.string.event_filter_syscalls),
+    )
+    val filtered = sortEvents(
+        events = state.recentEvents.filter { entry ->
+            eventMatchesPreset(entry, preset, state.pinnedEventSeqs) &&
+                eventMatchesFilter(entry, filterText)
+        },
+        pinnedEventSeqs = state.pinnedEventSeqs,
+    )
     Column(modifier = Modifier.fillMaxSize()) {
         SectionIntro(
             title = stringResource(R.string.event_panel_title),
             subtitle = stringResource(R.string.event_panel_subtitle),
         )
         Spacer(modifier = Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onRefreshEvents) {
-                Text(stringResource(R.string.event_action_refresh))
-            }
-            OutlinedButton(onClick = onToggleEventsAutoPoll) {
-                Text(
-                    stringResource(
-                        if (state.eventsAutoPollEnabled) {
-                            R.string.event_action_autopoll_stop
-                        } else {
-                            R.string.event_action_autopoll_start
-                        },
-                    ),
-                )
-            }
-            OutlinedButton(onClick = onClearEvents) {
-                Text(stringResource(R.string.event_action_clear))
-            }
-        }
+        ActionRow(
+            listOf(
+                stringResource(R.string.event_action_refresh) to onRefreshEvents,
+                stringResource(
+                    if (state.eventsAutoPollEnabled) {
+                        R.string.event_action_autopoll_stop
+                    } else {
+                        R.string.event_action_autopoll_start
+                    },
+                ) to onToggleEventsAutoPoll,
+                stringResource(R.string.event_action_clear) to onClearEvents,
+            ),
+        )
         Spacer(modifier = Modifier.height(8.dp))
         OutlinedTextField(
             value = filterText,
@@ -1192,11 +1210,19 @@ private fun EventsSectionContent(
             singleLine = true,
         )
         Spacer(modifier = Modifier.height(8.dp))
+        CompactFilterRow(
+            filters = EventFilterPreset.entries.toList(),
+            selectedFilter = preset,
+            labelFor = { presetLabels.getValue(it) },
+            onSelected = { selected -> presetOrdinal = selected.ordinal },
+        )
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = stringResource(
-                R.string.workspace_event_summary,
+                R.string.event_summary_counts,
                 state.snapshot.eventQueueDepth.toInt(),
                 filtered.size,
+                state.pinnedEventSeqs.size,
             ),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1211,7 +1237,11 @@ private fun EventsSectionContent(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(filtered, key = { it.record.seq.toString() }) { event ->
-                EventRow(event)
+                EventRow(
+                    entry = event,
+                    pinned = event.record.seq in state.pinnedEventSeqs,
+                    onTogglePin = { onTogglePinnedEvent(event.record.seq) },
+                )
             }
         }
     }
@@ -1664,41 +1694,119 @@ private fun MemoryPageRowCard(
 }
 
 @Composable
+private fun ThreadListPanel(
+    state: SessionBridgeState,
+    selectedThread: BridgeThreadRecord?,
+    parkedCount: Int,
+    onSelectThread: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        tonalElevation = 2.dp,
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(8.dp),
+        ) {
+            SectionCard(title = stringResource(R.string.thread_selection_title)) {
+                SummaryLine(
+                    stringResource(
+                        R.string.thread_summary_counts,
+                        state.threads.size,
+                        parkedCount,
+                        state.selectedThreadTid?.toString() ?: "-",
+                    ),
+                )
+                selectedThread?.let { thread ->
+                    val flagLabels = threadFlagText(thread.flags)
+                    SummaryLine(
+                        stringResource(
+                            R.string.thread_selection_summary,
+                            thread.comm,
+                            thread.tgid,
+                            stringResource(threadPrimaryStateLabelRes(thread.flags)),
+                        ),
+                    )
+                    SummaryLine(
+                        stringResource(
+                            R.string.workspace_thread_summary,
+                            thread.tid,
+                            hex64(thread.userPc),
+                            hex64(thread.userSp),
+                        ),
+                    )
+                    if (flagLabels.isNotBlank()) {
+                        SummaryLine(stringResource(R.string.thread_flags_value, flagLabels))
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            if (state.threads.isEmpty()) {
+                EmptyState(stringResource(R.string.thread_empty))
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(state.threads, key = { it.tid }) { thread ->
+                        ThreadRow(
+                            thread = thread,
+                            selected = state.selectedThreadTid == thread.tid,
+                            onClick = { onSelectThread(thread.tid) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ThreadRow(
     thread: BridgeThreadRecord,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    val stateLabel = stringResource(threadPrimaryStateLabelRes(thread.flags))
+    val flagLabels = threadFlagText(thread.flags)
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
         color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
     ) {
-        val threadStateLabel = stringResource(
-            if ((thread.flags and THREAD_FLAG_FREEZE_PARKED) != 0u) {
-                R.string.thread_state_stopped
-            } else {
-                R.string.thread_state_running
-            },
-        )
         Column(modifier = Modifier.padding(12.dp)) {
             Text(
-                text = stringResource(R.string.workspace_thread_summary, thread.tid, hex64(thread.userPc), hex64(thread.userSp)),
+                text = stringResource(
+                    R.string.workspace_thread_summary,
+                    thread.tid,
+                    hex64(thread.userPc),
+                    hex64(thread.userSp),
+                ),
                 color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = buildString {
-                    append(thread.comm)
-                    append(" · tgid=")
-                    append(thread.tgid)
-                    append(" · ")
-                    append(threadStateLabel)
-                },
+                text = stringResource(
+                    R.string.thread_selection_summary,
+                    thread.comm,
+                    thread.tgid,
+                    stateLabel,
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (flagLabels.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = flagLabels,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -1707,39 +1815,94 @@ private fun ThreadRow(
 private fun ThreadRegistersPanel(
     selectedTid: Int?,
     registers: BridgeThreadRegistersReply?,
+    modifier: Modifier = Modifier,
 ) {
-    if (selectedTid == null || registers == null) {
-        EmptyState(stringResource(R.string.thread_empty))
-        return
-    }
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+    Surface(
+        modifier = modifier,
+        tonalElevation = 2.dp,
+        color = MaterialTheme.colorScheme.surface,
     ) {
-        Text(
-            text = stringResource(R.string.thread_regs_title, selectedTid),
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        SummaryLine(stringResource(R.string.thread_reg_x0, hex64(registers.regs[0])))
-        SummaryLine(stringResource(R.string.thread_reg_x1, hex64(registers.regs[1])))
-        SummaryLine(stringResource(R.string.thread_reg_x29, hex64(registers.regs[29])))
-        SummaryLine(stringResource(R.string.thread_reg_x30, hex64(registers.regs[30])))
-        SummaryLine(stringResource(R.string.thread_sp_value, hex64(registers.sp)))
-        SummaryLine(stringResource(R.string.thread_pc_value, hex64(registers.pc)))
-        SummaryLine(stringResource(R.string.thread_pstate_value, hex64(registers.pstate)))
-        SummaryLine(
-            stringResource(
-                R.string.thread_fp_summary,
-                hex32(registers.features),
-                hex32(registers.fpsr),
-                hex32(registers.fpcr),
-                hex64(registers.v0Lo),
-                hex64(registers.v0Hi),
-            ),
-        )
+        if (selectedTid == null || registers == null) {
+            EmptyState(stringResource(R.string.thread_empty))
+            return@Surface
+        }
+        val registerGroups = buildRegisterGroups(registers)
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item {
+                SectionCard(title = stringResource(R.string.thread_regs_title, selectedTid)) {
+                    SummaryLine(stringResource(R.string.thread_reg_x0, hex64(registers.regs[0])))
+                    SummaryLine(stringResource(R.string.thread_reg_x1, hex64(registers.regs[1])))
+                    SummaryLine(stringResource(R.string.thread_reg_x29, hex64(registers.regs[29])))
+                    SummaryLine(stringResource(R.string.thread_reg_x30, hex64(registers.regs[30])))
+                    SummaryLine(stringResource(R.string.thread_sp_value, hex64(registers.sp)))
+                    SummaryLine(stringResource(R.string.thread_pc_value, hex64(registers.pc)))
+                    SummaryLine(stringResource(R.string.thread_pstate_value, hex64(registers.pstate)))
+                    SummaryLine(stringResource(R.string.thread_register_flags, hex32(registers.flags)))
+                    SummaryLine(
+                        stringResource(
+                            R.string.thread_fp_summary,
+                            hex32(registers.features),
+                            hex32(registers.fpsr),
+                            hex32(registers.fpcr),
+                            hex64(registers.v0Lo),
+                            hex64(registers.v0Hi),
+                        ),
+                    )
+                }
+            }
+            items(registerGroups, key = { it.titleRes }) { group ->
+                ThreadRegisterGroupCard(group)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThreadRegisterGroupCard(group: RegisterGroup) {
+    SectionCard(title = stringResource(group.titleRes)) {
+        group.fields.chunked(2).forEach { pair ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                pair.forEach { field ->
+                    RegisterFieldChip(
+                        field = field,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (pair.size == 1) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RegisterFieldChip(
+    field: RegisterField,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        tonalElevation = 0.dp,
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Text(
+                text = field.label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = hex64(field.value),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -1796,30 +1959,82 @@ private fun ProcessRow(
 }
 
 @Composable
-private fun EventRow(entry: SessionEventEntry) {
+private fun EventRow(
+    entry: SessionEventEntry,
+    pinned: Boolean,
+    onTogglePin: () -> Unit,
+) {
+    val containerColor = when {
+        pinned -> MaterialTheme.colorScheme.primaryContainer
+        eventMatchesPreset(entry, EventFilterPreset.Stops, emptySet()) -> MaterialTheme.colorScheme.errorContainer
+        eventMatchesPreset(entry, EventFilterPreset.Syscalls, emptySet()) -> MaterialTheme.colorScheme.secondaryContainer
+        eventMatchesPreset(entry, EventFilterPreset.Signals, emptySet()) -> MaterialTheme.colorScheme.tertiaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val onContainerColor = when {
+        pinned -> MaterialTheme.colorScheme.onPrimaryContainer
+        eventMatchesPreset(entry, EventFilterPreset.Stops, emptySet()) -> MaterialTheme.colorScheme.onErrorContainer
+        eventMatchesPreset(entry, EventFilterPreset.Syscalls, emptySet()) -> MaterialTheme.colorScheme.onSecondaryContainer
+        eventMatchesPreset(entry, EventFilterPreset.Signals, emptySet()) -> MaterialTheme.colorScheme.onTertiaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = containerColor,
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "${eventTypeLabel(entry.record.type)} · ${eventCodeLabel(entry.record)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = onContainerColor,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.workspace_event_detail_summary,
+                            eventCodeLabel(entry.record),
+                            entry.record.tid,
+                            entry.record.seq.toString(),
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = onContainerColor,
+                    )
+                }
+                OutlinedButton(onClick = onTogglePin) {
+                    Text(
+                        stringResource(
+                            if (pinned) R.string.event_action_unpin else R.string.event_action_pin,
+                        ),
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = stringResource(
-                    R.string.event_detail_template,
-                    entry.record.seq.toString(),
-                    entry.record.tgid,
-                    entry.record.tid,
-                    entry.record.code.toString(),
-                    hex32(entry.record.flags),
-                    hex64(entry.record.value0),
-                    hex64(entry.record.value1),
-                ),
+                text = buildString {
+                    append("sid=")
+                    append(hex64(entry.record.sessionId))
+                    append(" · tgid=")
+                    append(entry.record.tgid)
+                    append(" · flags=")
+                    append(hex32(entry.record.flags))
+                },
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = onContainerColor,
+            )
+            Text(
+                text = "value0=${hex64(entry.record.value0)} · value1=${hex64(entry.record.value1)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = onContainerColor,
             )
             Text(
                 text = stringResource(R.string.event_received_template, entry.receivedAtMs.toString()),
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = onContainerColor,
             )
         }
     }
@@ -1908,6 +2123,25 @@ private fun <T> FilterRow(
 }
 
 @Composable
+private fun <T> CompactFilterRow(
+    filters: List<T>,
+    selectedFilter: T,
+    labelFor: (T) -> String,
+    onSelected: (T) -> Unit,
+) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(filters) { filter ->
+            OutlinedButton(onClick = { onSelected(filter) }) {
+                Text(
+                    text = labelFor(filter),
+                    color = if (filter == selectedFilter) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun SectionCard(
     title: String,
     content: @Composable ColumnScope.() -> Unit,
@@ -1979,62 +2213,22 @@ private fun EmptyState(text: String) {
     }
 }
 
+@Composable
+private fun threadFlagText(flags: UInt): String = listOfNotNull(
+    stringResource(R.string.thread_flag_group_leader).takeIf { (flags and THREAD_FLAG_GROUP_LEADER) != 0u },
+    stringResource(R.string.thread_flag_session_target).takeIf { (flags and THREAD_FLAG_SESSION_TARGET) != 0u },
+    stringResource(R.string.thread_flag_freeze_tracked).takeIf { (flags and THREAD_FLAG_FREEZE_TRACKED) != 0u },
+    stringResource(R.string.thread_flag_freeze_settled).takeIf { (flags and THREAD_FLAG_FREEZE_SETTLED) != 0u },
+    stringResource(R.string.thread_flag_freeze_parked).takeIf { (flags and THREAD_FLAG_FREEZE_PARKED) != 0u },
+    stringResource(R.string.thread_flag_exiting).takeIf { (flags and THREAD_FLAG_EXITING) != 0u },
+).joinToString(" · ")
+
 private fun processFilterLabel(filter: ProcessFilter): String = when (filter) {
     ProcessFilter.All -> "All"
     ProcessFilter.AndroidApps -> "Android"
     ProcessFilter.CommandLine -> "CLI"
     ProcessFilter.SystemApps -> "System"
     ProcessFilter.UserApps -> "User"
-}
-
-private fun stopReasonLabel(reason: UInt): String = when (reason.toInt()) {
-    1 -> "freeze"
-    2 -> "breakpoint"
-    3 -> "watchpoint"
-    4 -> "single-step"
-    5 -> "signal"
-    6 -> "syscall"
-    7 -> "remote-call"
-    else -> reason.toString()
-}
-
-private fun stopFlagsLabel(flags: UInt): String {
-    val labels = buildList {
-        if ((flags and STOP_FLAG_ACTIVE) != 0u) add("active")
-        if ((flags and STOP_FLAG_FROZEN) != 0u) add("frozen")
-        if ((flags and STOP_FLAG_REARM_REQUIRED) != 0u) add("rearm")
-        if ((flags and STOP_FLAG_SYSCALL_CONTROL) != 0u) add("syscall-ctl")
-    }
-    return if (labels.isEmpty()) "0" else labels.joinToString("+")
-}
-
-private fun hwpointTypeLabel(hwpoint: BridgeHwpointRecord): String = buildString {
-    append(
-        when (hwpoint.type) {
-            HWPOINT_TYPE_EXEC -> "exec"
-            HWPOINT_TYPE_WRITE -> "write"
-            else -> hwpoint.type.toString()
-        },
-    )
-    if ((hwpoint.flags and HWPOINT_FLAG_MMU) != 0u)
-        append("/mmu")
-    else
-        append("/hw")
-}
-
-private fun eventMatchesFilter(entry: SessionEventEntry, filterText: String): Boolean {
-    if (filterText.isBlank())
-        return true
-    val needle = filterText.trim().lowercase()
-    return listOf(
-        entry.record.seq.toString(),
-        entry.record.type.toString(),
-        entry.record.code.toString(),
-        entry.record.tid.toString(),
-        entry.record.tgid.toString(),
-        hex64(entry.record.value0),
-        hex64(entry.record.value1),
-    ).any { it.lowercase().contains(needle) }
 }
 
 private fun rowContainsAddress(

@@ -32,6 +32,8 @@
     <string name="dashboard_chip_gki">arm64 GKI</string>
     <string name="thread_state_running">运行中</string>
     <string name="thread_state_stopped">已停止</string>
+    <string name="thread_state_freezing">冻结处理中</string>
+    <string name="thread_state_exiting">退出中</string>
     <string name="thread_state_sleeping">休眠</string>
     <string name="event_title_syscall_rule">syscall 规则已同步</string>
     <string name="event_detail_syscall_rule">规则包已推入内核事件引擎，可直接接管实时流量。</string>
@@ -112,11 +114,6 @@
     <string name="memory_action_tools_summary">工具 · %1$s</string>
     <string name="memory_action_show_results_count">结果 · %1$d</string>
     <string name="memory_action_show_page">内存页</string>
-    <string name="memory_tools_title">内存工具</string>
-    <string name="memory_tools_close">关闭</string>
-    <string name="memory_tools_section_search">搜索</string>
-    <string name="memory_tools_section_jump">跳转与定位</string>
-    <string name="memory_tools_section_write">写入与补丁</string>
     <string name="memory_error_no_target">当前没有活动目标，请先附加进程。</string>
     <string name="memory_error_no_pc">当前还没有可用 PC，请先刷新线程。</string>
     <string name="memory_error_invalid_address">请先输入有效地址。</string>
@@ -199,24 +196,47 @@
     <string name="thread_message_refreshed">已刷新 %1$d 个线程</string>
     <string name="thread_message_registers">已刷新 tid=%1$d 的寄存器快照</string>
     <string name="thread_regs_title">tid=%1$d 的寄存器</string>
+    <string name="thread_selection_title">线程焦点</string>
+    <string name="thread_summary_counts">线程=%1$d · 已停=%2$d · 选中=%3$s</string>
+    <string name="thread_selection_summary">%1$s · tgid=%2$d · %3$s</string>
     <string name="thread_sp_value">sp %1$s</string>
     <string name="thread_pc_value">pc %1$s</string>
     <string name="thread_pstate_value">pstate %1$s</string>
     <string name="thread_group_value">tgid %1$d</string>
     <string name="thread_flags_value">标志 %1$s</string>
+    <string name="thread_register_flags">寄存器标志 %1$s</string>
+    <string name="thread_flag_group_leader">线程组主线程</string>
+    <string name="thread_flag_session_target">会话目标</string>
+    <string name="thread_flag_freeze_tracked">冻结跟踪中</string>
+    <string name="thread_flag_freeze_settled">冻结已收敛</string>
+    <string name="thread_flag_freeze_parked">冻结已停住</string>
+    <string name="thread_flag_exiting">退出中</string>
     <string name="thread_reg_x0">x0 %1$s</string>
     <string name="thread_reg_x1">x1 %1$s</string>
     <string name="thread_reg_x29">x29/fp %1$s</string>
     <string name="thread_reg_x30">x30/lr %1$s</string>
+    <string name="thread_regs_group_args">x0-x7 参数寄存器</string>
+    <string name="thread_regs_group_temporaries">x8-x18 临时寄存器</string>
+    <string name="thread_regs_group_saved">x19-x28 被调保存寄存器</string>
+    <string name="thread_regs_group_frame">栈帧与控制</string>
+    <string name="thread_regs_group_fp">浮点与向量头部</string>
     <string name="thread_fp_summary">fp feat=%1$s fpsr=%2$s fpcr=%3$s v0=(%4$s,%5$s)</string>
     <string name="event_panel_title">事件流</string>
     <string name="event_panel_subtitle">直接从内核 session 队列排出的近期事件。</string>
     <string name="event_action_refresh">轮询事件</string>
+    <string name="event_action_pin">置顶</string>
+    <string name="event_action_unpin">取消置顶</string>
     <string name="event_empty">当前 session 队列里没有待处理事件。</string>
     <string name="event_error_no_session">还没有打开 session，请先连接并打开会话。</string>
     <string name="event_message_refreshed">已从队列取出 %1$d 个事件</string>
     <string name="event_detail_template">seq=%1$s tgid=%2$d tid=%3$d code=%4$s flags=%5$s value0=%6$s value1=%7$s</string>
     <string name="event_received_template">received_at_ms=%1$s</string>
+    <string name="event_summary_counts">队列=%1$d · 可见=%2$d · 置顶=%3$d</string>
+    <string name="event_filter_all">全部</string>
+    <string name="event_filter_pinned">置顶</string>
+    <string name="event_filter_stops">停止</string>
+    <string name="event_filter_signals">信号</string>
+    <string name="event_filter_syscalls">系统调用</string>
     <string name="process_panel_title">进程泳道</string>
     <string name="process_panel_subtitle">由 root agent 枚举真实进程，并在本地完成 Android 分类、过滤和 APK 图标渲染。</string>
     <string name="process_action_attach">附加</string>

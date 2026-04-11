@@ -127,9 +127,13 @@ internal class SessionBridgeUnsafeOps(
                     if (none { it.record.seq == existing.record.seq })
                         add(existing)
                 }
-            }.take(64)
+            }.take(256)
+            val survivingPins = current.pinnedEventSeqs.filterTo(linkedSetOf()) { pinnedSeq ->
+                merged.any { it.record.seq == pinnedSeq }
+            }
             current.copy(
                 recentEvents = merged,
+                pinnedEventSeqs = survivingPins,
                 lastMessage = reply.message.ifBlank {
                     appContext.getString(R.string.event_message_refreshed, reply.events.size)
                 },

@@ -104,6 +104,7 @@ data class SessionBridgeState(
     val selectedThreadTid: Int? = null,
     val selectedThreadRegisters: BridgeThreadRegistersReply? = null,
     val recentEvents: List<SessionEventEntry> = emptyList(),
+    val pinnedEventSeqs: Set<ULong> = emptySet(),
     val eventsAutoPollEnabled: Boolean = false,
     val images: List<BridgeImageRecord> = emptyList(),
     val vmas: List<BridgeVmaRecord> = emptyList(),
@@ -356,8 +357,27 @@ class SessionBridgeRepository(
         _state.update { current -> current.copy(eventsAutoPollEnabled = enabled) }
     }
 
+    fun togglePinnedEvent(seq: ULong) {
+        _state.update { current ->
+            if (current.recentEvents.none { it.record.seq == seq })
+                return@update current
+            val next =
+                if (seq in current.pinnedEventSeqs) {
+                    current.pinnedEventSeqs - seq
+                } else {
+                    current.pinnedEventSeqs + seq
+                }
+            current.copy(pinnedEventSeqs = next)
+        }
+    }
+
     fun clearRecentEvents() {
-        _state.update { current -> current.copy(recentEvents = emptyList()) }
+        _state.update { current ->
+            current.copy(
+                recentEvents = emptyList(),
+                pinnedEventSeqs = emptySet(),
+            )
+        }
     }
 
     suspend fun connect() {
@@ -856,8 +876,12 @@ class SessionBridgeRepository(
                         add(existing)
                 }
             }.take(256)
+            val survivingPins = current.pinnedEventSeqs.filterTo(linkedSetOf()) { pinnedSeq ->
+                merged.any { it.record.seq == pinnedSeq }
+            }
             current.copy(
                 recentEvents = merged,
+                pinnedEventSeqs = survivingPins,
                 lastMessage = if (updateMessage && events.isNotEmpty()) {
                     appContext.getString(R.string.event_message_refreshed, events.size)
                 } else {

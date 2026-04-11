@@ -203,6 +203,7 @@ class LkmdbgOverlayService : LifecycleService() {
                                 renderOverlayState()
                             },
                             onClearEvents = repository::clearRecentEvents,
+                            onTogglePinnedEvent = repository::togglePinnedEvent,
                             onStepMemoryPage = { direction ->
                                 lifecycleScope.launch {
                                     repository.stepMemoryPage(direction)
