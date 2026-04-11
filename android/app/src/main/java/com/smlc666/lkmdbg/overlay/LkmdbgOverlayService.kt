@@ -44,7 +44,6 @@ class LkmdbgOverlayService : LifecycleService() {
     private lateinit var automation: SessionAutomationController
     private lateinit var gestureController: OverlayGestureController
     private lateinit var processPickerController: OverlayProcessPickerController
-    private lateinit var memoryToolboxController: OverlayMemoryToolboxController
     private lateinit var stateBinder: OverlayStateBinder
     private lateinit var overlaySavedStateOwner: OverlaySavedStateOwner
     private var rootView: FrameLayout? = null
@@ -83,23 +82,6 @@ class LkmdbgOverlayService : LifecycleService() {
                     renderOverlayState()
                 }
             }
-            memoryToolboxController = OverlayMemoryToolboxController(
-                context = overlayContext,
-                repository = repository,
-                launchAction = { action ->
-                    lifecycleScope.launch { action() }
-                },
-                onShowMemoryResults = {
-                    updateMemoryViewMode(1)
-                },
-                onShowMemoryPage = {
-                    updateMemoryViewMode(0)
-                },
-                onDismiss = {
-                    repository.updateMemoryToolsOpen(false)
-                    renderOverlayState()
-                },
-            )
             stateBinder = OverlayStateBinder(
                 repository = repository,
                 onStateChanged = { state ->
@@ -233,9 +215,59 @@ class LkmdbgOverlayService : LifecycleService() {
                                     updateMemoryViewMode(0)
                                 }
                             },
+                            onMemorySearchQueryChanged = repository::updateMemorySearchQuery,
+                            onMemoryAddressInputChanged = repository::updateMemoryAddressInput,
+                            onMemorySelectionSizeChanged = repository::updateMemorySelectionSize,
+                            onMemoryWriteHexChanged = repository::updateMemoryWriteHexInput,
+                            onMemoryWriteAsciiChanged = repository::updateMemoryWriteAsciiInput,
+                            onMemoryWriteAsmChanged = repository::updateMemoryWriteAsmInput,
                             onCycleMemorySearchValueType = repository::cycleMemorySearchValueType,
                             onCycleMemorySearchRefineMode = repository::cycleMemorySearchRefineMode,
                             onCycleMemoryRegionPreset = repository::cycleMemoryRegionPreset,
+                            onJumpMemoryAddress = {
+                                lifecycleScope.launch {
+                                    repository.jumpToMemoryAddress()
+                                    updateMemoryViewMode(0)
+                                }
+                            },
+                            onLoadSelectionIntoHexSearch = {
+                                lifecycleScope.launch {
+                                    repository.loadSelectionIntoHexSearch()
+                                }
+                            },
+                            onLoadSelectionIntoAsciiSearch = {
+                                lifecycleScope.launch {
+                                    repository.loadSelectionIntoAsciiSearch()
+                                }
+                            },
+                            onLoadSelectionIntoEditors = {
+                                lifecycleScope.launch {
+                                    repository.loadSelectionIntoEditors()
+                                }
+                            },
+                            onWriteHexAtFocus = {
+                                lifecycleScope.launch {
+                                    repository.writeHexAtFocus()
+                                    updateMemoryViewMode(0)
+                                }
+                            },
+                            onWriteAsciiAtFocus = {
+                                lifecycleScope.launch {
+                                    repository.writeAsciiAtFocus()
+                                    updateMemoryViewMode(0)
+                                }
+                            },
+                            onAssembleToEditors = {
+                                lifecycleScope.launch {
+                                    repository.assembleArm64ToEditors()
+                                }
+                            },
+                            onAssembleAndWrite = {
+                                lifecycleScope.launch {
+                                    repository.assembleArm64AndWrite()
+                                    updateMemoryViewMode(0)
+                                }
+                            },
                             onRunMemorySearch = {
                                 lifecycleScope.launch {
                                     repository.runMemorySearch()
@@ -248,6 +280,8 @@ class LkmdbgOverlayService : LifecycleService() {
                                     updateMemoryViewMode(1)
                                 }
                             },
+                            onRefreshVmas = { lifecycleScope.launch { repository.refreshVmas() } },
+                            onRefreshImages = { lifecycleScope.launch { repository.refreshImages() } },
                             onShowMemoryResults = { updateMemoryViewMode(1) },
                             onShowMemoryPage = { updateMemoryViewMode(0) },
                             onPreviewSelectedPc = {
@@ -306,13 +340,6 @@ class LkmdbgOverlayService : LifecycleService() {
             )
             body.addView(nativeView)
             body.addView(
-                memoryToolboxController.build(density),
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                ),
-            )
-            body.addView(
                 processPickerController.build(density),
                 FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -366,8 +393,6 @@ class LkmdbgOverlayService : LifecycleService() {
         layoutParams = null
         if (::processPickerController.isInitialized)
             processPickerController.clear()
-        if (::memoryToolboxController.isInitialized)
-            memoryToolboxController.clear()
     }
 
     private fun toggleMemoryTools() {
@@ -404,10 +429,6 @@ class LkmdbgOverlayService : LifecycleService() {
             processPickerController.hide()
 
         processPickerController.render(state)
-        memoryToolboxController.render(
-            state = state,
-            visible = state.workspaceSection == WorkspaceSection.Memory && state.memoryToolsOpen,
-        )
         syncEventAutoPoll(state)
     }
 

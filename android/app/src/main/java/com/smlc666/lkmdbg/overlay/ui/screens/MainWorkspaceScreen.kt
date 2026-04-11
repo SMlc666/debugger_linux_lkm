@@ -177,11 +177,27 @@ fun MainWorkspaceScreen(
     onClearEvents: () -> Unit,
     onStepMemoryPage: (Int) -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
+    onMemorySearchQueryChanged: (String) -> Unit,
+    onMemoryAddressInputChanged: (String) -> Unit,
+    onMemorySelectionSizeChanged: (Int) -> Unit,
+    onMemoryWriteHexChanged: (String) -> Unit,
+    onMemoryWriteAsciiChanged: (String) -> Unit,
+    onMemoryWriteAsmChanged: (String) -> Unit,
     onCycleMemorySearchValueType: () -> Unit,
     onCycleMemorySearchRefineMode: () -> Unit,
     onCycleMemoryRegionPreset: () -> Unit,
+    onJumpMemoryAddress: () -> Unit,
+    onLoadSelectionIntoHexSearch: () -> Unit,
+    onLoadSelectionIntoAsciiSearch: () -> Unit,
+    onLoadSelectionIntoEditors: () -> Unit,
+    onWriteHexAtFocus: () -> Unit,
+    onWriteAsciiAtFocus: () -> Unit,
+    onAssembleToEditors: () -> Unit,
+    onAssembleAndWrite: () -> Unit,
     onRunMemorySearch: () -> Unit,
     onRefineMemorySearch: () -> Unit,
+    onRefreshVmas: () -> Unit,
+    onRefreshImages: () -> Unit,
     onShowMemoryResults: () -> Unit,
     onShowMemoryPage: () -> Unit,
     onPreviewSelectedPc: () -> Unit,
@@ -252,11 +268,27 @@ fun MainWorkspaceScreen(
                     onClearEvents = onClearEvents,
                     onStepMemoryPage = onStepMemoryPage,
                     onSelectMemoryAddress = onSelectMemoryAddress,
+                    onMemorySearchQueryChanged = onMemorySearchQueryChanged,
+                    onMemoryAddressInputChanged = onMemoryAddressInputChanged,
+                    onMemorySelectionSizeChanged = onMemorySelectionSizeChanged,
+                    onMemoryWriteHexChanged = onMemoryWriteHexChanged,
+                    onMemoryWriteAsciiChanged = onMemoryWriteAsciiChanged,
+                    onMemoryWriteAsmChanged = onMemoryWriteAsmChanged,
                     onCycleMemorySearchValueType = onCycleMemorySearchValueType,
                     onCycleMemorySearchRefineMode = onCycleMemorySearchRefineMode,
                     onCycleMemoryRegionPreset = onCycleMemoryRegionPreset,
+                    onJumpMemoryAddress = onJumpMemoryAddress,
+                    onLoadSelectionIntoHexSearch = onLoadSelectionIntoHexSearch,
+                    onLoadSelectionIntoAsciiSearch = onLoadSelectionIntoAsciiSearch,
+                    onLoadSelectionIntoEditors = onLoadSelectionIntoEditors,
+                    onWriteHexAtFocus = onWriteHexAtFocus,
+                    onWriteAsciiAtFocus = onWriteAsciiAtFocus,
+                    onAssembleToEditors = onAssembleToEditors,
+                    onAssembleAndWrite = onAssembleAndWrite,
                     onRunMemorySearch = onRunMemorySearch,
                     onRefineMemorySearch = onRefineMemorySearch,
+                    onRefreshVmas = onRefreshVmas,
+                    onRefreshImages = onRefreshImages,
                     onShowMemoryResults = onShowMemoryResults,
                     onShowMemoryPage = onShowMemoryPage,
                     onPreviewSelectedPc = onPreviewSelectedPc,
@@ -316,11 +348,27 @@ fun MainWorkspaceScreen(
                     onClearEvents = onClearEvents,
                     onStepMemoryPage = onStepMemoryPage,
                     onSelectMemoryAddress = onSelectMemoryAddress,
+                    onMemorySearchQueryChanged = onMemorySearchQueryChanged,
+                    onMemoryAddressInputChanged = onMemoryAddressInputChanged,
+                    onMemorySelectionSizeChanged = onMemorySelectionSizeChanged,
+                    onMemoryWriteHexChanged = onMemoryWriteHexChanged,
+                    onMemoryWriteAsciiChanged = onMemoryWriteAsciiChanged,
+                    onMemoryWriteAsmChanged = onMemoryWriteAsmChanged,
                     onCycleMemorySearchValueType = onCycleMemorySearchValueType,
                     onCycleMemorySearchRefineMode = onCycleMemorySearchRefineMode,
                     onCycleMemoryRegionPreset = onCycleMemoryRegionPreset,
+                    onJumpMemoryAddress = onJumpMemoryAddress,
+                    onLoadSelectionIntoHexSearch = onLoadSelectionIntoHexSearch,
+                    onLoadSelectionIntoAsciiSearch = onLoadSelectionIntoAsciiSearch,
+                    onLoadSelectionIntoEditors = onLoadSelectionIntoEditors,
+                    onWriteHexAtFocus = onWriteHexAtFocus,
+                    onWriteAsciiAtFocus = onWriteAsciiAtFocus,
+                    onAssembleToEditors = onAssembleToEditors,
+                    onAssembleAndWrite = onAssembleAndWrite,
                     onRunMemorySearch = onRunMemorySearch,
                     onRefineMemorySearch = onRefineMemorySearch,
+                    onRefreshVmas = onRefreshVmas,
+                    onRefreshImages = onRefreshImages,
                     onShowMemoryResults = onShowMemoryResults,
                     onShowMemoryPage = onShowMemoryPage,
                     onPreviewSelectedPc = onPreviewSelectedPc,
@@ -371,11 +419,27 @@ private fun WorkspaceColumn(
     onClearEvents: () -> Unit,
     onStepMemoryPage: (Int) -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
+    onMemorySearchQueryChanged: (String) -> Unit,
+    onMemoryAddressInputChanged: (String) -> Unit,
+    onMemorySelectionSizeChanged: (Int) -> Unit,
+    onMemoryWriteHexChanged: (String) -> Unit,
+    onMemoryWriteAsciiChanged: (String) -> Unit,
+    onMemoryWriteAsmChanged: (String) -> Unit,
     onCycleMemorySearchValueType: () -> Unit,
     onCycleMemorySearchRefineMode: () -> Unit,
     onCycleMemoryRegionPreset: () -> Unit,
+    onJumpMemoryAddress: () -> Unit,
+    onLoadSelectionIntoHexSearch: () -> Unit,
+    onLoadSelectionIntoAsciiSearch: () -> Unit,
+    onLoadSelectionIntoEditors: () -> Unit,
+    onWriteHexAtFocus: () -> Unit,
+    onWriteAsciiAtFocus: () -> Unit,
+    onAssembleToEditors: () -> Unit,
+    onAssembleAndWrite: () -> Unit,
     onRunMemorySearch: () -> Unit,
     onRefineMemorySearch: () -> Unit,
+    onRefreshVmas: () -> Unit,
+    onRefreshImages: () -> Unit,
     onShowMemoryResults: () -> Unit,
     onShowMemoryPage: () -> Unit,
     onPreviewSelectedPc: () -> Unit,
@@ -444,11 +508,27 @@ private fun WorkspaceColumn(
                 onClearEvents = onClearEvents,
                 onStepMemoryPage = onStepMemoryPage,
                 onSelectMemoryAddress = onSelectMemoryAddress,
+                onMemorySearchQueryChanged = onMemorySearchQueryChanged,
+                onMemoryAddressInputChanged = onMemoryAddressInputChanged,
+                onMemorySelectionSizeChanged = onMemorySelectionSizeChanged,
+                onMemoryWriteHexChanged = onMemoryWriteHexChanged,
+                onMemoryWriteAsciiChanged = onMemoryWriteAsciiChanged,
+                onMemoryWriteAsmChanged = onMemoryWriteAsmChanged,
                 onCycleMemorySearchValueType = onCycleMemorySearchValueType,
                 onCycleMemorySearchRefineMode = onCycleMemorySearchRefineMode,
                 onCycleMemoryRegionPreset = onCycleMemoryRegionPreset,
+                onJumpMemoryAddress = onJumpMemoryAddress,
+                onLoadSelectionIntoHexSearch = onLoadSelectionIntoHexSearch,
+                onLoadSelectionIntoAsciiSearch = onLoadSelectionIntoAsciiSearch,
+                onLoadSelectionIntoEditors = onLoadSelectionIntoEditors,
+                onWriteHexAtFocus = onWriteHexAtFocus,
+                onWriteAsciiAtFocus = onWriteAsciiAtFocus,
+                onAssembleToEditors = onAssembleToEditors,
+                onAssembleAndWrite = onAssembleAndWrite,
                 onRunMemorySearch = onRunMemorySearch,
                 onRefineMemorySearch = onRefineMemorySearch,
+                onRefreshVmas = onRefreshVmas,
+                onRefreshImages = onRefreshImages,
                 onShowMemoryResults = onShowMemoryResults,
                 onShowMemoryPage = onShowMemoryPage,
                 onPreviewSelectedPc = onPreviewSelectedPc,
@@ -652,11 +732,27 @@ fun MainContentArea(
     onClearEvents: () -> Unit,
     onStepMemoryPage: (Int) -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
+    onMemorySearchQueryChanged: (String) -> Unit,
+    onMemoryAddressInputChanged: (String) -> Unit,
+    onMemorySelectionSizeChanged: (Int) -> Unit,
+    onMemoryWriteHexChanged: (String) -> Unit,
+    onMemoryWriteAsciiChanged: (String) -> Unit,
+    onMemoryWriteAsmChanged: (String) -> Unit,
     onCycleMemorySearchValueType: () -> Unit,
     onCycleMemorySearchRefineMode: () -> Unit,
     onCycleMemoryRegionPreset: () -> Unit,
+    onJumpMemoryAddress: () -> Unit,
+    onLoadSelectionIntoHexSearch: () -> Unit,
+    onLoadSelectionIntoAsciiSearch: () -> Unit,
+    onLoadSelectionIntoEditors: () -> Unit,
+    onWriteHexAtFocus: () -> Unit,
+    onWriteAsciiAtFocus: () -> Unit,
+    onAssembleToEditors: () -> Unit,
+    onAssembleAndWrite: () -> Unit,
     onRunMemorySearch: () -> Unit,
     onRefineMemorySearch: () -> Unit,
+    onRefreshVmas: () -> Unit,
+    onRefreshImages: () -> Unit,
     onShowMemoryResults: () -> Unit,
     onShowMemoryPage: () -> Unit,
     onPreviewSelectedPc: () -> Unit,
@@ -700,11 +796,27 @@ fun MainContentArea(
             viewMode = memoryViewMode,
             onStepPage = onStepMemoryPage,
             onSelectAddress = onSelectMemoryAddress,
+            onSearchQueryChanged = onMemorySearchQueryChanged,
+            onAddressInputChanged = onMemoryAddressInputChanged,
+            onSelectionSizeChanged = onMemorySelectionSizeChanged,
+            onHexInputChanged = onMemoryWriteHexChanged,
+            onAsciiInputChanged = onMemoryWriteAsciiChanged,
+            onAsmInputChanged = onMemoryWriteAsmChanged,
             onCycleValueType = onCycleMemorySearchValueType,
             onCycleRefineMode = onCycleMemorySearchRefineMode,
             onCycleRegionPreset = onCycleMemoryRegionPreset,
+            onJumpAddress = onJumpMemoryAddress,
+            onLoadSelectionIntoHexSearch = onLoadSelectionIntoHexSearch,
+            onLoadSelectionIntoAsciiSearch = onLoadSelectionIntoAsciiSearch,
+            onLoadSelectionIntoEditors = onLoadSelectionIntoEditors,
+            onWriteHexAtFocus = onWriteHexAtFocus,
+            onWriteAsciiAtFocus = onWriteAsciiAtFocus,
+            onAssembleToEditors = onAssembleToEditors,
+            onAssembleAndWrite = onAssembleAndWrite,
             onRunSearch = onRunMemorySearch,
             onRefineSearch = onRefineMemorySearch,
+            onRefreshVmas = onRefreshVmas,
+            onRefreshImages = onRefreshImages,
             onShowResults = onShowMemoryResults,
             onShowPage = onShowMemoryPage,
             onPreviewSelectedPc = onPreviewSelectedPc,
@@ -758,6 +870,13 @@ private fun SessionSectionContent(
         contentPadding = PaddingValues(bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item {
+            SectionIntro(
+                title = stringResource(R.string.session_panel_title),
+                subtitle = stringResource(R.string.session_panel_subtitle),
+            )
+        }
+
         item {
             SectionCard(title = stringResource(R.string.session_panel_title)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -916,6 +1035,11 @@ private fun ProcessesSectionContent(
 ) {
     val filtered = state.processes.filter { state.processFilter.matches(it) }
     Column(modifier = Modifier.fillMaxSize()) {
+        SectionIntro(
+            title = stringResource(R.string.process_panel_title),
+            subtitle = stringResource(R.string.process_panel_subtitle),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onRefreshProcesses) {
                 Text(stringResource(R.string.process_action_refresh))
@@ -970,6 +1094,11 @@ private fun ThreadsSectionContent(
     onSingleStep: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
+        SectionIntro(
+            title = stringResource(R.string.thread_panel_title),
+            subtitle = stringResource(R.string.thread_panel_subtitle),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
         ActionRow(
             listOf(
                 stringResource(R.string.thread_action_refresh) to onRefreshThreads,
@@ -1030,6 +1159,11 @@ private fun EventsSectionContent(
     var filterText by rememberSaveable { mutableStateOf("") }
     val filtered = state.recentEvents.filter { eventMatchesFilter(it, filterText) }
     Column(modifier = Modifier.fillMaxSize()) {
+        SectionIntro(
+            title = stringResource(R.string.event_panel_title),
+            subtitle = stringResource(R.string.event_panel_subtitle),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onRefreshEvents) {
                 Text(stringResource(R.string.event_action_refresh))
@@ -1090,11 +1224,27 @@ private fun MemorySectionContent(
     viewMode: Int,
     onStepPage: (Int) -> Unit,
     onSelectAddress: (ULong) -> Unit,
+    onSearchQueryChanged: (String) -> Unit,
+    onAddressInputChanged: (String) -> Unit,
+    onSelectionSizeChanged: (Int) -> Unit,
+    onHexInputChanged: (String) -> Unit,
+    onAsciiInputChanged: (String) -> Unit,
+    onAsmInputChanged: (String) -> Unit,
     onCycleValueType: () -> Unit,
     onCycleRefineMode: () -> Unit,
     onCycleRegionPreset: () -> Unit,
+    onJumpAddress: () -> Unit,
+    onLoadSelectionIntoHexSearch: () -> Unit,
+    onLoadSelectionIntoAsciiSearch: () -> Unit,
+    onLoadSelectionIntoEditors: () -> Unit,
+    onWriteHexAtFocus: () -> Unit,
+    onWriteAsciiAtFocus: () -> Unit,
+    onAssembleToEditors: () -> Unit,
+    onAssembleAndWrite: () -> Unit,
     onRunSearch: () -> Unit,
     onRefineSearch: () -> Unit,
+    onRefreshVmas: () -> Unit,
+    onRefreshImages: () -> Unit,
     onShowResults: () -> Unit,
     onShowPage: () -> Unit,
     onPreviewSelectedPc: () -> Unit,
@@ -1103,36 +1253,38 @@ private fun MemorySectionContent(
     val refineModeLabel = stringResource(state.memorySearch.refineMode.labelRes)
     val regionPresetLabel = stringResource(state.memorySearch.regionPreset.labelRes)
     val toolsLabel = stringResource(R.string.memory_action_tools)
+    val selectionSummary = state.memoryPage?.let {
+        stringResource(
+            R.string.memory_selection_summary,
+            state.memorySelectionSize,
+            hex64(it.focusAddress),
+        )
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.workspace_memory),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-                Text(
-                    text = buildString {
-                        append(valueTypeLabel)
-                        append(" · ")
-                        append(refineModeLabel)
-                        append(" · ")
-                        append(regionPresetLabel)
-                        append(" · vmas=")
-                        append(state.vmas.size)
-                        append(" · images=")
-                        append(state.images.size)
-                        if (memoryToolsOpen)
-                            append(" · $toolsLabel")
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            SectionIntro(
+                title = stringResource(R.string.memory_panel_title),
+                subtitle = buildString {
+                    append(stringResource(R.string.memory_panel_subtitle))
+                    append('\n')
+                    append(valueTypeLabel)
+                    append(" · ")
+                    append(refineModeLabel)
+                    append(" · ")
+                    append(regionPresetLabel)
+                    append(" · vmas=")
+                    append(state.vmas.size)
+                    append(" · images=")
+                    append(state.images.size)
+                    if (memoryToolsOpen)
+                        append(" · $toolsLabel")
+                },
+                modifier = Modifier.weight(1f),
+            )
             if (viewMode == MEMORY_VIEW_MODE_RESULTS) {
                 OutlinedButton(onClick = onShowPage) {
                     Text(stringResource(R.string.memory_action_show_page))
@@ -1148,6 +1300,22 @@ private fun MemorySectionContent(
                 }
             }
         }
+        Spacer(modifier = Modifier.height(8.dp))
+        if (state.memorySearch.summary.isNotBlank()) {
+            Text(
+                text = state.memorySearch.summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+        OutlinedTextField(
+            value = state.memorySearch.query,
+            onValueChange = onSearchQueryChanged,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.memory_search_query_label)) },
+            singleLine = true,
+        )
         Spacer(modifier = Modifier.height(8.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
             OutlinedButton(onClick = onCycleValueType, modifier = Modifier.weight(1f)) {
@@ -1176,6 +1344,30 @@ private fun MemorySectionContent(
                 Text(stringResource(R.string.memory_action_preview_pc))
             }
         }
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = state.memoryAddressInput,
+                onValueChange = onAddressInputChanged,
+                modifier = Modifier.weight(1f),
+                label = { Text(stringResource(R.string.memory_address_label)) },
+                singleLine = true,
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            OutlinedButton(onClick = onJumpAddress) {
+                Text(stringResource(R.string.memory_action_jump))
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        ActionRow(
+            listOf(
+                stringResource(R.string.memory_action_refresh_ranges) to onRefreshVmas,
+                stringResource(R.string.memory_action_refresh_images) to onRefreshImages,
+            ),
+        )
         if (viewMode == MEMORY_VIEW_MODE_PAGE) {
             Spacer(modifier = Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth()) {
@@ -1186,6 +1378,66 @@ private fun MemorySectionContent(
                 OutlinedButton(onClick = { onStepPage(1) }, modifier = Modifier.weight(1f)) {
                     Text(stringResource(R.string.memory_action_next_page))
                 }
+            }
+        }
+        if (memoryToolsOpen) {
+            Spacer(modifier = Modifier.height(12.dp))
+            SectionCard(title = stringResource(R.string.memory_selection_title)) {
+                if (selectionSummary != null) {
+                    SummaryLine(selectionSummary)
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                FilterRow(
+                    filters = listOf(1, 2, 4, 8, 16),
+                    selectedFilter = state.memorySelectionSize,
+                    labelFor = { size -> stringResource(R.string.memory_selection_size, size) },
+                    onSelected = onSelectionSizeChanged,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                ActionRow(
+                    listOf(
+                        stringResource(R.string.memory_action_selection_hex_search) to onLoadSelectionIntoHexSearch,
+                        stringResource(R.string.memory_action_selection_ascii_search) to onLoadSelectionIntoAsciiSearch,
+                        stringResource(R.string.memory_action_load_selection) to onLoadSelectionIntoEditors,
+                    ),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = state.memoryWriteHexInput,
+                    onValueChange = onHexInputChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.memory_write_hex_label)) },
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                ActionRow(
+                    listOf(
+                        stringResource(R.string.memory_action_write_hex) to onWriteHexAtFocus,
+                        stringResource(R.string.memory_action_write_ascii) to onWriteAsciiAtFocus,
+                    ),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = state.memoryWriteAsciiInput,
+                    onValueChange = onAsciiInputChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.memory_write_ascii_label)) },
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = state.memoryWriteAsmInput,
+                    onValueChange = onAsmInputChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.memory_write_asm_label)) },
+                    minLines = 3,
+                    maxLines = 4,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                ActionRow(
+                    listOf(
+                        stringResource(R.string.memory_action_asm_to_editor) to onAssembleToEditors,
+                        stringResource(R.string.memory_action_asm_write) to onAssembleAndWrite,
+                    ),
+                )
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
@@ -1205,6 +1457,7 @@ private fun MemorySectionContent(
                 MemoryPageList(
                     page = state.memoryPage,
                     onSelectAddress = onSelectAddress,
+                    showDisassembly = memoryToolsOpen,
                 )
             }
         }
@@ -1294,6 +1547,7 @@ private fun MemoryResultCard(
 private fun MemoryPageList(
     page: MemoryPage?,
     onSelectAddress: (ULong) -> Unit,
+    showDisassembly: Boolean,
 ) {
     if (page == null) {
         EmptyState(stringResource(R.string.memory_error_no_page))
@@ -1330,6 +1584,21 @@ private fun MemoryPageList(
                 page.scalars.take(4).forEach { scalar ->
                     Text(
                         text = "${scalar.label}: ${scalar.value}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (showDisassembly && page.disassembly.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = stringResource(R.string.memory_preview_disasm_title),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                page.disassembly.take(8).forEach { line ->
+                    Text(
+                        text = line,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1508,7 +1777,7 @@ private fun ProcessRow(
                 )
             }
             Spacer(modifier = Modifier.height(6.dp))
-            OutlinedButton(onClick = onAttach) {
+            OutlinedButton(onClick = onAttach, enabled = !attached) {
                 Text(
                     stringResource(
                         if (attached) R.string.process_attached else R.string.process_action_attach,
@@ -1654,6 +1923,29 @@ private fun SectionCard(
                 Spacer(modifier = Modifier.height(4.dp))
                 content()
             },
+        )
+    }
+}
+
+@Composable
+private fun SectionIntro(
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
