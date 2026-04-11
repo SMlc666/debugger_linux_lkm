@@ -1,6 +1,9 @@
 name: Build OnePlus_SukiSU Ultra All
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -16,6 +19,10 @@ jobs:
       KERNEL_REPO_URL: https://github.com/OnePlusOSS/kernel_manifest.git
       KERNEL_WORKSPACE: ${{ github.workspace }}/kernel_workspace
       KERNEL_OUT_DIR: ${{ github.workspace }}/kernel_out
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 2G
 
     steps:
       - name: Checkout module source
@@ -28,6 +35,7 @@ jobs:
             bc \
             bison \
             build-essential \
+            ccache \
             clang \
             flex \
             gcc-aarch64-linux-gnu \
@@ -37,6 +45,23 @@ jobs:
             lld \
             llvm \
             python3
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-ccache-oneplus-sm8550-ace2pro-a13-gki515-${{ hashFiles('.github/workflows/oneplus-sm8550-ace2pro-a13-gki515.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-oneplus-sm8550-ace2pro-a13-gki515-
+
+      - name: Configure ccache
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache --set-config=max_size="$CCACHE_MAXSIZE"
+          ccache --set-config=base_dir="$CCACHE_BASEDIR"
+          ccache --set-config=compiler_check="$CCACHE_COMPILERCHECK"
+          ccache --zero-stats || true
+          ccache --show-config || true
 
       - name: Install repo tool
         run: |
@@ -74,9 +99,9 @@ jobs:
             ARCH=arm64
             LLVM=1
             CLANG_TRIPLE=aarch64-linux-gnu-
-            CC=clang
+            CC="ccache clang"
             CROSS_COMPILE=aarch64-linux-gnu-
-            HOSTCC=clang
+            HOSTCC="ccache clang"
           )
 
           make "${COMMON_ARGS[@]}" gki_defconfig
@@ -101,14 +126,18 @@ jobs:
             ARCH=arm64
             LLVM=1
             CLANG_TRIPLE=aarch64-linux-gnu-
-            CC=clang
+            CC="ccache clang"
             CROSS_COMPILE=aarch64-linux-gnu-
-            HOSTCC=clang
+            HOSTCC="ccache clang"
             -j"$(nproc)"
             modules
           )
 
           make "${MODULE_ARGS[@]}"
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats || true
 
       - name: Prepare module artifacts
         run: |
