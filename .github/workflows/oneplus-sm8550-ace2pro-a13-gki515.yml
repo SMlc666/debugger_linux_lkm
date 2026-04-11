@@ -1,0 +1,124 @@
+name: Build OnePlus_SukiSU Ultra All
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-oneplus-sm8550-ace2pro-a13-gki515:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      ONEPLUS_CPU_BRANCH: sm8550
+      ONEPLUS_FEIL: oneplus_ace2_pro_v
+      KERNEL_REPO_URL: https://github.com/OnePlusOSS/kernel_manifest.git
+      KERNEL_WORKSPACE: ${{ github.workspace }}/kernel_workspace
+      KERNEL_OUT_DIR: ${{ github.workspace }}/kernel_out
+
+    steps:
+      - name: Checkout module source
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc \
+            bison \
+            build-essential \
+            clang \
+            flex \
+            gcc-aarch64-linux-gnu \
+            git \
+            libelf-dev \
+            libssl-dev \
+            lld \
+            llvm \
+            python3
+
+      - name: Install repo tool
+        run: |
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/repo"
+          chmod +x "$HOME/repo"
+          sudo mv "$HOME/repo" /usr/local/bin/repo
+
+      - name: Initialize repo and sync OnePlus kernel source
+        run: |
+          mkdir -p "$KERNEL_WORKSPACE"
+          cd "$KERNEL_WORKSPACE"
+          repo init \
+            -u "$KERNEL_REPO_URL" \
+            -b "refs/heads/oneplus/${ONEPLUS_CPU_BRANCH}" \
+            -m "${ONEPLUS_FEIL}.xml" \
+            --depth=1
+          repo sync -c -j"$(nproc)" --fail-fast
+
+      - name: Show fixed target
+        run: |
+          echo "CPU branch: ${ONEPLUS_CPU_BRANCH}"
+          echo "Manifest: ${ONEPLUS_FEIL}.xml"
+          echo "Android base: android13"
+          echo "Kernel base: gki 5.15"
+
+      - name: Build kernel outputs needed for external module
+        run: |
+          KERNEL_DIR="$KERNEL_WORKSPACE/kernel_platform/common"
+          OUT_DIR="$KERNEL_OUT_DIR"
+          mkdir -p "$OUT_DIR"
+
+          COMMON_ARGS=(
+            -C "$KERNEL_DIR"
+            O="$OUT_DIR"
+            ARCH=arm64
+            LLVM=1
+            CLANG_TRIPLE=aarch64-linux-gnu-
+            CC=clang
+            CROSS_COMPILE=aarch64-linux-gnu-
+            HOSTCC=clang
+          )
+
+          make "${COMMON_ARGS[@]}" gki_defconfig
+          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+            -d LTO_CLANG \
+            -d LTO_CLANG_THIN \
+            -d LTO_CLANG_FULL \
+            -d THINLTO \
+            -e LTO_NONE || true
+          make "${COMMON_ARGS[@]}" olddefconfig
+          make "${COMMON_ARGS[@]}" -j"$(nproc)" Image modules
+
+      - name: Build external module against OnePlus android13-5.15 GKI tree
+        run: |
+          KERNEL_DIR="$KERNEL_WORKSPACE/kernel_platform/common"
+          OUT_DIR="$KERNEL_OUT_DIR"
+
+          MODULE_ARGS=(
+            -C "$KERNEL_DIR"
+            O="$OUT_DIR"
+            M="$GITHUB_WORKSPACE"
+            ARCH=arm64
+            LLVM=1
+            CLANG_TRIPLE=aarch64-linux-gnu-
+            CC=clang
+            CROSS_COMPILE=aarch64-linux-gnu-
+            HOSTCC=clang
+            -j"$(nproc)"
+            modules
+          )
+
+          make "${MODULE_ARGS[@]}"
+
+      - name: Prepare module artifacts
+        run: |
+          mkdir -p "$RUNNER_TEMP/oneplus-sm8550-ace2pro-a13-gki515"
+          cp "$GITHUB_WORKSPACE/lkmdbg.ko" "$RUNNER_TEMP/oneplus-sm8550-ace2pro-a13-gki515/"
+          cp "$KERNEL_OUT_DIR/.config" "$RUNNER_TEMP/oneplus-sm8550-ace2pro-a13-gki515/kernel.config"
+          cp "$KERNEL_OUT_DIR/Module.symvers" "$RUNNER_TEMP/oneplus-sm8550-ace2pro-a13-gki515/"
+
+      - name: Upload module artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lkmdbg-oneplus-sm8550-ace2pro-android13-gki5.15
+          path: ${{ runner.temp }}/oneplus-sm8550-ace2pro-a13-gki515/*
