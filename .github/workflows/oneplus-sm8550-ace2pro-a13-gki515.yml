@@ -39,6 +39,7 @@ jobs:
             build-essential \
             ccache \
             clang \
+            dwarves \
             flex \
             gcc-aarch64-linux-gnu \
             git \
@@ -47,6 +48,11 @@ jobs:
             lld \
             llvm \
             python3
+
+      - name: Verify required build tools
+        run: |
+          command -v pahole
+          pahole --version
 
       - name: Prepare cache directories
         run: |
