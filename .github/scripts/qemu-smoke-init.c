@@ -153,6 +153,7 @@ struct qemu_behavior_debug_result {
 	__u32 freeze_rounds;
 	__u32 step_rounds;
 	__u32 hwpoint_rounds;
+	__u32 hwpoint_supported;
 	__u32 mmu_supported;
 	__u32 mmu_armed;
 };
@@ -1852,6 +1853,7 @@ static int qemu_behavior_run_debug_ops(pid_t target_pid, __u64 hot_addr,
 
 	memset(result, 0, sizeof(*result));
 	result->ret_code = -1;
+	result->hwpoint_supported = 1U;
 
 	session_fd = qemu_open_session();
 	if (qemu_behavior_set_target(session_fd, target_pid) != 0)
@@ -1923,16 +1925,20 @@ static int qemu_behavior_run_debug_ops(pid_t target_pid, __u64 hot_addr,
 		ret = qemu_behavior_add_hwpoint(session_fd, step_tid, hot_addr,
 						LKMDBG_HWPOINT_TYPE_WRITE, 0,
 						&hwpoint_id);
-		if (ret != 0) {
+		if (ret == -EOPNOTSUPP || ret == -EINVAL || ret == -ENOSYS ||
+		    ret == -ENOENT) {
+			result->hwpoint_supported = 0U;
+		} else if (ret != 0) {
 			result->ret_code = ret;
 			goto out;
-		}
-		result->hwpoint_rounds++;
-		usleep(40000);
-		ret = qemu_behavior_remove_hwpoint(session_fd, hwpoint_id);
-		if (ret != 0) {
-			result->ret_code = ret;
-			goto out;
+		} else {
+			result->hwpoint_rounds++;
+			usleep(40000);
+			ret = qemu_behavior_remove_hwpoint(session_fd, hwpoint_id);
+			if (ret != 0) {
+				result->ret_code = ret;
+				goto out;
+			}
 		}
 
 		for (mem_iter = 0; mem_iter < 64U; mem_iter++) {
@@ -2068,6 +2074,7 @@ static void qemu_run_behavior_cluster(void)
 	double alloc_p99_limit;
 	int disturbance_ret = -1;
 	unsigned int disturbance_attempt = 0;
+	unsigned int disturbance_attempts_run = 0;
 
 	qemu_cluster_begin("behavior");
 
@@ -2106,6 +2113,7 @@ static void qemu_run_behavior_cluster(void)
 	for (disturbance_attempt = 0;
 	     disturbance_attempt < QEMU_BEHAVIOR_DISTURBANCE_RETRIES;
 	     disturbance_attempt++) {
+		disturbance_attempts_run = disturbance_attempt + 1U;
 		disturbance_pid = qemu_behavior_spawn_disturbance(
 			worker_pid, (uintptr_t)&shared->hot_value, &disturbance_fd);
 		syscall_stress_ns = qemu_behavior_sample_syscall_avg_ns(
@@ -2121,7 +2129,7 @@ static void qemu_run_behavior_cluster(void)
 	}
 	qemu_check(disturbance_ret == 0,
 		   "behavior_disturbance_fail ret=%d attempts=%u freeze=%u step=%u hwpoint=%u",
-		   disturbance_ret, disturbance_attempt + 1U,
+		   disturbance_ret, disturbance_attempts_run,
 		   disturbance.freeze_rounds, disturbance.step_rounds,
 		   disturbance.hwpoint_rounds);
 	qemu_check(qemu_behavior_read_proc_faults(worker_pid, &faults_after_min,
@@ -2134,10 +2142,10 @@ static void qemu_run_behavior_cluster(void)
 	minflt_delta = faults_after_min - faults_before_min;
 	majflt_delta = faults_after_maj - faults_before_maj;
 
-	printf("LKMDBG_QEMU_BEHAVIOR_DEBUG freeze_rounds=%u step_rounds=%u hwpoint_rounds=%u mmu_supported=%u mmu_armed=%u\n",
+	printf("LKMDBG_QEMU_BEHAVIOR_DEBUG freeze_rounds=%u step_rounds=%u hwpoint_rounds=%u hwpoint_supported=%u mmu_supported=%u mmu_armed=%u\n",
 	       disturbance.freeze_rounds, disturbance.step_rounds,
-	       disturbance.hwpoint_rounds, disturbance.mmu_supported,
-	       disturbance.mmu_armed);
+	       disturbance.hwpoint_rounds, disturbance.hwpoint_supported,
+	       disturbance.mmu_supported, disturbance.mmu_armed);
 	printf("LKMDBG_QEMU_BEHAVIOR_MEMORY minflt_delta=%llu majflt_delta=%llu syscall_base_ns=%.2f syscall_stress_ns=%.2f\n",
 	       (unsigned long long)minflt_delta, (unsigned long long)majflt_delta,
 	       syscall_base_ns, syscall_stress_ns);
@@ -2150,7 +2158,9 @@ static void qemu_run_behavior_cluster(void)
 
 	qemu_check(disturbance.freeze_rounds >= 1U, "behavior_no_freeze_rounds");
 	qemu_check(disturbance.step_rounds >= 1U, "behavior_no_step_rounds");
-	qemu_check(disturbance.hwpoint_rounds >= 1U, "behavior_no_hwpoint_rounds");
+	if (disturbance.hwpoint_supported != 0U)
+		qemu_check(disturbance.hwpoint_rounds >= 1U,
+			   "behavior_no_hwpoint_rounds");
 	qemu_check(minflt_delta <= QEMU_BEHAVIOR_MINFLT_DELTA_MAX,
 		   "behavior_minflt_delta_too_large=%llu",
 		   (unsigned long long)minflt_delta);
