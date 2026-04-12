@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,6 +43,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.data.MemoryPage
 import com.smlc666.lkmdbg.data.MemoryPreviewRow
@@ -60,6 +60,17 @@ import com.smlc666.lkmdbg.shared.BridgeThreadRecord
 
 private const val MEMORY_VIEW_MODE_PAGE = 0
 private const val MEMORY_VIEW_MODE_RESULTS = 1
+
+private data class StatusBadgeSpec(
+    val label: String,
+    val containerColor: Color,
+    val contentColor: Color,
+)
+
+private data class MetricTileSpec(
+    val label: String,
+    val value: String,
+)
 
 @Composable
 fun WorkingBar(
@@ -169,6 +180,8 @@ fun MainWorkspaceScreen(
     onToggleEventsAutoPoll: () -> Unit,
     onClearEvents: () -> Unit,
     onTogglePinnedEvent: (ULong) -> Unit,
+    onOpenEventThread: (Int) -> Unit,
+    onOpenEventValue: (ULong) -> Unit,
     onStepMemoryPage: (Int) -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
     onMemorySearchQueryChanged: (String) -> Unit,
@@ -261,6 +274,8 @@ fun MainWorkspaceScreen(
                     onToggleEventsAutoPoll = onToggleEventsAutoPoll,
                     onClearEvents = onClearEvents,
                     onTogglePinnedEvent = onTogglePinnedEvent,
+                    onOpenEventThread = onOpenEventThread,
+                    onOpenEventValue = onOpenEventValue,
                     onStepMemoryPage = onStepMemoryPage,
                     onSelectMemoryAddress = onSelectMemoryAddress,
                     onMemorySearchQueryChanged = onMemorySearchQueryChanged,
@@ -342,6 +357,8 @@ fun MainWorkspaceScreen(
                     onToggleEventsAutoPoll = onToggleEventsAutoPoll,
                     onClearEvents = onClearEvents,
                     onTogglePinnedEvent = onTogglePinnedEvent,
+                    onOpenEventThread = onOpenEventThread,
+                    onOpenEventValue = onOpenEventValue,
                     onStepMemoryPage = onStepMemoryPage,
                     onSelectMemoryAddress = onSelectMemoryAddress,
                     onMemorySearchQueryChanged = onMemorySearchQueryChanged,
@@ -414,6 +431,8 @@ private fun WorkspaceColumn(
     onToggleEventsAutoPoll: () -> Unit,
     onClearEvents: () -> Unit,
     onTogglePinnedEvent: (ULong) -> Unit,
+    onOpenEventThread: (Int) -> Unit,
+    onOpenEventValue: (ULong) -> Unit,
     onStepMemoryPage: (Int) -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
     onMemorySearchQueryChanged: (String) -> Unit,
@@ -504,6 +523,8 @@ private fun WorkspaceColumn(
                 onToggleEventsAutoPoll = onToggleEventsAutoPoll,
                 onClearEvents = onClearEvents,
                 onTogglePinnedEvent = onTogglePinnedEvent,
+                onOpenEventThread = onOpenEventThread,
+                onOpenEventValue = onOpenEventValue,
                 onStepMemoryPage = onStepMemoryPage,
                 onSelectMemoryAddress = onSelectMemoryAddress,
                 onMemorySearchQueryChanged = onMemorySearchQueryChanged,
@@ -729,6 +750,8 @@ fun MainContentArea(
     onToggleEventsAutoPoll: () -> Unit,
     onClearEvents: () -> Unit,
     onTogglePinnedEvent: (ULong) -> Unit,
+    onOpenEventThread: (Int) -> Unit,
+    onOpenEventValue: (ULong) -> Unit,
     onStepMemoryPage: (Int) -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
     onMemorySearchQueryChanged: (String) -> Unit,
@@ -836,6 +859,8 @@ fun MainContentArea(
             onToggleEventsAutoPoll = onToggleEventsAutoPoll,
             onClearEvents = onClearEvents,
             onTogglePinnedEvent = onTogglePinnedEvent,
+            onOpenEventThread = onOpenEventThread,
+            onOpenEventValue = onOpenEventValue,
         )
     }
 }
@@ -865,6 +890,9 @@ private fun SessionSectionContent(
     onRefreshHwpoints: () -> Unit,
 ) {
     val controlsBusy = state.busy || state.sessionControlsBusy
+    var sessionControlsPanelOpen by rememberSaveable { mutableStateOf(false) }
+    var executionControlsPanelOpen by rememberSaveable { mutableStateOf(false) }
+    var hwpointControlsPanelOpen by rememberSaveable { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 16.dp),
@@ -898,17 +926,10 @@ private fun SessionSectionContent(
                 Spacer(modifier = Modifier.height(8.dp))
                 ActionRow(
                     listOf(
-                        stringResource(R.string.session_action_connect) to onConnect,
-                        stringResource(R.string.session_action_open_session) to onOpenSession,
-                        stringResource(R.string.session_action_refresh) to onRefreshSession,
-                    ),
-                    enabled = !controlsBusy,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                ActionRow(
-                    listOf(
                         stringResource(R.string.session_action_attach_target) to onAttachTarget,
-                        stringResource(R.string.session_action_refresh_stop) to onRefreshStopState,
+                        stringResource(R.string.session_action_open_controls) to {
+                            sessionControlsPanelOpen = true
+                        },
                     ),
                     enabled = !controlsBusy,
                 )
@@ -921,16 +942,9 @@ private fun SessionSectionContent(
             SectionCard(title = stringResource(R.string.session_execution_title)) {
                 ActionRow(
                     listOf(
-                        stringResource(R.string.session_action_freeze) to onFreezeThreads,
-                        stringResource(R.string.session_action_thaw) to onThawThreads,
-                    ),
-                    enabled = !controlsBusy,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                ActionRow(
-                    listOf(
-                        stringResource(R.string.session_action_continue) to onContinueTarget,
-                        stringResource(R.string.session_action_single_step) to onSingleStep,
+                        stringResource(R.string.session_action_open_execution_controls) to {
+                            executionControlsPanelOpen = true
+                        },
                     ),
                     enabled = !controlsBusy,
                 )
@@ -959,18 +973,10 @@ private fun SessionSectionContent(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 ActionRow(
-                    listOf(
-                        stringResource(state.hwpointPreset.labelRes) to onCycleHwpointPreset,
-                        stringResource(R.string.hwpoint_action_use_pc) to onUseSelectedPcForHwpoint,
-                        stringResource(R.string.hwpoint_action_use_memory) to onUseMemoryFocusForHwpoint,
-                    ),
-                    enabled = !controlsBusy,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                ActionRow(
-                    listOf(
-                        stringResource(R.string.hwpoint_action_add) to onAddHwpoint,
-                        stringResource(R.string.hwpoint_action_remove_selected) to onRemoveSelectedHwpoint,
+                    actions = listOf(
+                        stringResource(R.string.hwpoint_action_open_controls) to {
+                            hwpointControlsPanelOpen = true
+                        },
                         stringResource(R.string.hwpoint_action_refresh) to onRefreshHwpoints,
                     ),
                     enabled = !controlsBusy,
@@ -984,20 +990,248 @@ private fun SessionSectionContent(
             }
         }
     }
+    if (sessionControlsPanelOpen) {
+        SessionControlsDialog(
+            controlsBusy = controlsBusy,
+            onDismiss = { sessionControlsPanelOpen = false },
+            onConnect = onConnect,
+            onOpenSession = onOpenSession,
+            onRefreshSession = onRefreshSession,
+            onRefreshStopState = onRefreshStopState,
+        )
+    }
+    if (executionControlsPanelOpen) {
+        ExecutionControlsDialog(
+            controlsBusy = controlsBusy,
+            onDismiss = { executionControlsPanelOpen = false },
+            onFreezeThreads = onFreezeThreads,
+            onThawThreads = onThawThreads,
+            onContinueTarget = onContinueTarget,
+            onSingleStep = onSingleStep,
+        )
+    }
+    if (hwpointControlsPanelOpen) {
+        HwpointControlsDialog(
+            state = state,
+            controlsBusy = controlsBusy,
+            onDismiss = { hwpointControlsPanelOpen = false },
+            onCycleHwpointPreset = onCycleHwpointPreset,
+            onUseSelectedPcForHwpoint = onUseSelectedPcForHwpoint,
+            onUseMemoryFocusForHwpoint = onUseMemoryFocusForHwpoint,
+            onAddHwpoint = onAddHwpoint,
+            onRemoveSelectedHwpoint = onRemoveSelectedHwpoint,
+            onRefreshHwpoints = onRefreshHwpoints,
+        )
+    }
+}
+
+@Composable
+private fun SessionControlsDialog(
+    controlsBusy: Boolean,
+    onDismiss: () -> Unit,
+    onConnect: () -> Unit,
+    onOpenSession: () -> Unit,
+    onRefreshSession: () -> Unit,
+    onRefreshStopState: () -> Unit,
+) {
+    ActionDialog(
+        title = stringResource(R.string.session_controls_panel_title),
+        subtitle = stringResource(R.string.session_controls_panel_subtitle),
+        onDismiss = onDismiss,
+    ) {
+        ActionRow(
+            actions = listOf(
+                stringResource(R.string.session_action_connect) to onConnect,
+                stringResource(R.string.session_action_open_session) to onOpenSession,
+            ),
+            enabled = !controlsBusy,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        ActionRow(
+            actions = listOf(
+                stringResource(R.string.session_action_refresh) to onRefreshSession,
+                stringResource(R.string.session_action_refresh_stop) to onRefreshStopState,
+            ),
+            enabled = !controlsBusy,
+        )
+    }
+}
+
+@Composable
+private fun ExecutionControlsDialog(
+    controlsBusy: Boolean,
+    onDismiss: () -> Unit,
+    onFreezeThreads: () -> Unit,
+    onThawThreads: () -> Unit,
+    onContinueTarget: () -> Unit,
+    onSingleStep: () -> Unit,
+) {
+    ActionDialog(
+        title = stringResource(R.string.session_execution_panel_title),
+        subtitle = stringResource(R.string.session_execution_panel_subtitle),
+        onDismiss = onDismiss,
+    ) {
+        ActionRow(
+            actions = listOf(
+                stringResource(R.string.session_action_freeze) to onFreezeThreads,
+                stringResource(R.string.session_action_thaw) to onThawThreads,
+            ),
+            enabled = !controlsBusy,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        ActionRow(
+            actions = listOf(
+                stringResource(R.string.session_action_continue) to onContinueTarget,
+                stringResource(R.string.session_action_single_step) to onSingleStep,
+            ),
+            enabled = !controlsBusy,
+        )
+    }
+}
+
+@Composable
+private fun HwpointControlsDialog(
+    state: SessionBridgeState,
+    controlsBusy: Boolean,
+    onDismiss: () -> Unit,
+    onCycleHwpointPreset: () -> Unit,
+    onUseSelectedPcForHwpoint: () -> Unit,
+    onUseMemoryFocusForHwpoint: () -> Unit,
+    onAddHwpoint: () -> Unit,
+    onRemoveSelectedHwpoint: () -> Unit,
+    onRefreshHwpoints: () -> Unit,
+) {
+    ActionDialog(
+        title = stringResource(R.string.hwpoint_controls_panel_title),
+        subtitle = stringResource(R.string.hwpoint_controls_panel_subtitle),
+        onDismiss = onDismiss,
+    ) {
+        ActionRow(
+            actions = listOf(
+                stringResource(state.hwpointPreset.labelRes) to onCycleHwpointPreset,
+            ),
+            enabled = !controlsBusy,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        ActionRow(
+            actions = listOf(
+                stringResource(R.string.hwpoint_action_use_pc) to onUseSelectedPcForHwpoint,
+                stringResource(R.string.hwpoint_action_use_memory) to onUseMemoryFocusForHwpoint,
+            ),
+            enabled = !controlsBusy,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        ActionRow(
+            actions = listOf(
+                stringResource(R.string.hwpoint_action_add) to onAddHwpoint,
+                stringResource(R.string.hwpoint_action_remove_selected) to onRemoveSelectedHwpoint,
+                stringResource(R.string.hwpoint_action_refresh) to onRefreshHwpoints,
+            ),
+            enabled = !controlsBusy,
+        )
+    }
 }
 
 @Composable
 private fun SessionStatusSummary(state: SessionBridgeState) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        SummaryLine(stringResource(R.string.session_flag_connected, state.snapshot.connected))
-        SummaryLine(stringResource(R.string.session_flag_open, state.snapshot.sessionOpen))
-        SummaryLine(stringResource(R.string.session_flag_hook_active, state.snapshot.hookActive))
-        SummaryLine(stringResource(R.string.session_flag_owner_pid, state.snapshot.ownerPid))
-        SummaryLine(stringResource(R.string.session_flag_event_queue, state.snapshot.eventQueueDepth.toString()))
-        SummaryLine(stringResource(R.string.session_summary_transport, state.snapshot.transport))
-        SummaryLine(stringResource(R.string.session_summary_session_id, hex64(state.snapshot.sessionId)))
-        SummaryLine(stringResource(R.string.session_summary_target, state.snapshot.targetPid, state.snapshot.targetTid))
-        SummaryLine(stringResource(R.string.session_last_message, state.lastMessage))
+    val scheme = MaterialTheme.colorScheme
+    val badges = buildList {
+        add(
+            StatusBadgeSpec(
+                label = stringResource(
+                    if (state.snapshot.connected) {
+                        R.string.session_badge_bridge_connected
+                    } else {
+                        R.string.session_badge_bridge_disconnected
+                    },
+                ),
+                containerColor = if (state.snapshot.connected) scheme.primaryContainer else scheme.surfaceVariant,
+                contentColor = if (state.snapshot.connected) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
+            ),
+        )
+        add(
+            StatusBadgeSpec(
+                label = stringResource(
+                    if (state.snapshot.sessionOpen) {
+                        R.string.session_badge_open
+                    } else {
+                        R.string.session_badge_closed
+                    },
+                ),
+                containerColor = if (state.snapshot.sessionOpen) scheme.secondaryContainer else scheme.surfaceVariant,
+                contentColor = if (state.snapshot.sessionOpen) scheme.onSecondaryContainer else scheme.onSurfaceVariant,
+            ),
+        )
+        add(
+            StatusBadgeSpec(
+                label = stringResource(
+                    if (state.snapshot.targetPid > 0) {
+                        R.string.session_badge_target_attached
+                    } else {
+                        R.string.session_badge_target_idle
+                    },
+                ),
+                containerColor = if (state.snapshot.targetPid > 0) scheme.tertiaryContainer else scheme.surfaceVariant,
+                contentColor = if (state.snapshot.targetPid > 0) scheme.onTertiaryContainer else scheme.onSurfaceVariant,
+            ),
+        )
+        add(
+            StatusBadgeSpec(
+                label = state.stopState?.let { stop ->
+                    stringResource(R.string.session_badge_stop_reason, stopReasonLabel(stop.reason))
+                } ?: stringResource(R.string.session_badge_running),
+                containerColor = if (state.stopState != null) scheme.errorContainer else scheme.surfaceVariant,
+                contentColor = if (state.stopState != null) scheme.onErrorContainer else scheme.onSurfaceVariant,
+            ),
+        )
+        add(
+            StatusBadgeSpec(
+                label = stringResource(R.string.session_badge_hwpoints, state.hwpoints.size),
+                containerColor = scheme.secondaryContainer,
+                contentColor = scheme.onSecondaryContainer,
+            ),
+        )
+        add(
+            StatusBadgeSpec(
+                label = stringResource(R.string.session_badge_queue, state.snapshot.eventQueueDepth.toString()),
+                containerColor = scheme.surfaceVariant,
+                contentColor = scheme.onSurfaceVariant,
+            ),
+        )
+    }
+    val metrics = listOf(
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_transport),
+            value = state.snapshot.transport,
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_session_id),
+            value = hex64(state.snapshot.sessionId),
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_target),
+            value = "${state.snapshot.targetPid}:${state.snapshot.targetTid}",
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_owner),
+            value = state.snapshot.ownerPid.toString(),
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_hook),
+            value = state.snapshot.hookActive.toString(),
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_hwpoints),
+            value = state.hwpoints.size.toString(),
+        ),
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        CompactBadgeRow(badges)
+        MetricTileGrid(metrics = metrics)
+        SectionMetricBanner(
+            label = stringResource(R.string.session_metric_last_message),
+            value = state.lastMessage,
+        )
     }
 }
 
@@ -1010,18 +1244,95 @@ private fun StopStateSummary(stop: BridgeStopState?) {
         )
         return
     }
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        SummaryLine(stringResource(R.string.session_stop_reason, stopReasonLabel(stop.reason)))
-        SummaryLine(stringResource(R.string.session_stop_cookie, hex64(stop.cookie)))
-        SummaryLine(stringResource(R.string.session_stop_tid, stop.tgid, stop.tid))
-        SummaryLine(stringResource(R.string.session_stop_flags, stopFlagsLabel(stop.flags)))
-        SummaryLine(stringResource(R.string.session_stop_event_flags, hex32(stop.eventFlags)))
-        SummaryLine(stringResource(R.string.session_stop_values, hex64(stop.value0), hex64(stop.value1)))
-        SummaryLine(stringResource(R.string.workspace_thread_register_summary, hex64(stop.x0), hex64(stop.x1), hex64(stop.pc)))
-        SummaryLine(stringResource(R.string.thread_reg_x29, hex64(stop.x29)))
-        SummaryLine(stringResource(R.string.thread_reg_x30, hex64(stop.x30)))
-        SummaryLine(stringResource(R.string.thread_sp_value, hex64(stop.sp)))
-        SummaryLine(stringResource(R.string.thread_pstate_value, hex64(stop.pstate)))
+    val scheme = MaterialTheme.colorScheme
+    val badges = buildList {
+        add(
+            StatusBadgeSpec(
+                label = stringResource(R.string.session_badge_stop_reason, stopReasonLabel(stop.reason)),
+                containerColor = scheme.errorContainer,
+                contentColor = scheme.onErrorContainer,
+            ),
+        )
+        if ((stop.flags and STOP_FLAG_FROZEN) != 0u) {
+            add(
+                StatusBadgeSpec(
+                    label = stringResource(R.string.session_badge_frozen),
+                    containerColor = scheme.tertiaryContainer,
+                    contentColor = scheme.onTertiaryContainer,
+                ),
+            )
+        }
+        if ((stop.flags and STOP_FLAG_REARM_REQUIRED) != 0u) {
+            add(
+                StatusBadgeSpec(
+                    label = stringResource(R.string.session_badge_rearm),
+                    containerColor = scheme.secondaryContainer,
+                    contentColor = scheme.onSecondaryContainer,
+                ),
+            )
+        }
+        if ((stop.flags and STOP_FLAG_SYSCALL_CONTROL) != 0u) {
+            add(
+                StatusBadgeSpec(
+                    label = stringResource(R.string.session_badge_syscall_control),
+                    containerColor = scheme.primaryContainer,
+                    contentColor = scheme.onPrimaryContainer,
+                ),
+            )
+        }
+        add(
+            StatusBadgeSpec(
+                label = stringResource(R.string.session_badge_stop_thread, stop.tid),
+                containerColor = scheme.surfaceVariant,
+                contentColor = scheme.onSurfaceVariant,
+            ),
+        )
+    }
+    val metrics = listOf(
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_stop_cookie),
+            value = hex64(stop.cookie),
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_stop_tid),
+            value = "${stop.tgid}:${stop.tid}",
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_stop_flags),
+            value = stopFlagsLabel(stop.flags),
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_stop_event_flags),
+            value = hex32(stop.eventFlags),
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_stop_pc),
+            value = hex64(stop.pc),
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_stop_sp),
+            value = hex64(stop.sp),
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_stop_args),
+            value = "${hex64(stop.x0)} / ${hex64(stop.x1)}",
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_stop_frame),
+            value = "${hex64(stop.x29)} / ${hex64(stop.x30)}",
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_stop_values),
+            value = "${hex64(stop.value0)} / ${hex64(stop.value1)}",
+        ),
+        MetricTileSpec(
+            label = stringResource(R.string.session_metric_stop_pstate),
+            value = hex64(stop.pstate),
+        ),
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        CompactBadgeRow(badges)
+        MetricTileGrid(metrics = metrics)
     }
 }
 
@@ -1034,33 +1345,29 @@ private fun ProcessesSectionContent(
     onAttachSelectedProcess: (Int) -> Unit,
 ) {
     val filtered = state.processes.filter { state.processFilter.matches(it) }
+    var processFiltersOpen by rememberSaveable { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxSize()) {
         SectionIntro(
             title = stringResource(R.string.process_panel_title),
             subtitle = stringResource(R.string.process_panel_subtitle),
         )
         Spacer(modifier = Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onRefreshProcesses) {
-                Text(stringResource(R.string.process_action_refresh))
-            }
-            Text(
-                text = stringResource(
-                    R.string.session_quick_attach_summary,
-                    state.processes.size,
-                    filtered.size,
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.align(Alignment.CenterVertically),
-            )
-        }
+        ActionRow(
+            actions = listOf(
+                stringResource(R.string.process_action_refresh) to onRefreshProcesses,
+                stringResource(R.string.process_action_open_filters) to { processFiltersOpen = true },
+            ),
+        )
         Spacer(modifier = Modifier.height(8.dp))
-        FilterRow(
-            filters = ProcessFilter.entries.toList(),
-            selectedFilter = state.processFilter,
-            labelFor = { processFilterLabel(it) },
-            onSelected = onProcessFilterSelected,
+        Text(
+            text = stringResource(
+                R.string.process_filter_current,
+                processFilterLabel(state.processFilter),
+                filtered.size,
+                state.processes.size,
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(8.dp))
         if (filtered.isEmpty()) {
@@ -1082,6 +1389,33 @@ private fun ProcessesSectionContent(
             }
         }
     }
+    if (processFiltersOpen) {
+        ProcessFiltersDialog(
+            selectedFilter = state.processFilter,
+            onProcessFilterSelected = onProcessFilterSelected,
+            onDismiss = { processFiltersOpen = false },
+        )
+    }
+}
+
+@Composable
+private fun ProcessFiltersDialog(
+    selectedFilter: ProcessFilter,
+    onProcessFilterSelected: (ProcessFilter) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ActionDialog(
+        title = stringResource(R.string.process_filters_panel_title),
+        subtitle = stringResource(R.string.process_filters_panel_subtitle),
+        onDismiss = onDismiss,
+    ) {
+        CompactFilterRow(
+            filters = ProcessFilter.entries.toList(),
+            selectedFilter = selectedFilter,
+            labelFor = { processFilterLabel(it) },
+            onSelected = onProcessFilterSelected,
+        )
+    }
 }
 
 @Composable
@@ -1097,6 +1431,7 @@ private fun ThreadsSectionContent(
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val selectedThread = state.threads.firstOrNull { it.tid == state.selectedThreadTid }
     val parkedCount = state.threads.count { (it.flags and THREAD_FLAG_FREEZE_PARKED) != 0u }
+    var threadActionsOpen by rememberSaveable { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxSize()) {
         SectionIntro(
             title = stringResource(R.string.thread_panel_title),
@@ -1106,14 +1441,7 @@ private fun ThreadsSectionContent(
         ActionRow(
             listOf(
                 stringResource(R.string.thread_action_refresh) to onRefreshThreads,
-                stringResource(R.string.thread_action_refresh_registers) to onRefreshSelectedThreadRegisters,
-            ),
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        ActionRow(
-            listOf(
-                stringResource(R.string.memory_action_preview_pc) to onPreviewSelectedPc,
-                stringResource(R.string.session_action_single_step) to onSingleStep,
+                stringResource(R.string.thread_action_open_controls) to { threadActionsOpen = true },
             ),
         )
         Spacer(modifier = Modifier.height(8.dp))
@@ -1155,6 +1483,26 @@ private fun ThreadsSectionContent(
             }
         }
     }
+    if (threadActionsOpen) {
+        ActionDialog(
+            title = stringResource(R.string.thread_controls_panel_title),
+            subtitle = stringResource(R.string.thread_controls_panel_subtitle),
+            onDismiss = { threadActionsOpen = false },
+        ) {
+            ActionRow(
+                actions = listOf(
+                    stringResource(R.string.thread_action_refresh_registers) to onRefreshSelectedThreadRegisters,
+                    stringResource(R.string.memory_action_preview_pc) to onPreviewSelectedPc,
+                ),
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            ActionRow(
+                actions = listOf(
+                    stringResource(R.string.session_action_single_step) to onSingleStep,
+                ),
+            )
+        }
+    }
 }
 
 @Composable
@@ -1164,9 +1512,12 @@ private fun EventsSectionContent(
     onToggleEventsAutoPoll: () -> Unit,
     onClearEvents: () -> Unit,
     onTogglePinnedEvent: (ULong) -> Unit,
+    onOpenEventThread: (Int) -> Unit,
+    onOpenEventValue: (ULong) -> Unit,
 ) {
     var filterText by rememberSaveable { mutableStateOf("") }
     var presetOrdinal by rememberSaveable { mutableStateOf(EventFilterPreset.All.ordinal) }
+    var eventControlsOpen by rememberSaveable { mutableStateOf(false) }
     val preset = EventFilterPreset.entries[presetOrdinal.coerceIn(0, EventFilterPreset.entries.lastIndex)]
     val presetLabels = mapOf(
         EventFilterPreset.All to stringResource(R.string.event_filter_all),
@@ -1191,14 +1542,7 @@ private fun EventsSectionContent(
         ActionRow(
             listOf(
                 stringResource(R.string.event_action_refresh) to onRefreshEvents,
-                stringResource(
-                    if (state.eventsAutoPollEnabled) {
-                        R.string.event_action_autopoll_stop
-                    } else {
-                        R.string.event_action_autopoll_start
-                    },
-                ) to onToggleEventsAutoPoll,
-                stringResource(R.string.event_action_clear) to onClearEvents,
+                stringResource(R.string.event_action_open_controls) to { eventControlsOpen = true },
             ),
         )
         Spacer(modifier = Modifier.height(8.dp))
@@ -1241,8 +1585,30 @@ private fun EventsSectionContent(
                     entry = event,
                     pinned = event.record.seq in state.pinnedEventSeqs,
                     onTogglePin = { onTogglePinnedEvent(event.record.seq) },
+                    onOpenThread = onOpenEventThread,
+                    onOpenValue = onOpenEventValue,
                 )
             }
+        }
+    }
+    if (eventControlsOpen) {
+        ActionDialog(
+            title = stringResource(R.string.event_controls_panel_title),
+            subtitle = stringResource(R.string.event_controls_panel_subtitle),
+            onDismiss = { eventControlsOpen = false },
+        ) {
+            ActionRow(
+                actions = listOf(
+                    stringResource(
+                        if (state.eventsAutoPollEnabled) {
+                            R.string.event_action_autopoll_stop
+                        } else {
+                            R.string.event_action_autopoll_start
+                        },
+                    ) to onToggleEventsAutoPoll,
+                    stringResource(R.string.event_action_clear) to onClearEvents,
+                ),
+            )
         }
     }
 }
@@ -1297,6 +1663,7 @@ private fun MemorySectionContent(
             hex64(it.focusAddress),
         )
     }
+    var searchPanelOpen by rememberSaveable { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -1313,6 +1680,8 @@ private fun MemorySectionContent(
                     append(refineModeLabel)
                     append(" · ")
                     append(regionPresetLabel)
+                    append(" · queue=")
+                    append(state.memorySearch.results.size)
                     append(" · vmas=")
                     append(state.vmas.size)
                     append(" · images=")
@@ -1322,6 +1691,21 @@ private fun MemorySectionContent(
                 },
                 modifier = Modifier.weight(1f),
             )
+            IconButton(
+                onClick = { searchPanelOpen = true },
+                modifier = Modifier
+                    .width(36.dp)
+                    .height(36.dp),
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_lkmdbg_search),
+                    contentDescription = stringResource(R.string.memory_action_open_search_panel),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(4.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
             if (viewMode == MEMORY_VIEW_MODE_RESULTS) {
                 OutlinedButton(onClick = onShowPage) {
                     Text(stringResource(R.string.memory_action_show_page))
@@ -1346,61 +1730,8 @@ private fun MemorySectionContent(
             )
             Spacer(modifier = Modifier.height(8.dp))
         }
-        OutlinedTextField(
-            value = state.memorySearch.query,
-            onValueChange = onSearchQueryChanged,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(stringResource(R.string.memory_search_query_label)) },
-            singleLine = true,
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(onClick = onCycleValueType, modifier = Modifier.weight(1f)) {
-                Text(valueTypeLabel)
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(onClick = onCycleRefineMode, modifier = Modifier.weight(1f)) {
-                Text(refineModeLabel)
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(onClick = onCycleRegionPreset, modifier = Modifier.weight(1f)) {
-                Text(regionPresetLabel)
-            }
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(modifier = Modifier.fillMaxWidth()) {
-            Button(onClick = onRunSearch, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.memory_action_search))
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(onClick = onRefineSearch, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.memory_action_refine))
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(onClick = onPreviewSelectedPc, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.memory_action_preview_pc))
-            }
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = state.memoryAddressInput,
-                onValueChange = onAddressInputChanged,
-                modifier = Modifier.weight(1f),
-                label = { Text(stringResource(R.string.memory_address_label)) },
-                singleLine = true,
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(onClick = onJumpAddress) {
-                Text(stringResource(R.string.memory_action_jump))
-            }
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        ActionRow(
-            listOf(
+        CompactActionRow(
+            actions = listOf(
                 stringResource(R.string.memory_action_refresh_ranges) to onRefreshVmas,
                 stringResource(R.string.memory_action_refresh_images) to onRefreshImages,
             ),
@@ -1495,6 +1826,119 @@ private fun MemorySectionContent(
                     page = state.memoryPage,
                     onSelectAddress = onSelectAddress,
                     showDisassembly = memoryToolsOpen,
+                )
+            }
+        }
+    }
+    if (searchPanelOpen) {
+        MemorySearchDialog(
+            state = state,
+            valueTypeLabel = valueTypeLabel,
+            refineModeLabel = refineModeLabel,
+            regionPresetLabel = regionPresetLabel,
+            onDismiss = { searchPanelOpen = false },
+            onSearchQueryChanged = onSearchQueryChanged,
+            onAddressInputChanged = onAddressInputChanged,
+            onCycleValueType = onCycleValueType,
+            onCycleRefineMode = onCycleRefineMode,
+            onCycleRegionPreset = onCycleRegionPreset,
+            onJumpAddress = onJumpAddress,
+            onRunSearch = onRunSearch,
+            onRefineSearch = onRefineSearch,
+            onPreviewSelectedPc = onPreviewSelectedPc,
+            onShowResults = onShowResults,
+            onShowPage = onShowPage,
+            viewMode = viewMode,
+        )
+    }
+}
+
+@Composable
+private fun MemorySearchDialog(
+    state: SessionBridgeState,
+    valueTypeLabel: String,
+    refineModeLabel: String,
+    regionPresetLabel: String,
+    onDismiss: () -> Unit,
+    onSearchQueryChanged: (String) -> Unit,
+    onAddressInputChanged: (String) -> Unit,
+    onCycleValueType: () -> Unit,
+    onCycleRefineMode: () -> Unit,
+    onCycleRegionPreset: () -> Unit,
+    onJumpAddress: () -> Unit,
+    onRunSearch: () -> Unit,
+    onRefineSearch: () -> Unit,
+    onPreviewSelectedPc: () -> Unit,
+    onShowResults: () -> Unit,
+    onShowPage: () -> Unit,
+    viewMode: Int,
+) {
+    ActionDialog(
+        title = stringResource(R.string.memory_search_panel_title),
+        subtitle = stringResource(R.string.memory_search_panel_subtitle),
+        onDismiss = onDismiss,
+    ) {
+        if (state.memorySearch.summary.isNotBlank()) {
+            Text(
+                text = state.memorySearch.summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+        OutlinedTextField(
+            value = state.memorySearch.query,
+            onValueChange = onSearchQueryChanged,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.memory_search_query_label)) },
+            singleLine = true,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        ActionRow(
+            actions = listOf(
+                valueTypeLabel to onCycleValueType,
+                refineModeLabel to onCycleRefineMode,
+                regionPresetLabel to onCycleRegionPreset,
+            ),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        ActionRow(
+            actions = listOf(
+                stringResource(R.string.memory_action_search) to onRunSearch,
+                stringResource(R.string.memory_action_refine) to onRefineSearch,
+                stringResource(R.string.memory_action_preview_pc) to onPreviewSelectedPc,
+            ),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = state.memoryAddressInput,
+                onValueChange = onAddressInputChanged,
+                modifier = Modifier.weight(1f),
+                label = { Text(stringResource(R.string.memory_address_label)) },
+                singleLine = true,
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            OutlinedButton(onClick = onJumpAddress) {
+                Text(stringResource(R.string.memory_action_jump))
+            }
+        }
+        if (state.memorySearch.results.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            if (viewMode == MEMORY_VIEW_MODE_RESULTS) {
+                ActionRow(
+                    actions = listOf(
+                        stringResource(R.string.memory_action_show_page) to onShowPage,
+                    ),
+                )
+            } else {
+                ActionRow(
+                    actions = listOf(
+                        stringResource(R.string.memory_action_show_results_count, state.memorySearch.results.size) to onShowResults,
+                    ),
                 )
             }
         }
@@ -1963,7 +2407,14 @@ private fun EventRow(
     entry: SessionEventEntry,
     pinned: Boolean,
     onTogglePin: () -> Unit,
+    onOpenThread: (Int) -> Unit,
+    onOpenValue: (ULong) -> Unit,
 ) {
+    val eventActionLabels = mapOf(
+        "thread" to stringResource(R.string.event_action_open_thread),
+        "value0" to stringResource(R.string.event_action_open_value0),
+        "value1" to stringResource(R.string.event_action_open_value1),
+    )
     val containerColor = when {
         pinned -> MaterialTheme.colorScheme.primaryContainer
         eventMatchesPreset(entry, EventFilterPreset.Stops, emptySet()) -> MaterialTheme.colorScheme.errorContainer
@@ -2036,6 +2487,21 @@ private fun EventRow(
                 style = MaterialTheme.typography.labelSmall,
                 color = onContainerColor,
             )
+            val eventActions = buildList<Pair<String, () -> Unit>> {
+                if (entry.record.tid > 0) {
+                    add(eventActionLabels.getValue("thread") to { onOpenThread(entry.record.tid) })
+                }
+                if (entry.record.value0 != 0uL) {
+                    add(eventActionLabels.getValue("value0") to { onOpenValue(entry.record.value0) })
+                }
+                if (entry.record.value1 != 0uL && entry.record.value1 != entry.record.value0) {
+                    add(eventActionLabels.getValue("value1") to { onOpenValue(entry.record.value1) })
+                }
+            }
+            if (eventActions.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                CompactActionRow(actions = eventActions)
+            }
         }
     }
 }
@@ -2142,6 +2608,157 @@ private fun <T> CompactFilterRow(
 }
 
 @Composable
+private fun CompactActionRow(
+    actions: List<Pair<String, () -> Unit>>,
+    enabled: Boolean = true,
+) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(actions) { (label, action) ->
+            OutlinedButton(onClick = action, enabled = enabled) {
+                Text(label)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActionDialog(
+    title: String,
+    subtitle: String,
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 4.dp,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SectionIntro(
+                        title = title,
+                        subtitle = subtitle,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedButton(onClick = onDismiss) {
+                        Text(stringResource(R.string.memory_ranges_close))
+                    }
+                }
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactBadgeRow(
+    badges: List<StatusBadgeSpec>,
+) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(badges) { badge ->
+            Surface(
+                color = badge.containerColor,
+                tonalElevation = 0.dp,
+            ) {
+                Text(
+                    text = badge.label,
+                    color = badge.contentColor,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MetricTileGrid(
+    metrics: List<MetricTileSpec>,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        metrics.chunked(2).forEach { rowMetrics ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                rowMetrics.forEach { metric ->
+                    MetricTile(
+                        metric = metric,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (rowMetrics.size == 1) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MetricTile(
+    metric: MetricTileSpec,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        tonalElevation = 0.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = metric.label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = metric.value,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SectionMetricBanner(
+    label: String,
+    value: String,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        tonalElevation = 0.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
 private fun SectionCard(
     title: String,
     content: @Composable ColumnScope.() -> Unit,
@@ -2223,12 +2840,13 @@ private fun threadFlagText(flags: UInt): String = listOfNotNull(
     stringResource(R.string.thread_flag_exiting).takeIf { (flags and THREAD_FLAG_EXITING) != 0u },
 ).joinToString(" · ")
 
+@Composable
 private fun processFilterLabel(filter: ProcessFilter): String = when (filter) {
-    ProcessFilter.All -> "All"
-    ProcessFilter.AndroidApps -> "Android"
-    ProcessFilter.CommandLine -> "CLI"
-    ProcessFilter.SystemApps -> "System"
-    ProcessFilter.UserApps -> "User"
+    ProcessFilter.All -> stringResource(R.string.process_filter_all)
+    ProcessFilter.AndroidApps -> stringResource(R.string.process_filter_android)
+    ProcessFilter.CommandLine -> stringResource(R.string.process_filter_cmdline)
+    ProcessFilter.SystemApps -> stringResource(R.string.process_filter_system)
+    ProcessFilter.UserApps -> stringResource(R.string.process_filter_user)
 }
 
 private fun rowContainsAddress(

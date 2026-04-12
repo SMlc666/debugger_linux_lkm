@@ -204,6 +204,21 @@ class LkmdbgOverlayService : LifecycleService() {
                             },
                             onClearEvents = repository::clearRecentEvents,
                             onTogglePinnedEvent = repository::togglePinnedEvent,
+                            onOpenEventThread = { tid ->
+                                lifecycleScope.launch {
+                                    repository.updateWorkspaceSection(WorkspaceSection.Threads)
+                                    handleSectionSelection(WorkspaceSection.Threads)
+                                    repository.selectThread(tid)
+                                }
+                            },
+                            onOpenEventValue = { value ->
+                                lifecycleScope.launch {
+                                    repository.updateWorkspaceSection(WorkspaceSection.Memory)
+                                    handleSectionSelection(WorkspaceSection.Memory)
+                                    repository.selectMemoryAddress(value)
+                                    updateMemoryViewMode(0)
+                                }
+                            },
                             onStepMemoryPage = { direction ->
                                 lifecycleScope.launch {
                                     repository.stepMemoryPage(direction)

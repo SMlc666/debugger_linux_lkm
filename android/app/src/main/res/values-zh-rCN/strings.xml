@@ -241,6 +241,7 @@
     <string name="process_panel_subtitle">由 root agent 枚举真实进程，并在本地完成 Android 分类、过滤和 APK 图标渲染。</string>
     <string name="process_action_attach">附加</string>
     <string name="process_action_refresh">刷新进程列表</string>
+    <string name="process_action_open_filters">筛选控制</string>
     <string name="process_filter_all">全部</string>
     <string name="process_filter_android">安卓应用</string>
     <string name="process_filter_cmdline">命令行</string>
@@ -254,6 +255,9 @@
     <string name="process_summary_user">用户 %1$d</string>
     <string name="process_empty">还没有进程列表。等待 root agent 就绪后刷新。</string>
     <string name="process_filter_empty">当前筛选条件下没有命中进程。</string>
+    <string name="process_filter_current">筛选=%1$s · 可见=%2$d · 总计=%3$d</string>
+    <string name="process_filters_panel_title">进程筛选</string>
+    <string name="process_filters_panel_subtitle">筛选按钮收敛在这里，主泳道保持简洁。</string>
     <string name="process_pid_uid">pid=%1$d  uid=%2$d</string>
     <string name="process_kind_label">类型：%1$s</string>
     <string name="process_kind_command_line">命令行</string>
@@ -270,4 +274,56 @@
     <string name="session_error_io">桥接 I/O 失败：%1$s</string>
     <string name="session_error_bridge">桥接拒绝请求：%1$s</string>
     <string name="session_error_unknown">未知错误</string>
+    <string name="memory_action_open_search_panel">搜索面板</string>
+    <string name="memory_search_panel_title">搜索与跳转</string>
+    <string name="memory_search_panel_subtitle">高密度搜索操作收敛在这里，主页面保持阅读优先。</string>
+    <string name="session_action_open_controls">会话控制</string>
+    <string name="session_action_open_execution_controls">执行控制</string>
+    <string name="session_controls_panel_title">会话控制</string>
+    <string name="session_controls_panel_subtitle">连接、开会话、刷新动作集中到这里。</string>
+    <string name="session_execution_panel_title">执行控制</string>
+    <string name="session_execution_panel_subtitle">冻结、解冻、继续、单步集中到这里。</string>
+    <string name="session_badge_bridge_connected">桥接已连接</string>
+    <string name="session_badge_bridge_disconnected">桥接未连接</string>
+    <string name="session_badge_open">会话已打开</string>
+    <string name="session_badge_closed">会话未打开</string>
+    <string name="session_badge_target_attached">目标已附加</string>
+    <string name="session_badge_target_idle">目标空闲</string>
+    <string name="session_badge_running">运行中</string>
+    <string name="session_badge_stop_reason">停止=%1$s</string>
+    <string name="session_badge_hwpoints">断点=%1$d</string>
+    <string name="session_badge_queue">队列=%1$s</string>
+    <string name="session_badge_frozen">已冻结</string>
+    <string name="session_badge_rearm">需要重置</string>
+    <string name="session_badge_syscall_control">系统调用控制</string>
+    <string name="session_badge_stop_thread">tid=%1$d</string>
+    <string name="session_metric_transport">传输</string>
+    <string name="session_metric_session_id">会话</string>
+    <string name="session_metric_target">目标</string>
+    <string name="session_metric_owner">所有者</string>
+    <string name="session_metric_hook">Hook</string>
+    <string name="session_metric_hwpoints">断点</string>
+    <string name="session_metric_last_message">最后消息</string>
+    <string name="session_metric_stop_cookie">Cookie</string>
+    <string name="session_metric_stop_tid">tgid/tid</string>
+    <string name="session_metric_stop_flags">标志</string>
+    <string name="session_metric_stop_event_flags">事件标志</string>
+    <string name="session_metric_stop_pc">PC</string>
+    <string name="session_metric_stop_sp">SP</string>
+    <string name="session_metric_stop_args">x0/x1</string>
+    <string name="session_metric_stop_frame">x29/x30</string>
+    <string name="session_metric_stop_values">value0/value1</string>
+    <string name="session_metric_stop_pstate">PSTATE</string>
+    <string name="thread_action_open_controls">线程控制</string>
+    <string name="thread_controls_panel_title">线程控制</string>
+    <string name="thread_controls_panel_subtitle">二级线程动作集中到这里，主列表更干净。</string>
+    <string name="event_action_open_controls">事件控制</string>
+    <string name="event_action_open_thread">打开线程</string>
+    <string name="event_action_open_value0">打开 value0</string>
+    <string name="event_action_open_value1">打开 value1</string>
+    <string name="event_controls_panel_title">事件控制</string>
+    <string name="event_controls_panel_subtitle">轮询和清理动作收敛到这里，事件流保持纯阅读。</string>
+    <string name="hwpoint_action_open_controls">断点控制</string>
+    <string name="hwpoint_controls_panel_title">断点控制</string>
+    <string name="hwpoint_controls_panel_subtitle">预设和变更动作收敛在这里，主卡片保持聚焦。</string>
 </resources>
