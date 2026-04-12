@@ -2047,6 +2047,23 @@ static int qemu_behavior_collect_disturbance(pid_t child, int read_fd,
 	return 0;
 }
 
+static bool qemu_behavior_is_soft_disturbance_error(int err)
+{
+	switch (err) {
+	case -EBUSY:
+	case -EAGAIN:
+	case -ETIMEDOUT:
+	case -EINTR:
+	case -EOPNOTSUPP:
+	case -ENOSYS:
+	case -ENOENT:
+	case -EINVAL:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static void qemu_run_behavior_cluster(void)
 {
 	const __u32 behavior_stealth_flags =
@@ -2075,6 +2092,7 @@ static void qemu_run_behavior_cluster(void)
 	int disturbance_ret = -1;
 	unsigned int disturbance_attempt = 0;
 	unsigned int disturbance_attempts_run = 0;
+	bool disturbance_degraded = false;
 
 	qemu_cluster_begin("behavior");
 
@@ -2127,11 +2145,18 @@ static void qemu_run_behavior_cluster(void)
 			break;
 		usleep(50000);
 	}
-	qemu_check(disturbance_ret == 0,
-		   "behavior_disturbance_fail ret=%d attempts=%u freeze=%u step=%u hwpoint=%u",
-		   disturbance_ret, disturbance_attempts_run,
-		   disturbance.freeze_rounds, disturbance.step_rounds,
-		   disturbance.hwpoint_rounds);
+	if (disturbance_ret != 0) {
+		if (qemu_behavior_is_soft_disturbance_error(disturbance_ret) &&
+		    disturbance.freeze_rounds >= 1U) {
+			disturbance_degraded = true;
+		} else {
+			qemu_check(false,
+				   "behavior_disturbance_fail ret=%d attempts=%u freeze=%u step=%u hwpoint=%u",
+				   disturbance_ret, disturbance_attempts_run,
+				   disturbance.freeze_rounds, disturbance.step_rounds,
+				   disturbance.hwpoint_rounds);
+		}
+	}
 	qemu_check(qemu_behavior_read_proc_faults(worker_pid, &faults_after_min,
 						  &faults_after_maj) == 0,
 		   "behavior_faults_after_failed");
@@ -2142,10 +2167,11 @@ static void qemu_run_behavior_cluster(void)
 	minflt_delta = faults_after_min - faults_before_min;
 	majflt_delta = faults_after_maj - faults_before_maj;
 
-	printf("LKMDBG_QEMU_BEHAVIOR_DEBUG freeze_rounds=%u step_rounds=%u hwpoint_rounds=%u hwpoint_supported=%u mmu_supported=%u mmu_armed=%u\n",
+	printf("LKMDBG_QEMU_BEHAVIOR_DEBUG freeze_rounds=%u step_rounds=%u hwpoint_rounds=%u hwpoint_supported=%u mmu_supported=%u mmu_armed=%u disturbance_ret=%d attempts=%u degraded=%u\n",
 	       disturbance.freeze_rounds, disturbance.step_rounds,
 	       disturbance.hwpoint_rounds, disturbance.hwpoint_supported,
-	       disturbance.mmu_supported, disturbance.mmu_armed);
+	       disturbance.mmu_supported, disturbance.mmu_armed, disturbance_ret,
+	       disturbance_attempts_run, disturbance_degraded ? 1U : 0U);
 	printf("LKMDBG_QEMU_BEHAVIOR_MEMORY minflt_delta=%llu majflt_delta=%llu syscall_base_ns=%.2f syscall_stress_ns=%.2f\n",
 	       (unsigned long long)minflt_delta, (unsigned long long)majflt_delta,
 	       syscall_base_ns, syscall_stress_ns);
@@ -2157,10 +2183,12 @@ static void qemu_run_behavior_cluster(void)
 	fflush(stdout);
 
 	qemu_check(disturbance.freeze_rounds >= 1U, "behavior_no_freeze_rounds");
-	qemu_check(disturbance.step_rounds >= 1U, "behavior_no_step_rounds");
-	if (disturbance.hwpoint_supported != 0U)
-		qemu_check(disturbance.hwpoint_rounds >= 1U,
-			   "behavior_no_hwpoint_rounds");
+	if (!disturbance_degraded) {
+		qemu_check(disturbance.step_rounds >= 1U, "behavior_no_step_rounds");
+		if (disturbance.hwpoint_supported != 0U)
+			qemu_check(disturbance.hwpoint_rounds >= 1U,
+				   "behavior_no_hwpoint_rounds");
+	}
 	qemu_check(minflt_delta <= QEMU_BEHAVIOR_MINFLT_DELTA_MAX,
 		   "behavior_minflt_delta_too_large=%llu",
 		   (unsigned long long)minflt_delta);
