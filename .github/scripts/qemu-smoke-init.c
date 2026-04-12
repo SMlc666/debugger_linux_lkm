@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/poll.h>
 #include <sys/prctl.h>
@@ -21,6 +22,7 @@
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "../../include/lkmdbg_ioctl.h"
@@ -66,10 +68,24 @@
 #define QEMU_SMOKE_CLUSTER_INPUT 0x00000008U
 #define QEMU_SMOKE_CLUSTER_PROC_EXPOSURE 0x00000010U
 #define QEMU_SMOKE_CLUSTER_SEQ_READ 0x00000020U
+#define QEMU_SMOKE_CLUSTER_BEHAVIOR 0x00000040U
 #define QEMU_SMOKE_CLUSTER_ALL                                             \
 	(QEMU_SMOKE_CLUSTER_WATCHPOINT | QEMU_SMOKE_CLUSTER_HOOK_SELFTEST | \
 	 QEMU_SMOKE_CLUSTER_TRANSPORT | QEMU_SMOKE_CLUSTER_INPUT |         \
 	 QEMU_SMOKE_CLUSTER_PROC_EXPOSURE | QEMU_SMOKE_CLUSTER_SEQ_READ)
+
+#define QEMU_BEHAVIOR_PERF_SAMPLES 3U
+#define QEMU_BEHAVIOR_HEARTBEAT_POLL_US 1000U
+#define QEMU_BEHAVIOR_HEARTBEAT_WINDOW_MS 1200U
+#define QEMU_BEHAVIOR_SYSCALL_SAMPLE_MS 300U
+#define QEMU_BEHAVIOR_ALLOC_P99_RATIO_LIMIT 3.5
+#define QEMU_BEHAVIOR_ALLOC_P99_MARGIN_US 200.0
+#define QEMU_BEHAVIOR_SYSCALL_RATIO_LIMIT 20.0
+#define QEMU_BEHAVIOR_SYSCALL_MARGIN_NS 200000.0
+#define QEMU_BEHAVIOR_HEARTBEAT_MAX_US 1800000ULL
+#define QEMU_BEHAVIOR_HEARTBEAT_OVER_100MS_MAX 12U
+#define QEMU_BEHAVIOR_MINFLT_DELTA_MAX 200000ULL
+#define QEMU_BEHAVIOR_MAJFLT_DELTA_MAX 256ULL
 
 struct qemu_hook_selftest_case {
 	const char *params;
@@ -101,6 +117,42 @@ static const struct qemu_smoke_cluster_spec qemu_smoke_cluster_specs[] = {
 	{ "input", QEMU_SMOKE_CLUSTER_INPUT },
 	{ "exposure", QEMU_SMOKE_CLUSTER_PROC_EXPOSURE },
 	{ "seqread", QEMU_SMOKE_CLUSTER_SEQ_READ },
+	{ "behavior", QEMU_SMOKE_CLUSTER_BEHAVIOR },
+};
+
+struct qemu_behavior_shared {
+	volatile __u64 heartbeat_seq;
+	volatile __u64 heartbeat_ns;
+	volatile __u64 syscall_total_ns;
+	volatile __u64 syscall_iters;
+	volatile __u64 hot_value;
+	volatile __u32 ready;
+	volatile __u32 stop;
+};
+
+struct qemu_behavior_heartbeat_stats {
+	__u64 sample_count;
+	__u64 p50_us;
+	__u64 p95_us;
+	__u64 p99_us;
+	__u64 max_us;
+	__u64 over_50ms;
+	__u64 over_100ms;
+};
+
+struct qemu_behavior_perf_stats {
+	double alloc_p50_us;
+	double alloc_p95_us;
+	double alloc_p99_us;
+};
+
+struct qemu_behavior_debug_result {
+	__s32 ret_code;
+	__u32 freeze_rounds;
+	__u32 step_rounds;
+	__u32 hwpoint_rounds;
+	__u32 mmu_supported;
+	__u32 mmu_armed;
 };
 
 static int qemu_open_session(void);
@@ -247,6 +299,74 @@ static bool qemu_try_read_file(const char *path, char *buf, size_t size)
 
 	buf[nr] = '\0';
 	return true;
+}
+
+static __u64 qemu_now_ns(void)
+{
+	struct timespec ts;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+		qemu_fail("clock_gettime errno=%d", errno);
+
+	return (__u64)ts.tv_sec * 1000000000ULL + (__u64)ts.tv_nsec;
+}
+
+static int qemu_u64_cmp(const void *a, const void *b)
+{
+	const __u64 va = *(const __u64 *)a;
+	const __u64 vb = *(const __u64 *)b;
+
+	if (va < vb)
+		return -1;
+	if (va > vb)
+		return 1;
+	return 0;
+}
+
+static int qemu_double_cmp(const void *a, const void *b)
+{
+	const double va = *(const double *)a;
+	const double vb = *(const double *)b;
+
+	if (va < vb)
+		return -1;
+	if (va > vb)
+		return 1;
+	return 0;
+}
+
+static __u64 qemu_percentile_u64(const __u64 *values, size_t count,
+				 unsigned int percentile)
+{
+	size_t index;
+
+	qemu_check(values != NULL && count > 0, "percentile_u64_empty");
+	if (percentile > 100U)
+		percentile = 100U;
+	if (count == 1)
+		return values[0];
+
+	index = ((count - 1U) * (size_t)percentile + 99U) / 100U;
+	if (index >= count)
+		index = count - 1U;
+	return values[index];
+}
+
+static double qemu_percentile_double(const double *values, size_t count,
+				     unsigned int percentile)
+{
+	size_t index;
+
+	qemu_check(values != NULL && count > 0, "percentile_double_empty");
+	if (percentile > 100U)
+		percentile = 100U;
+	if (count == 1)
+		return values[0];
+
+	index = ((count - 1U) * (size_t)percentile + 99U) / 100U;
+	if (index >= count)
+		index = count - 1U;
+	return values[index];
 }
 
 static void qemu_sample_proc_exposure(pid_t pid, const char *comm_needle,
@@ -1186,6 +1306,818 @@ static void qemu_run_transport_extended_tools(void)
 	qemu_cluster_ok("transport-extended-tools");
 }
 
+static double qemu_behavior_parse_metric_double(const char *buf, const char *key)
+{
+	const char *pos;
+	char *endp;
+	double value;
+
+	qemu_check(buf != NULL && key != NULL, "behavior_metric_input_invalid");
+	pos = strstr(buf, key);
+	qemu_check(pos != NULL, "behavior_metric_missing_%s", key);
+	pos += strlen(key);
+	errno = 0;
+	value = strtod(pos, &endp);
+	qemu_check(errno == 0 && endp != pos, "behavior_metric_parse_%s", key);
+	return value;
+}
+
+static void qemu_behavior_run_perf_samples(const char *phase,
+					   struct qemu_behavior_perf_stats *stats)
+{
+	char *const perf_argv[] = { EXAMPLE_PERF_BASELINE_TOOL, NULL };
+	double alloc_samples[QEMU_BEHAVIOR_PERF_SAMPLES];
+	unsigned int i;
+
+	qemu_check(stats != NULL, "behavior_perf_stats_null");
+	memset(stats, 0, sizeof(*stats));
+
+	for (i = 0; i < QEMU_BEHAVIOR_PERF_SAMPLES; i++) {
+		char report_buf[4096];
+
+		qemu_run_tool_capture(perf_argv, report_buf, sizeof(report_buf));
+		alloc_samples[i] =
+			qemu_behavior_parse_metric_double(report_buf, "alloc_us=");
+		printf("LKMDBG_QEMU_BEHAVIOR_PERF_SAMPLE phase=%s idx=%u alloc_us=%.2f\n",
+		       phase, i, alloc_samples[i]);
+		fflush(stdout);
+	}
+
+	qsort(alloc_samples, QEMU_BEHAVIOR_PERF_SAMPLES, sizeof(alloc_samples[0]),
+	      qemu_double_cmp);
+	stats->alloc_p50_us =
+		qemu_percentile_double(alloc_samples, QEMU_BEHAVIOR_PERF_SAMPLES, 50);
+	stats->alloc_p95_us =
+		qemu_percentile_double(alloc_samples, QEMU_BEHAVIOR_PERF_SAMPLES, 95);
+	stats->alloc_p99_us =
+		qemu_percentile_double(alloc_samples, QEMU_BEHAVIOR_PERF_SAMPLES, 99);
+}
+
+static void qemu_behavior_set_stealth_flags(__u32 desired_flags,
+					    __u32 *old_flags_out,
+					    __u32 *supported_flags_out)
+{
+	struct lkmdbg_stealth_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+	};
+	int session_fd;
+
+	session_fd = qemu_open_session();
+	if (ioctl(session_fd, LKMDBG_IOC_GET_STEALTH, &req) != 0) {
+		close(session_fd);
+		qemu_fail("behavior_get_stealth errno=%d", errno);
+	}
+	if (old_flags_out)
+		*old_flags_out = req.flags;
+	if (supported_flags_out)
+		*supported_flags_out = req.supported_flags;
+	qemu_check((desired_flags & ~req.supported_flags) == 0,
+		   "behavior_unsupported_stealth flags=0x%x supported=0x%x",
+		   desired_flags, req.supported_flags);
+
+	req.flags = desired_flags;
+	if (ioctl(session_fd, LKMDBG_IOC_SET_STEALTH, &req) != 0) {
+		close(session_fd);
+		qemu_fail("behavior_set_stealth errno=%d flags=0x%x", errno,
+			  desired_flags);
+	}
+	close(session_fd);
+}
+
+static double qemu_behavior_sample_syscall_avg_ns(
+	const volatile struct qemu_behavior_shared *shared, unsigned int duration_ms)
+{
+	__u64 total_before;
+	__u64 total_after;
+	__u64 iters_before;
+	__u64 iters_after;
+	__u64 delta_total;
+	__u64 delta_iters;
+
+	qemu_check(shared != NULL, "behavior_syscall_shared_null");
+	total_before = shared->syscall_total_ns;
+	iters_before = shared->syscall_iters;
+	usleep(duration_ms * 1000U);
+	total_after = shared->syscall_total_ns;
+	iters_after = shared->syscall_iters;
+	delta_total = total_after - total_before;
+	delta_iters = iters_after - iters_before;
+	if (delta_iters == 0)
+		return 0.0;
+	return (double)delta_total / (double)delta_iters;
+}
+
+static void qemu_behavior_measure_heartbeat(
+	const volatile struct qemu_behavior_shared *shared, unsigned int window_ms,
+	struct qemu_behavior_heartbeat_stats *stats)
+{
+	const size_t max_samples = 4096;
+	__u64 *samples;
+	__u64 last_ns;
+	__u64 deadline_ns;
+	__u64 now_ns;
+	__u64 last_seq;
+	size_t count = 0;
+
+	qemu_check(shared != NULL && stats != NULL, "behavior_heartbeat_input_null");
+	memset(stats, 0, sizeof(*stats));
+	samples = calloc(max_samples, sizeof(*samples));
+	qemu_check(samples != NULL, "behavior_heartbeat_alloc_fail");
+
+	now_ns = qemu_now_ns();
+	last_ns = now_ns;
+	deadline_ns = now_ns + (__u64)window_ms * 1000000ULL;
+	last_seq = shared->heartbeat_seq;
+
+	while ((now_ns = qemu_now_ns()) < deadline_ns) {
+		__u64 current_seq = shared->heartbeat_seq;
+
+		if (current_seq != last_seq) {
+			__u64 gap_us = (now_ns - last_ns) / 1000ULL;
+
+			if (count < max_samples)
+				samples[count++] = gap_us;
+			if (gap_us > stats->max_us)
+				stats->max_us = gap_us;
+			if (gap_us > 50000ULL)
+				stats->over_50ms++;
+			if (gap_us > 100000ULL)
+				stats->over_100ms++;
+			last_seq = current_seq;
+			last_ns = now_ns;
+		}
+
+		usleep(QEMU_BEHAVIOR_HEARTBEAT_POLL_US);
+	}
+
+	{
+		__u64 tail_gap_us = (deadline_ns - last_ns) / 1000ULL;
+
+		if (count < max_samples)
+			samples[count++] = tail_gap_us;
+		if (tail_gap_us > stats->max_us)
+			stats->max_us = tail_gap_us;
+		if (tail_gap_us > 50000ULL)
+			stats->over_50ms++;
+		if (tail_gap_us > 100000ULL)
+			stats->over_100ms++;
+	}
+
+	qemu_check(count > 0, "behavior_heartbeat_no_samples");
+	qsort(samples, count, sizeof(samples[0]), qemu_u64_cmp);
+	stats->sample_count = count;
+	stats->p50_us = qemu_percentile_u64(samples, count, 50);
+	stats->p95_us = qemu_percentile_u64(samples, count, 95);
+	stats->p99_us = qemu_percentile_u64(samples, count, 99);
+	free(samples);
+}
+
+static void qemu_behavior_spawn_worker(struct qemu_behavior_shared **shared_out,
+				       pid_t *pid_out)
+{
+	struct qemu_behavior_shared *shared;
+	pid_t child;
+	unsigned int spin;
+
+	qemu_check(shared_out != NULL && pid_out != NULL,
+		   "behavior_worker_out_null");
+	*shared_out = NULL;
+	*pid_out = -1;
+
+	shared = mmap(NULL, sizeof(*shared), PROT_READ | PROT_WRITE,
+		      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	qemu_check(shared != MAP_FAILED, "behavior_worker_mmap errno=%d", errno);
+	memset(shared, 0, sizeof(*shared));
+
+	child = fork();
+	qemu_check(child >= 0, "behavior_worker_fork errno=%d", errno);
+	if (child == 0) {
+		__u64 total_ns = 0;
+		__u64 iters = 0;
+
+		prctl(PR_SET_NAME, "lkmdbg-behavior", 0, 0, 0);
+		shared->ready = 1;
+		while (!shared->stop) {
+			__u64 t0 = qemu_now_ns();
+			__u64 t1;
+
+			(void)syscall(SYS_getpid);
+			t1 = qemu_now_ns();
+			total_ns += t1 - t0;
+			iters++;
+			shared->hot_value++;
+			shared->heartbeat_seq++;
+			shared->heartbeat_ns = t1;
+			if ((iters & 0xffU) == 0) {
+				shared->syscall_total_ns = total_ns;
+				shared->syscall_iters = iters;
+			}
+			usleep(1000);
+		}
+		shared->syscall_total_ns = total_ns;
+		shared->syscall_iters = iters;
+		_exit(0);
+	}
+
+	for (spin = 0; spin < 1000U; spin++) {
+		if (shared->ready)
+			break;
+		usleep(1000);
+	}
+	qemu_check(shared->ready != 0, "behavior_worker_ready_timeout");
+
+	*shared_out = shared;
+	*pid_out = child;
+}
+
+static void qemu_behavior_stop_worker(struct qemu_behavior_shared *shared,
+				      pid_t pid)
+{
+	int status;
+
+	if (!shared)
+		return;
+	if (pid > 0) {
+		shared->stop = 1;
+		if (waitpid(pid, &status, 0) < 0)
+			qemu_fail("behavior_worker_waitpid errno=%d", errno);
+		qemu_check(WIFEXITED(status),
+			   "behavior_worker_signal_status=%d", status);
+	}
+	munmap(shared, sizeof(*shared));
+}
+
+static int qemu_behavior_read_proc_faults(pid_t pid, __u64 *minflt_out,
+					  __u64 *majflt_out)
+{
+	char path[64];
+	char buf[1024];
+	char *rparen;
+	char *cursor;
+	char *saveptr = NULL;
+	char *token;
+	unsigned int field = 3U;
+	__u64 minflt = 0;
+	__u64 majflt = 0;
+
+	snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+	if (!qemu_try_read_file(path, buf, sizeof(buf)))
+		return -1;
+
+	rparen = strrchr(buf, ')');
+	if (!rparen || rparen[1] != ' ')
+		return -1;
+	cursor = rparen + 2;
+
+	token = strtok_r(cursor, " ", &saveptr);
+	if (!token)
+		return -1;
+
+	while ((token = strtok_r(NULL, " ", &saveptr)) != NULL) {
+		char *endp;
+		unsigned long long value;
+
+		field++;
+		if (field != 10U && field != 12U)
+			continue;
+		errno = 0;
+		value = strtoull(token, &endp, 10);
+		if (errno != 0 || endp == token)
+			return -1;
+		if (field == 10U)
+			minflt = value;
+		else
+			majflt = value;
+		if (field >= 12U)
+			break;
+	}
+
+	if (field < 12U)
+		return -1;
+	*minflt_out = minflt;
+	*majflt_out = majflt;
+	return 0;
+}
+
+static int qemu_behavior_set_target(int session_fd, pid_t target_pid)
+{
+	struct lkmdbg_target_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.tgid = target_pid,
+		.tid = 0,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_SET_TARGET, &req) != 0)
+		return -errno;
+	return 0;
+}
+
+static int qemu_behavior_query_step_tid(int session_fd, pid_t target_pid,
+					pid_t *tid_out)
+{
+	struct lkmdbg_thread_entry entries[32];
+	struct lkmdbg_thread_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = sizeof(entries) / sizeof(entries[0]),
+	};
+	pid_t fallback_tid = target_pid;
+
+	for (;;) {
+		__u32 i;
+
+		memset(entries, 0, sizeof(entries));
+		if (ioctl(session_fd, LKMDBG_IOC_QUERY_THREADS, &req) != 0)
+			return -errno;
+		for (i = 0; i < req.entries_filled; i++) {
+			if (entries[i].tgid != target_pid || entries[i].tid <= 0)
+				continue;
+			if (entries[i].flags & LKMDBG_THREAD_FLAG_EXITING)
+				continue;
+			if (entries[i].tid != target_pid) {
+				*tid_out = entries[i].tid;
+				return 0;
+			}
+			fallback_tid = entries[i].tid;
+		}
+		if (req.done)
+			break;
+		req.start_tid = req.next_tid;
+	}
+
+	*tid_out = fallback_tid;
+	return 0;
+}
+
+static int qemu_behavior_freeze(int session_fd, __u32 timeout_ms,
+				struct lkmdbg_freeze_request *reply_out)
+{
+	struct lkmdbg_freeze_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.timeout_ms = timeout_ms,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_FREEZE_THREADS, &req) != 0)
+		return -errno;
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int qemu_behavior_thaw(int session_fd, __u32 timeout_ms)
+{
+	struct lkmdbg_freeze_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.timeout_ms = timeout_ms,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_THAW_THREADS, &req) != 0)
+		return -errno;
+	return 0;
+}
+
+static int qemu_behavior_get_stop_state(int session_fd,
+					struct lkmdbg_stop_query_request *reply_out)
+{
+	struct lkmdbg_stop_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_GET_STOP_STATE, &req) != 0)
+		return -errno;
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+static int qemu_behavior_continue(int session_fd, __u64 stop_cookie,
+				  __u32 timeout_ms)
+{
+	struct lkmdbg_continue_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.timeout_ms = timeout_ms,
+		.stop_cookie = stop_cookie,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_CONTINUE_TARGET, &req) != 0)
+		return -errno;
+	return 0;
+}
+
+static int qemu_behavior_single_step(int session_fd, pid_t tid)
+{
+	struct lkmdbg_single_step_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.tid = tid,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_SINGLE_STEP, &req) != 0)
+		return -errno;
+	return 0;
+}
+
+static int qemu_behavior_wait_stop_reason(int session_fd, __u32 reason,
+					  __u32 timeout_ms)
+{
+	struct pollfd pfd = {
+		.fd = session_fd,
+		.events = POLLIN,
+	};
+	__u64 deadline_ns = qemu_now_ns() + (__u64)timeout_ms * 1000000ULL;
+
+	for (;;) {
+		int slice_ms = 100;
+		int poll_ret;
+		struct lkmdbg_event_record event;
+		ssize_t nr;
+
+		if (qemu_now_ns() >= deadline_ns)
+			return -ETIMEDOUT;
+		poll_ret = poll(&pfd, 1, slice_ms);
+		if (poll_ret < 0)
+			return -errno;
+		if (poll_ret == 0)
+			continue;
+		if (!(pfd.revents & POLLIN))
+			continue;
+		nr = read(session_fd, &event, sizeof(event));
+		if (nr < 0)
+			return -errno;
+		if ((size_t)nr != sizeof(event))
+			return -EIO;
+		if (event.type != LKMDBG_EVENT_TARGET_STOP)
+			continue;
+		if (event.code == reason)
+			return 0;
+	}
+}
+
+static int qemu_behavior_read_mem_u64(int session_fd, __u64 remote_addr,
+				      __u64 *value_out)
+{
+	struct lkmdbg_mem_op op = {
+		.remote_addr = remote_addr,
+		.local_addr = (uintptr_t)value_out,
+		.length = sizeof(*value_out),
+	};
+	struct lkmdbg_mem_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.ops_addr = (uintptr_t)&op,
+		.op_count = 1U,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_READ_MEM, &req) != 0)
+		return -errno;
+	if (req.ops_done != 1U || req.bytes_done != sizeof(*value_out) ||
+	    op.bytes_done != sizeof(*value_out))
+		return -EIO;
+	return 0;
+}
+
+static int qemu_behavior_write_mem_u64(int session_fd, __u64 remote_addr,
+				       __u64 value)
+{
+	struct lkmdbg_mem_op op = {
+		.remote_addr = remote_addr,
+		.local_addr = (uintptr_t)&value,
+		.length = sizeof(value),
+	};
+	struct lkmdbg_mem_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.ops_addr = (uintptr_t)&op,
+		.op_count = 1U,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_WRITE_MEM, &req) != 0)
+		return -errno;
+	if (req.ops_done != 1U || req.bytes_done != sizeof(value) ||
+	    op.bytes_done != sizeof(value))
+		return -EIO;
+	return 0;
+}
+
+static int qemu_behavior_add_hwpoint(int session_fd, pid_t tid, __u64 addr,
+				     __u32 type, __u32 flags, __u64 *id_out)
+{
+	struct lkmdbg_hwpoint_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.addr = addr,
+		.tid = tid,
+		.type = type,
+		.len = 8U,
+		.flags = flags,
+		.trigger_hit_count = 1U,
+		.action_flags = LKMDBG_HWPOINT_ACTION_AUTO_CONTINUE,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_ADD_HWPOINT, &req) != 0)
+		return -errno;
+	if (id_out)
+		*id_out = req.id;
+	return 0;
+}
+
+static int qemu_behavior_remove_hwpoint(int session_fd, __u64 id)
+{
+	struct lkmdbg_hwpoint_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.id = id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_HWPOINT, &req) != 0)
+		return -errno;
+	return 0;
+}
+
+static int qemu_behavior_run_debug_ops(pid_t target_pid, __u64 hot_addr,
+				       struct qemu_behavior_debug_result *result)
+{
+	int session_fd = -1;
+	pid_t step_tid = target_pid;
+	unsigned int iter;
+
+	memset(result, 0, sizeof(*result));
+	result->ret_code = -1;
+
+	session_fd = qemu_open_session();
+	if (qemu_behavior_set_target(session_fd, target_pid) != 0)
+		goto out;
+	if (qemu_behavior_query_step_tid(session_fd, target_pid, &step_tid) != 0)
+		goto out;
+
+	for (iter = 0; iter < 3U; iter++) {
+		struct lkmdbg_stop_query_request stop = { 0 };
+		__u64 hwpoint_id = 0;
+		__u64 value = 0;
+		int ret;
+		unsigned int mem_iter;
+
+		ret = qemu_behavior_freeze(session_fd, 2000U, NULL);
+		if (ret != 0)
+			goto out;
+		result->freeze_rounds++;
+
+		ret = qemu_behavior_get_stop_state(session_fd, &stop);
+		if (ret != 0)
+			goto out;
+		if (!(stop.stop.flags & LKMDBG_STOP_FLAG_ACTIVE) ||
+		    stop.stop.reason != LKMDBG_STOP_REASON_FREEZE)
+			goto out;
+
+		ret = qemu_behavior_single_step(session_fd, step_tid);
+		if (ret != 0)
+			goto out;
+		ret = qemu_behavior_continue(session_fd, stop.stop.cookie, 2000U);
+		if (ret != 0)
+			goto out;
+		ret = qemu_behavior_wait_stop_reason(session_fd,
+						     LKMDBG_STOP_REASON_SINGLE_STEP,
+						     2000U);
+		if (ret != 0)
+			goto out;
+
+		ret = qemu_behavior_get_stop_state(session_fd, &stop);
+		if (ret != 0)
+			goto out;
+		if (stop.stop.flags & LKMDBG_STOP_FLAG_ACTIVE) {
+			ret = qemu_behavior_continue(session_fd, stop.stop.cookie, 2000U);
+			if (ret != 0)
+				goto out;
+		}
+		result->step_rounds++;
+		(void)qemu_behavior_thaw(session_fd, 1000U);
+
+		ret = qemu_behavior_add_hwpoint(session_fd, step_tid, hot_addr,
+						LKMDBG_HWPOINT_TYPE_WRITE, 0,
+						&hwpoint_id);
+		if (ret != 0)
+			goto out;
+		result->hwpoint_rounds++;
+		usleep(40000);
+		ret = qemu_behavior_remove_hwpoint(session_fd, hwpoint_id);
+		if (ret != 0)
+			goto out;
+
+		for (mem_iter = 0; mem_iter < 64U; mem_iter++) {
+			ret = qemu_behavior_read_mem_u64(session_fd, hot_addr, &value);
+			if (ret != 0)
+				goto out;
+			value++;
+			ret = qemu_behavior_write_mem_u64(session_fd, hot_addr, value);
+			if (ret != 0)
+				goto out;
+		}
+	}
+
+	{
+		__u64 mmu_hwpoint_id = 0;
+		int ret;
+
+		ret = qemu_behavior_add_hwpoint(session_fd, step_tid, hot_addr,
+						LKMDBG_HWPOINT_TYPE_WRITE,
+						LKMDBG_HWPOINT_FLAG_MMU,
+						&mmu_hwpoint_id);
+		if (ret == 0) {
+			result->mmu_supported = 1U;
+			result->mmu_armed = 1U;
+			usleep(50000);
+			(void)qemu_behavior_remove_hwpoint(session_fd, mmu_hwpoint_id);
+		} else if (ret == -EOPNOTSUPP || ret == -EINVAL || ret == -ENOSYS ||
+			   ret == -ENOENT) {
+			result->mmu_supported = 0U;
+		} else {
+			goto out;
+		}
+	}
+
+	result->ret_code = 0;
+out:
+	if (session_fd >= 0)
+		close(session_fd);
+	return result->ret_code;
+}
+
+static pid_t qemu_behavior_spawn_disturbance(pid_t target_pid, __u64 hot_addr,
+					     int *read_fd_out)
+{
+	int pipefd[2];
+	pid_t child;
+
+	qemu_check(read_fd_out != NULL, "behavior_disturbance_fd_null");
+	if (pipe(pipefd) != 0)
+		qemu_fail("behavior_disturbance_pipe errno=%d", errno);
+
+	child = fork();
+	qemu_check(child >= 0, "behavior_disturbance_fork errno=%d", errno);
+	if (child == 0) {
+		struct qemu_behavior_debug_result result;
+		ssize_t nwritten;
+
+		close(pipefd[0]);
+		(void)qemu_behavior_run_debug_ops(target_pid, hot_addr, &result);
+		nwritten = write(pipefd[1], &result, sizeof(result));
+		close(pipefd[1]);
+		if (nwritten != (ssize_t)sizeof(result))
+			_exit(2);
+		_exit(result.ret_code == 0 ? 0 : 1);
+	}
+
+	close(pipefd[1]);
+	*read_fd_out = pipefd[0];
+	return child;
+}
+
+static void qemu_behavior_collect_disturbance(pid_t child, int read_fd,
+					      struct qemu_behavior_debug_result *out)
+{
+	struct qemu_behavior_debug_result result = { 0 };
+	int status;
+	ssize_t nr;
+
+	qemu_check(waitpid(child, &status, 0) >= 0,
+		   "behavior_disturbance_waitpid errno=%d", errno);
+	nr = read(read_fd, &result, sizeof(result));
+	close(read_fd);
+	qemu_check(nr == (ssize_t)sizeof(result),
+		   "behavior_disturbance_read_short=%zd", nr);
+	qemu_check(WIFEXITED(status), "behavior_disturbance_signal=%d", status);
+	qemu_check(WEXITSTATUS(status) == 0 && result.ret_code == 0,
+		   "behavior_disturbance_fail status=%d ret=%d",
+		   WEXITSTATUS(status), result.ret_code);
+	*out = result;
+}
+
+static void qemu_run_behavior_cluster(void)
+{
+	const __u32 behavior_stealth_flags =
+		LKMDBG_STEALTH_FLAG_MODULE_LIST_HIDDEN |
+		LKMDBG_STEALTH_FLAG_SYSFS_MODULE_HIDDEN;
+	struct qemu_behavior_perf_stats perf_base;
+	struct qemu_behavior_perf_stats perf_stealth;
+	struct qemu_behavior_shared *shared = NULL;
+	struct qemu_behavior_heartbeat_stats hb_base;
+	struct qemu_behavior_heartbeat_stats hb_stress;
+	struct qemu_behavior_debug_result disturbance;
+	pid_t worker_pid = -1;
+	pid_t disturbance_pid;
+	int disturbance_fd = -1;
+	__u64 faults_before_min = 0;
+	__u64 faults_before_maj = 0;
+	__u64 faults_after_min = 0;
+	__u64 faults_after_maj = 0;
+	__u64 minflt_delta;
+	__u64 majflt_delta;
+	__u32 old_stealth_flags = 0;
+	__u32 supported_stealth_flags = 0;
+	double syscall_base_ns;
+	double syscall_stress_ns;
+	double alloc_p99_limit;
+
+	qemu_cluster_begin("behavior");
+
+	qemu_behavior_set_stealth_flags(0, NULL, NULL);
+	qemu_behavior_run_perf_samples("baseline", &perf_base);
+
+	qemu_behavior_set_stealth_flags(behavior_stealth_flags, &old_stealth_flags,
+					&supported_stealth_flags);
+	qemu_check((supported_stealth_flags & behavior_stealth_flags) ==
+			   behavior_stealth_flags,
+		   "behavior_stealth_not_supported supported=0x%x required=0x%x",
+		   supported_stealth_flags, behavior_stealth_flags);
+	qemu_behavior_run_perf_samples("stealth", &perf_stealth);
+	qemu_behavior_set_stealth_flags(old_stealth_flags, NULL, NULL);
+
+	alloc_p99_limit = perf_base.alloc_p99_us * QEMU_BEHAVIOR_ALLOC_P99_RATIO_LIMIT +
+			  QEMU_BEHAVIOR_ALLOC_P99_MARGIN_US;
+	printf("LKMDBG_QEMU_BEHAVIOR_PERF baseline_p50_us=%.2f baseline_p95_us=%.2f baseline_p99_us=%.2f stealth_p50_us=%.2f stealth_p95_us=%.2f stealth_p99_us=%.2f limit_p99_us=%.2f\n",
+	       perf_base.alloc_p50_us, perf_base.alloc_p95_us, perf_base.alloc_p99_us,
+	       perf_stealth.alloc_p50_us, perf_stealth.alloc_p95_us,
+	       perf_stealth.alloc_p99_us, alloc_p99_limit);
+	fflush(stdout);
+	qemu_check(perf_stealth.alloc_p99_us <= alloc_p99_limit,
+		   "behavior_perf_alloc_p99_regression stealth=%.2f limit=%.2f",
+		   perf_stealth.alloc_p99_us, alloc_p99_limit);
+
+	qemu_behavior_spawn_worker(&shared, &worker_pid);
+	qemu_behavior_measure_heartbeat(shared, QEMU_BEHAVIOR_HEARTBEAT_WINDOW_MS,
+					&hb_base);
+	syscall_base_ns = qemu_behavior_sample_syscall_avg_ns(
+		shared, QEMU_BEHAVIOR_SYSCALL_SAMPLE_MS);
+	qemu_check(qemu_behavior_read_proc_faults(worker_pid, &faults_before_min,
+						  &faults_before_maj) == 0,
+		   "behavior_faults_before_failed");
+
+	disturbance_pid = qemu_behavior_spawn_disturbance(
+		worker_pid, (uintptr_t)&shared->hot_value, &disturbance_fd);
+	syscall_stress_ns = qemu_behavior_sample_syscall_avg_ns(
+		shared, QEMU_BEHAVIOR_SYSCALL_SAMPLE_MS);
+	qemu_behavior_measure_heartbeat(shared, QEMU_BEHAVIOR_HEARTBEAT_WINDOW_MS,
+					&hb_stress);
+	qemu_behavior_collect_disturbance(disturbance_pid, disturbance_fd,
+					  &disturbance);
+	qemu_check(qemu_behavior_read_proc_faults(worker_pid, &faults_after_min,
+						  &faults_after_maj) == 0,
+		   "behavior_faults_after_failed");
+	qemu_behavior_stop_worker(shared, worker_pid);
+	shared = NULL;
+	worker_pid = -1;
+
+	minflt_delta = faults_after_min - faults_before_min;
+	majflt_delta = faults_after_maj - faults_before_maj;
+
+	printf("LKMDBG_QEMU_BEHAVIOR_DEBUG freeze_rounds=%u step_rounds=%u hwpoint_rounds=%u mmu_supported=%u mmu_armed=%u\n",
+	       disturbance.freeze_rounds, disturbance.step_rounds,
+	       disturbance.hwpoint_rounds, disturbance.mmu_supported,
+	       disturbance.mmu_armed);
+	printf("LKMDBG_QEMU_BEHAVIOR_MEMORY minflt_delta=%llu majflt_delta=%llu syscall_base_ns=%.2f syscall_stress_ns=%.2f\n",
+	       (unsigned long long)minflt_delta, (unsigned long long)majflt_delta,
+	       syscall_base_ns, syscall_stress_ns);
+	printf("LKMDBG_QEMU_BEHAVIOR_APP base_p99_us=%llu base_max_us=%llu stress_p99_us=%llu stress_max_us=%llu stress_over_100ms=%llu\n",
+	       (unsigned long long)hb_base.p99_us, (unsigned long long)hb_base.max_us,
+	       (unsigned long long)hb_stress.p99_us,
+	       (unsigned long long)hb_stress.max_us,
+	       (unsigned long long)hb_stress.over_100ms);
+	fflush(stdout);
+
+	qemu_check(disturbance.freeze_rounds >= 1U, "behavior_no_freeze_rounds");
+	qemu_check(disturbance.step_rounds >= 1U, "behavior_no_step_rounds");
+	qemu_check(disturbance.hwpoint_rounds >= 1U, "behavior_no_hwpoint_rounds");
+	qemu_check(minflt_delta <= QEMU_BEHAVIOR_MINFLT_DELTA_MAX,
+		   "behavior_minflt_delta_too_large=%llu",
+		   (unsigned long long)minflt_delta);
+	qemu_check(majflt_delta <= QEMU_BEHAVIOR_MAJFLT_DELTA_MAX,
+		   "behavior_majflt_delta_too_large=%llu",
+		   (unsigned long long)majflt_delta);
+	if (syscall_base_ns > 0.0 && syscall_stress_ns > 0.0) {
+		qemu_check(
+			syscall_stress_ns <=
+				syscall_base_ns * QEMU_BEHAVIOR_SYSCALL_RATIO_LIMIT +
+					QEMU_BEHAVIOR_SYSCALL_MARGIN_NS,
+			"behavior_syscall_latency_regression base=%.2f stress=%.2f",
+			syscall_base_ns, syscall_stress_ns);
+	}
+	qemu_check(hb_stress.max_us <= QEMU_BEHAVIOR_HEARTBEAT_MAX_US,
+		   "behavior_heartbeat_max_too_large=%llu",
+		   (unsigned long long)hb_stress.max_us);
+	qemu_check(hb_stress.over_100ms <= QEMU_BEHAVIOR_HEARTBEAT_OVER_100MS_MAX,
+		   "behavior_heartbeat_over_100ms=%llu",
+		   (unsigned long long)hb_stress.over_100ms);
+
+	qemu_cluster_ok("behavior");
+}
+
 static bool qemu_bitmap64_test(const __u64 *words, size_t word_count,
 			       unsigned int bit)
 {
@@ -1807,31 +2739,38 @@ int main(void)
 				session_transport_available =
 					qemu_probe_session_transport_available();
 			}
-			if (session_transport_available) {
-				if (smoke_clusters & QEMU_SMOKE_CLUSTER_TRANSPORT)
-					qemu_run_transport_tool_smoke();
-				else
-					qemu_cluster_skip("transport", "not-selected");
-				if (smoke_clusters & QEMU_SMOKE_CLUSTER_INPUT)
-					qemu_run_input_cluster();
-				else
-					qemu_cluster_skip("input", "not-selected");
-				if (smoke_clusters & QEMU_SMOKE_CLUSTER_PROC_EXPOSURE)
-					qemu_run_proc_exposure_cluster();
-				else
-					qemu_cluster_skip("exposure", "not-selected");
-			} else {
-				if (smoke_clusters & QEMU_SMOKE_CLUSTER_TRANSPORT)
-					qemu_cluster_skip("transport",
-							  "session-unavailable");
-				if (smoke_clusters & QEMU_SMOKE_CLUSTER_INPUT)
-					qemu_cluster_skip("input",
-							  "session-unavailable");
-				if (smoke_clusters & QEMU_SMOKE_CLUSTER_PROC_EXPOSURE)
-					qemu_cluster_skip("exposure",
-							  "session-unavailable");
+				if (session_transport_available) {
+					if (smoke_clusters & QEMU_SMOKE_CLUSTER_TRANSPORT)
+						qemu_run_transport_tool_smoke();
+					else
+						qemu_cluster_skip("transport", "not-selected");
+					if (smoke_clusters & QEMU_SMOKE_CLUSTER_INPUT)
+						qemu_run_input_cluster();
+					else
+						qemu_cluster_skip("input", "not-selected");
+					if (smoke_clusters & QEMU_SMOKE_CLUSTER_PROC_EXPOSURE)
+						qemu_run_proc_exposure_cluster();
+					else
+						qemu_cluster_skip("exposure", "not-selected");
+					if (smoke_clusters & QEMU_SMOKE_CLUSTER_BEHAVIOR)
+						qemu_run_behavior_cluster();
+					else
+						qemu_cluster_skip("behavior", "not-selected");
+				} else {
+					if (smoke_clusters & QEMU_SMOKE_CLUSTER_TRANSPORT)
+						qemu_cluster_skip("transport",
+								  "session-unavailable");
+					if (smoke_clusters & QEMU_SMOKE_CLUSTER_INPUT)
+						qemu_cluster_skip("input",
+								  "session-unavailable");
+					if (smoke_clusters & QEMU_SMOKE_CLUSTER_PROC_EXPOSURE)
+						qemu_cluster_skip("exposure",
+								  "session-unavailable");
+					if (smoke_clusters & QEMU_SMOKE_CLUSTER_BEHAVIOR)
+						qemu_cluster_skip("behavior",
+								  "session-unavailable");
+				}
 			}
-		}
 		qemu_rmmod();
 	}
 
