@@ -1346,6 +1346,13 @@ private fun ProcessesSectionContent(
 ) {
     val filtered = state.processes.filter { state.processFilter.matches(it) }
     var processFiltersOpen by rememberSaveable { mutableStateOf(false) }
+    val processFilterLabels = mapOf(
+        ProcessFilter.All to stringResource(R.string.process_filter_all),
+        ProcessFilter.AndroidApps to stringResource(R.string.process_filter_android),
+        ProcessFilter.CommandLine to stringResource(R.string.process_filter_cmdline),
+        ProcessFilter.SystemApps to stringResource(R.string.process_filter_system),
+        ProcessFilter.UserApps to stringResource(R.string.process_filter_user),
+    )
     Column(modifier = Modifier.fillMaxSize()) {
         SectionIntro(
             title = stringResource(R.string.process_panel_title),
@@ -1362,7 +1369,7 @@ private fun ProcessesSectionContent(
         Text(
             text = stringResource(
                 R.string.process_filter_current,
-                processFilterLabel(state.processFilter),
+                processFilterLabels.getValue(state.processFilter),
                 filtered.size,
                 state.processes.size,
             ),
@@ -1392,6 +1399,7 @@ private fun ProcessesSectionContent(
     if (processFiltersOpen) {
         ProcessFiltersDialog(
             selectedFilter = state.processFilter,
+            processFilterLabels = processFilterLabels,
             onProcessFilterSelected = onProcessFilterSelected,
             onDismiss = { processFiltersOpen = false },
         )
@@ -1401,6 +1409,7 @@ private fun ProcessesSectionContent(
 @Composable
 private fun ProcessFiltersDialog(
     selectedFilter: ProcessFilter,
+    processFilterLabels: Map<ProcessFilter, String>,
     onProcessFilterSelected: (ProcessFilter) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1412,7 +1421,7 @@ private fun ProcessFiltersDialog(
         CompactFilterRow(
             filters = ProcessFilter.entries.toList(),
             selectedFilter = selectedFilter,
-            labelFor = { processFilterLabel(it) },
+            labelFor = { processFilterLabels.getValue(it) },
             onSelected = onProcessFilterSelected,
         )
     }
@@ -2839,15 +2848,6 @@ private fun threadFlagText(flags: UInt): String = listOfNotNull(
     stringResource(R.string.thread_flag_freeze_parked).takeIf { (flags and THREAD_FLAG_FREEZE_PARKED) != 0u },
     stringResource(R.string.thread_flag_exiting).takeIf { (flags and THREAD_FLAG_EXITING) != 0u },
 ).joinToString(" · ")
-
-@Composable
-private fun processFilterLabel(filter: ProcessFilter): String = when (filter) {
-    ProcessFilter.All -> stringResource(R.string.process_filter_all)
-    ProcessFilter.AndroidApps -> stringResource(R.string.process_filter_android)
-    ProcessFilter.CommandLine -> stringResource(R.string.process_filter_cmdline)
-    ProcessFilter.SystemApps -> stringResource(R.string.process_filter_system)
-    ProcessFilter.UserApps -> stringResource(R.string.process_filter_user)
-}
 
 private fun rowContainsAddress(
     row: MemoryPreviewRow,
