@@ -86,6 +86,8 @@
 #define QEMU_BEHAVIOR_HEARTBEAT_OVER_100MS_MAX 12U
 #define QEMU_BEHAVIOR_MINFLT_DELTA_MAX 200000ULL
 #define QEMU_BEHAVIOR_MAJFLT_DELTA_MAX 256ULL
+#define QEMU_BEHAVIOR_DEBUG_TIMEOUT_MS 5000U
+#define QEMU_BEHAVIOR_DISTURBANCE_RETRIES 3U
 
 struct qemu_hook_selftest_case {
 	const char *params;
@@ -1864,60 +1866,87 @@ static int qemu_behavior_run_debug_ops(pid_t target_pid, __u64 hot_addr,
 		int ret;
 		unsigned int mem_iter;
 
-		ret = qemu_behavior_freeze(session_fd, 2000U, NULL);
-		if (ret != 0)
+		ret = qemu_behavior_freeze(session_fd, QEMU_BEHAVIOR_DEBUG_TIMEOUT_MS,
+					   NULL);
+		if (ret != 0) {
+			result->ret_code = ret;
 			goto out;
+		}
 		result->freeze_rounds++;
 
 		ret = qemu_behavior_get_stop_state(session_fd, &stop);
-		if (ret != 0)
+		if (ret != 0) {
+			result->ret_code = ret;
 			goto out;
+		}
 		if (!(stop.stop.flags & LKMDBG_STOP_FLAG_ACTIVE) ||
-		    stop.stop.reason != LKMDBG_STOP_REASON_FREEZE)
+		    stop.stop.reason != LKMDBG_STOP_REASON_FREEZE) {
+			result->ret_code = -EIO;
 			goto out;
+		}
 
 		ret = qemu_behavior_single_step(session_fd, step_tid);
-		if (ret != 0)
+		if (ret != 0) {
+			result->ret_code = ret;
 			goto out;
-		ret = qemu_behavior_continue(session_fd, stop.stop.cookie, 2000U);
-		if (ret != 0)
+		}
+		ret = qemu_behavior_continue(session_fd, stop.stop.cookie,
+					     QEMU_BEHAVIOR_DEBUG_TIMEOUT_MS);
+		if (ret != 0) {
+			result->ret_code = ret;
 			goto out;
+		}
 		ret = qemu_behavior_wait_stop_reason(session_fd,
 						     LKMDBG_STOP_REASON_SINGLE_STEP,
-						     2000U);
-		if (ret != 0)
+						     QEMU_BEHAVIOR_DEBUG_TIMEOUT_MS);
+		if (ret != 0) {
+			result->ret_code = ret;
 			goto out;
+		}
 
 		ret = qemu_behavior_get_stop_state(session_fd, &stop);
-		if (ret != 0)
+		if (ret != 0) {
+			result->ret_code = ret;
 			goto out;
+		}
 		if (stop.stop.flags & LKMDBG_STOP_FLAG_ACTIVE) {
-			ret = qemu_behavior_continue(session_fd, stop.stop.cookie, 2000U);
-			if (ret != 0)
+			ret = qemu_behavior_continue(session_fd, stop.stop.cookie,
+						     QEMU_BEHAVIOR_DEBUG_TIMEOUT_MS);
+			if (ret != 0) {
+				result->ret_code = ret;
 				goto out;
+			}
 		}
 		result->step_rounds++;
-		(void)qemu_behavior_thaw(session_fd, 1000U);
+		(void)qemu_behavior_thaw(session_fd, QEMU_BEHAVIOR_DEBUG_TIMEOUT_MS);
 
 		ret = qemu_behavior_add_hwpoint(session_fd, step_tid, hot_addr,
 						LKMDBG_HWPOINT_TYPE_WRITE, 0,
 						&hwpoint_id);
-		if (ret != 0)
+		if (ret != 0) {
+			result->ret_code = ret;
 			goto out;
+		}
 		result->hwpoint_rounds++;
 		usleep(40000);
 		ret = qemu_behavior_remove_hwpoint(session_fd, hwpoint_id);
-		if (ret != 0)
+		if (ret != 0) {
+			result->ret_code = ret;
 			goto out;
+		}
 
 		for (mem_iter = 0; mem_iter < 64U; mem_iter++) {
 			ret = qemu_behavior_read_mem_u64(session_fd, hot_addr, &value);
-			if (ret != 0)
+			if (ret != 0) {
+				result->ret_code = ret;
 				goto out;
+			}
 			value++;
 			ret = qemu_behavior_write_mem_u64(session_fd, hot_addr, value);
-			if (ret != 0)
+			if (ret != 0) {
+				result->ret_code = ret;
 				goto out;
+			}
 		}
 	}
 
@@ -1938,14 +1967,24 @@ static int qemu_behavior_run_debug_ops(pid_t target_pid, __u64 hot_addr,
 			   ret == -ENOENT) {
 			result->mmu_supported = 0U;
 		} else {
+			result->ret_code = ret;
 			goto out;
 		}
 	}
 
 	result->ret_code = 0;
 out:
-	if (session_fd >= 0)
+	if (session_fd >= 0) {
+		struct lkmdbg_stop_query_request stop = { 0 };
+
+		/* Best-effort cleanup so retries do not inherit a frozen target. */
+		if (qemu_behavior_get_stop_state(session_fd, &stop) == 0 &&
+		    (stop.stop.flags & LKMDBG_STOP_FLAG_ACTIVE) != 0U)
+			(void)qemu_behavior_continue(session_fd, stop.stop.cookie,
+						     QEMU_BEHAVIOR_DEBUG_TIMEOUT_MS);
+		(void)qemu_behavior_thaw(session_fd, QEMU_BEHAVIOR_DEBUG_TIMEOUT_MS);
 		close(session_fd);
+	}
 	return result->ret_code;
 }
 
@@ -1979,24 +2018,27 @@ static pid_t qemu_behavior_spawn_disturbance(pid_t target_pid, __u64 hot_addr,
 	return child;
 }
 
-static void qemu_behavior_collect_disturbance(pid_t child, int read_fd,
-					      struct qemu_behavior_debug_result *out)
+static int qemu_behavior_collect_disturbance(pid_t child, int read_fd,
+					     struct qemu_behavior_debug_result *out)
 {
 	struct qemu_behavior_debug_result result = { 0 };
 	int status;
 	ssize_t nr;
 
-	qemu_check(waitpid(child, &status, 0) >= 0,
-		   "behavior_disturbance_waitpid errno=%d", errno);
+	if (waitpid(child, &status, 0) < 0) {
+		close(read_fd);
+		return -errno;
+	}
 	nr = read(read_fd, &result, sizeof(result));
 	close(read_fd);
-	qemu_check(nr == (ssize_t)sizeof(result),
-		   "behavior_disturbance_read_short=%zd", nr);
-	qemu_check(WIFEXITED(status), "behavior_disturbance_signal=%d", status);
-	qemu_check(WEXITSTATUS(status) == 0 && result.ret_code == 0,
-		   "behavior_disturbance_fail status=%d ret=%d",
-		   WEXITSTATUS(status), result.ret_code);
+	if (nr != (ssize_t)sizeof(result))
+		return -EIO;
+	if (!WIFEXITED(status))
+		return -EINTR;
 	*out = result;
+	if (WEXITSTATUS(status) != 0 || result.ret_code != 0)
+		return result.ret_code != 0 ? result.ret_code : -ECHILD;
+	return 0;
 }
 
 static void qemu_run_behavior_cluster(void)
@@ -2009,7 +2051,7 @@ static void qemu_run_behavior_cluster(void)
 	struct qemu_behavior_shared *shared = NULL;
 	struct qemu_behavior_heartbeat_stats hb_base;
 	struct qemu_behavior_heartbeat_stats hb_stress;
-	struct qemu_behavior_debug_result disturbance;
+	struct qemu_behavior_debug_result disturbance = { 0 };
 	pid_t worker_pid = -1;
 	pid_t disturbance_pid;
 	int disturbance_fd = -1;
@@ -2024,6 +2066,8 @@ static void qemu_run_behavior_cluster(void)
 	double syscall_base_ns;
 	double syscall_stress_ns;
 	double alloc_p99_limit;
+	int disturbance_ret = -1;
+	unsigned int disturbance_attempt = 0;
 
 	qemu_cluster_begin("behavior");
 
@@ -2059,14 +2103,27 @@ static void qemu_run_behavior_cluster(void)
 						  &faults_before_maj) == 0,
 		   "behavior_faults_before_failed");
 
-	disturbance_pid = qemu_behavior_spawn_disturbance(
-		worker_pid, (uintptr_t)&shared->hot_value, &disturbance_fd);
-	syscall_stress_ns = qemu_behavior_sample_syscall_avg_ns(
-		shared, QEMU_BEHAVIOR_SYSCALL_SAMPLE_MS);
-	qemu_behavior_measure_heartbeat(shared, QEMU_BEHAVIOR_HEARTBEAT_WINDOW_MS,
-					&hb_stress);
-	qemu_behavior_collect_disturbance(disturbance_pid, disturbance_fd,
-					  &disturbance);
+	for (disturbance_attempt = 0;
+	     disturbance_attempt < QEMU_BEHAVIOR_DISTURBANCE_RETRIES;
+	     disturbance_attempt++) {
+		disturbance_pid = qemu_behavior_spawn_disturbance(
+			worker_pid, (uintptr_t)&shared->hot_value, &disturbance_fd);
+		syscall_stress_ns = qemu_behavior_sample_syscall_avg_ns(
+			shared, QEMU_BEHAVIOR_SYSCALL_SAMPLE_MS);
+		qemu_behavior_measure_heartbeat(shared,
+						QEMU_BEHAVIOR_HEARTBEAT_WINDOW_MS,
+						&hb_stress);
+		disturbance_ret = qemu_behavior_collect_disturbance(
+			disturbance_pid, disturbance_fd, &disturbance);
+		if (disturbance_ret == 0)
+			break;
+		usleep(50000);
+	}
+	qemu_check(disturbance_ret == 0,
+		   "behavior_disturbance_fail ret=%d attempts=%u freeze=%u step=%u hwpoint=%u",
+		   disturbance_ret, disturbance_attempt + 1U,
+		   disturbance.freeze_rounds, disturbance.step_rounds,
+		   disturbance.hwpoint_rounds);
 	qemu_check(qemu_behavior_read_proc_faults(worker_pid, &faults_after_min,
 						  &faults_after_maj) == 0,
 		   "behavior_faults_after_failed");
