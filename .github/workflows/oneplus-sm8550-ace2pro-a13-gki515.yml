@@ -165,23 +165,47 @@ jobs:
         id: resolve-official-out
         run: |
           official_out_dir=""
-          while IFS= read -r symvers; do
-            candidate_dir="$(dirname "$symvers")"
-            if [ -f "$candidate_dir/.config" ] && \
-               [ -f "$candidate_dir/include/generated/autoconf.h" ] && \
-               [ -f "$candidate_dir/include/config/auto.conf" ] && \
-               [ -x "$candidate_dir/scripts/mod/modpost" ]; then
-              official_out_dir="$candidate_dir"
-              break
-            fi
-          done < <(find "$OFFICIAL_OUT_ROOT" -type f -name Module.symvers 2>/dev/null | sort)
+          preferred_gki_out="$KERNEL_WORKSPACE/kernel_platform/out/msm-kernel-${ONEPLUS_CPUD}-${ONEPLUS_BUILD_METHOD}/gki_kernel/common"
+          if [ -f "$preferred_gki_out/Module.symvers" ] && \
+             [ -f "$preferred_gki_out/.config" ] && \
+             [ -x "$preferred_gki_out/scripts/mod/modpost" ]; then
+            official_out_dir="$preferred_gki_out"
+          else
+            while IFS= read -r symvers; do
+              candidate_dir="$(dirname "$symvers")"
+              if [ -f "$candidate_dir/.config" ] && \
+                 [ -f "$candidate_dir/include/generated/autoconf.h" ] && \
+                 [ -f "$candidate_dir/include/config/auto.conf" ] && \
+                 [ -x "$candidate_dir/scripts/mod/modpost" ]; then
+                official_out_dir="$candidate_dir"
+                break
+              fi
+            done < <(find "$OFFICIAL_OUT_ROOT" -type f -name Module.symvers 2>/dev/null | sort)
+          fi
           if [ -z "$official_out_dir" ]; then
             echo "Unable to locate official kernel out directory under $OFFICIAL_OUT_ROOT"
             find "$OFFICIAL_OUT_ROOT" -maxdepth 5 -type f -name Module.symvers -print || true
             exit 1
           fi
+          kernel_src_dir="$KERNEL_WORKSPACE/kernel_platform/common"
+          if [[ "$official_out_dir" == *"/msm-kernel" ]]; then
+            kernel_src_dir="$KERNEL_WORKSPACE/kernel_platform/msm-kernel"
+          fi
+          mixed_tree_dir=""
+          if [[ "$official_out_dir" == *"/msm-kernel" ]]; then
+            base_out="$(dirname "$official_out_dir")"
+            if [ -d "$base_out/gki_kernel/dist" ]; then
+              mixed_tree_dir="$base_out/gki_kernel/dist"
+            elif [ -d "$base_out/dist" ]; then
+              mixed_tree_dir="$base_out/dist"
+            fi
+          fi
           echo "official_out_dir=$official_out_dir" >>"$GITHUB_OUTPUT"
+          echo "kernel_src_dir=$kernel_src_dir" >>"$GITHUB_OUTPUT"
+          echo "mixed_tree_dir=$mixed_tree_dir" >>"$GITHUB_OUTPUT"
           echo "official-out-dir=$official_out_dir"
+          echo "kernel-src-dir=$kernel_src_dir"
+          echo "mixed-tree-dir=$mixed_tree_dir"
 
           echo "kernelrelease-common:"
           make -s -C "$KERNEL_WORKSPACE/kernel_platform/common" O="$official_out_dir" ARCH=arm64 kernelrelease || true
@@ -191,28 +215,50 @@ jobs:
       - name: Build external module against OnePlus android13-5.15 official output
         run: |
           OUT_DIR="${{ steps.resolve-official-out.outputs.official_out_dir }}"
-          MODULE_SRC_DIRS=(
-            "$KERNEL_WORKSPACE/kernel_platform/common"
-            "$KERNEL_WORKSPACE/kernel_platform/msm-kernel"
-          )
-          build_ok=false
-          for KERNEL_DIR in "${MODULE_SRC_DIRS[@]}"; do
-            if [ ! -d "$KERNEL_DIR" ]; then
-              continue
-            fi
-            echo "Trying external module build with KERNEL_DIR=$KERNEL_DIR O=$OUT_DIR"
-            if make -C "$KERNEL_DIR" O="$OUT_DIR" M="$GITHUB_WORKSPACE" \
-                ARCH=arm64 LLVM=1 CLANG_TRIPLE=aarch64-linux-gnu- \
-                CC="ccache clang" CROSS_COMPILE=aarch64-linux-gnu- HOSTCC="ccache clang" \
-                -j"$(nproc)" modules; then
-              build_ok=true
+          KERNEL_DIR="${{ steps.resolve-official-out.outputs.kernel_src_dir }}"
+          MIXED_TREE_DIR="${{ steps.resolve-official-out.outputs.mixed_tree_dir }}"
+          DTC_BIN="$KERNEL_WORKSPACE/kernel_platform/build/kernel/build-tools/path/linux-x86/dtc"
+
+          clang_root="$KERNEL_WORKSPACE/kernel_platform/prebuilts/clang/host/linux-x86"
+          official_clang=""
+          while IFS= read -r c; do
+            if "$c" --version 2>/dev/null | grep -q 'clang version 14.0.7'; then
+              official_clang="$c"
               break
             fi
-          done
-          if [ "$build_ok" != "true" ]; then
-            echo "External module build failed against both common and msm-kernel with official output"
+          done < <(find "$clang_root" -type f -path '*/bin/clang' | sort)
+          if [ -z "$official_clang" ]; then
+            official_clang="$(find "$clang_root" -type f -path '*/bin/clang' | sort | head -n1)"
+          fi
+          if [ -z "$official_clang" ]; then
+            echo "Unable to locate official clang under $clang_root"
             exit 1
           fi
+          export PATH="$(dirname "$official_clang"):$PATH"
+          echo "Using official clang: $official_clang"
+          clang --version
+          echo "Using kernel src: $KERNEL_DIR"
+          echo "Using kernel out: $OUT_DIR"
+          echo "Using mixed tree: $MIXED_TREE_DIR"
+
+          MAKE_ARGS=(
+            -C "$KERNEL_DIR"
+            O="$OUT_DIR"
+            M="$GITHUB_WORKSPACE"
+            ARCH=arm64
+            LLVM=1
+            DEPMOD=depmod
+            -j"$(nproc)"
+            modules
+          )
+          if [ -x "$DTC_BIN" ]; then
+            MAKE_ARGS=(DTC="$DTC_BIN" "${MAKE_ARGS[@]}")
+          fi
+          if [ -n "$MIXED_TREE_DIR" ]; then
+            MAKE_ARGS=(KBUILD_MIXED_TREE="$MIXED_TREE_DIR" "${MAKE_ARGS[@]}")
+          fi
+
+          make "${MAKE_ARGS[@]}"
 
       - name: Verify rebuilt OnePlus kernel cache
         id: oneplus-kernel-cache-verify
