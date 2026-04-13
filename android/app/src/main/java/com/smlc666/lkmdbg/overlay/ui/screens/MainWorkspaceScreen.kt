@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,7 +44,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.data.MemoryPage
 import com.smlc666.lkmdbg.data.MemoryPreviewRow
@@ -2637,8 +2637,29 @@ private fun ActionDialog(
     onDismiss: () -> Unit,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Dialog(onDismissRequest = onDismiss) {
+    val dismissInteractionSource = remember { MutableInteractionSource() }
+    val contentInteractionSource = remember { MutableInteractionSource() }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.65f))
+            .clickable(
+                interactionSource = dismissInteractionSource,
+                indication = null,
+            ) {
+                onDismiss()
+            },
+        contentAlignment = Alignment.Center,
+    ) {
         Surface(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth()
+                .clickable(
+                    interactionSource = contentInteractionSource,
+                    indication = null,
+                ) {
+                },
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 4.dp,
         ) {
