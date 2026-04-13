@@ -31,6 +31,39 @@ class ProcessUseCasesTest {
         assertEquals("refreshed", next.processes.message)
     }
 
+    @Test
+    fun refreshProcesses_error_updatesMessageWithoutTouchingItems() = runBlocking {
+        val useCases = ProcessUseCases(
+            object : ProcessGateway {
+                override fun currentState(): ProcessGatewayState = ProcessGatewayState(
+                    processes = emptyList(),
+                    message = "error",
+                )
+
+                override suspend fun refreshProcesses(): ProcessGatewayResult =
+                    ProcessGatewayResult.Error("error")
+            },
+        )
+
+        val seeded = WorkspaceUiState.initial().copy(
+            processes = WorkspaceUiState.initial().processes.copy(
+                items = listOf(
+                    ProcessRecord(
+                        pid = 7,
+                        displayName = "seed",
+                    ),
+                ),
+                message = "stale",
+            ),
+        )
+
+        val next = useCases.refreshProcesses(seeded)
+
+        assertEquals(1, next.processes.items.size)
+        assertEquals(7, next.processes.items.single().pid)
+        assertEquals("error", next.processes.message)
+    }
+
     private class FakeProcessGateway(
         private val processes: List<ProcessRecord>,
         private val message: String,

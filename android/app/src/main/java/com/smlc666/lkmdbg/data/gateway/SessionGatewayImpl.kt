@@ -11,7 +11,7 @@ class SessionGatewayImpl(
     override fun currentState(): SessionGatewayState {
         val state = repository.state.value
         return SessionGatewayState(
-            isConnected = state.hello != null,
+            isConnected = state.snapshot.connected,
             isSessionOpen = state.snapshot.sessionOpen,
             message = state.lastMessage,
         )
@@ -19,6 +19,7 @@ class SessionGatewayImpl(
 
     override suspend fun connect(): SessionGatewayResult {
         repository.connect()
+        repository.refreshStatus()
         val snapshot = currentState()
         return if (snapshot.isConnected) {
             SessionGatewayResult.Ok(snapshot)

@@ -23,7 +23,17 @@ class ProcessGatewayImpl(
     }
 
     override suspend fun refreshProcesses(): ProcessGatewayResult {
+        val before = repository.state.value
         repository.refreshProcesses()
-        return ProcessGatewayResult.Ok(currentState())
+        val after = repository.state.value
+        val snapshot = currentState()
+
+        // SessionBridgeRepository swallows transport errors. Refresh succeeds iff the
+        // underlying process list slice was updated.
+        return if (after.processes !== before.processes) {
+            ProcessGatewayResult.Ok(snapshot)
+        } else {
+            ProcessGatewayResult.Error(snapshot.message)
+        }
     }
 }

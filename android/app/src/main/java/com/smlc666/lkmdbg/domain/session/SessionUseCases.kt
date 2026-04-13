@@ -32,6 +32,8 @@ class SessionUseCases(
             is SessionGatewayResult.Error -> {
                 copy(
                     session = session.copy(
+                        isConnected = false,
+                        isSessionOpen = false,
                         message = result.message,
                     ),
                 )
