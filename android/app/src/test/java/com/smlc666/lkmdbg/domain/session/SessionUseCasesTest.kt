@@ -75,7 +75,7 @@ class SessionUseCasesTest {
 
         val next = useCases.connectAndOpen(WorkspaceUiState.initial())
 
-        assertFalse(next.session.isConnected)
+        assertTrue(next.session.isConnected)
         assertFalse(next.session.isSessionOpen)
         assertEquals("open failed", next.session.message)
     }

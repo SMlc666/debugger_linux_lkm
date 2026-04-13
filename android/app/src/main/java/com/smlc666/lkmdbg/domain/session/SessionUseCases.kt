@@ -15,7 +15,15 @@ class SessionUseCases(
         }
 
         val opened = gateway.openSession()
-        return afterConnect.applySessionResult(opened)
+        return when (opened) {
+            is SessionGatewayResult.Ok -> afterConnect.applySessionResult(opened)
+            is SessionGatewayResult.Error -> afterConnect.copy(
+                session = afterConnect.session.copy(
+                    isSessionOpen = false,
+                    message = opened.message,
+                ),
+            )
+        }
     }
 
     private fun WorkspaceUiState.applySessionResult(result: SessionGatewayResult): WorkspaceUiState =
