@@ -167,17 +167,6 @@ fun MainWorkspaceScreen(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedButton(onClick = onCollapse) {
-                Text(text = "Collapse")
-            }
-            OutlinedButton(onClick = onClose) {
-                Text(text = "Close")
-            }
-        }
         CategoryRow(
             sections = sections,
             selectedSection = state.section,
