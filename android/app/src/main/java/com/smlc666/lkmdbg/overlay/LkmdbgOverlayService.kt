@@ -100,6 +100,10 @@ class LkmdbgOverlayService : LifecycleService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // LifecycleService uses onStartCommand() to advance its Lifecycle to STARTED.
+        // Without this, Compose's window recomposer may not run, so UI won't recompose
+        // on StateFlow updates until the overlay view is recreated.
+        super.onStartCommand(intent, flags, startId)
         if (intent?.action == ACTION_STOP) {
             stopSelf()
             return START_NOT_STICKY
