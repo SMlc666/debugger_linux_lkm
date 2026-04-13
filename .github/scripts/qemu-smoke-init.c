@@ -87,7 +87,10 @@
 #define QEMU_BEHAVIOR_MINFLT_DELTA_MAX 200000ULL
 #define QEMU_BEHAVIOR_MAJFLT_DELTA_MAX 256ULL
 #define QEMU_BEHAVIOR_DEBUG_TIMEOUT_MS 5000U
-#define QEMU_BEHAVIOR_DISTURBANCE_RETRIES 3U
+#define QEMU_BEHAVIOR_DISTURBANCE_RETRIES 5U
+#define QEMU_BEHAVIOR_STEP_RETRIES 6U
+#define QEMU_BEHAVIOR_HWPOINT_RETRIES 4U
+#define QEMU_BEHAVIOR_RETRY_SLEEP_US 15000U
 
 struct qemu_hook_selftest_case {
 	const char *params;
@@ -1618,7 +1621,7 @@ static int qemu_behavior_set_target(int session_fd, pid_t target_pid)
 }
 
 static int qemu_behavior_query_step_tid(int session_fd, pid_t target_pid,
-					pid_t *tid_out)
+					__u32 required_flags, pid_t *tid_out)
 {
 	struct lkmdbg_thread_entry entries[32];
 	struct lkmdbg_thread_query_request req = {
@@ -1627,6 +1630,7 @@ static int qemu_behavior_query_step_tid(int session_fd, pid_t target_pid,
 		.entries_addr = (uintptr_t)entries,
 		.max_entries = sizeof(entries) / sizeof(entries[0]),
 	};
+	pid_t preferred_tid = -1;
 	pid_t fallback_tid = target_pid;
 
 	for (;;) {
@@ -1640,6 +1644,13 @@ static int qemu_behavior_query_step_tid(int session_fd, pid_t target_pid,
 				continue;
 			if (entries[i].flags & LKMDBG_THREAD_FLAG_EXITING)
 				continue;
+			if ((entries[i].flags & required_flags) == required_flags) {
+				if (entries[i].tid != target_pid) {
+					*tid_out = entries[i].tid;
+					return 0;
+				}
+				preferred_tid = entries[i].tid;
+			}
 			if (entries[i].tid != target_pid) {
 				*tid_out = entries[i].tid;
 				return 0;
@@ -1651,6 +1662,10 @@ static int qemu_behavior_query_step_tid(int session_fd, pid_t target_pid,
 		req.start_tid = req.next_tid;
 	}
 
+	if (preferred_tid > 0) {
+		*tid_out = preferred_tid;
+		return 0;
+	}
 	*tid_out = fallback_tid;
 	return 0;
 }
@@ -1858,15 +1873,15 @@ static int qemu_behavior_run_debug_ops(pid_t target_pid, __u64 hot_addr,
 	session_fd = qemu_open_session();
 	if (qemu_behavior_set_target(session_fd, target_pid) != 0)
 		goto out;
-	if (qemu_behavior_query_step_tid(session_fd, target_pid, &step_tid) != 0)
-		goto out;
 
 	for (iter = 0; iter < 3U; iter++) {
 		struct lkmdbg_stop_query_request stop = { 0 };
 		__u64 hwpoint_id = 0;
 		__u64 value = 0;
 		int ret;
+		unsigned int step_try;
 		unsigned int mem_iter;
+		unsigned int hwpoint_try;
 
 		ret = qemu_behavior_freeze(session_fd, QEMU_BEHAVIOR_DEBUG_TIMEOUT_MS,
 					   NULL);
@@ -1887,7 +1902,22 @@ static int qemu_behavior_run_debug_ops(pid_t target_pid, __u64 hot_addr,
 			goto out;
 		}
 
-		ret = qemu_behavior_single_step(session_fd, step_tid);
+		ret = -EBUSY;
+		for (step_try = 0; step_try < QEMU_BEHAVIOR_STEP_RETRIES; step_try++) {
+			ret = qemu_behavior_query_step_tid(
+				session_fd, target_pid, LKMDBG_THREAD_FLAG_FREEZE_PARKED,
+				&step_tid);
+			if (ret != 0)
+				break;
+			ret = qemu_behavior_single_step(session_fd, step_tid);
+			if (ret == 0)
+				break;
+			if (ret == -EBUSY || ret == -EAGAIN) {
+				usleep(QEMU_BEHAVIOR_RETRY_SLEEP_US);
+				continue;
+			}
+			break;
+		}
 		if (ret != 0) {
 			result->ret_code = ret;
 			goto out;
@@ -1922,9 +1952,20 @@ static int qemu_behavior_run_debug_ops(pid_t target_pid, __u64 hot_addr,
 		result->step_rounds++;
 		(void)qemu_behavior_thaw(session_fd, QEMU_BEHAVIOR_DEBUG_TIMEOUT_MS);
 
-		ret = qemu_behavior_add_hwpoint(session_fd, step_tid, hot_addr,
-						LKMDBG_HWPOINT_TYPE_WRITE, 0,
-						&hwpoint_id);
+		ret = -EBUSY;
+		for (hwpoint_try = 0; hwpoint_try < QEMU_BEHAVIOR_HWPOINT_RETRIES;
+		     hwpoint_try++) {
+			ret = qemu_behavior_add_hwpoint(session_fd, step_tid, hot_addr,
+							LKMDBG_HWPOINT_TYPE_WRITE, 0,
+							&hwpoint_id);
+			if (ret == 0)
+				break;
+			if (ret == -EBUSY || ret == -EAGAIN) {
+				usleep(QEMU_BEHAVIOR_RETRY_SLEEP_US);
+				continue;
+			}
+			break;
+		}
 		if (ret == -EOPNOTSUPP || ret == -EINVAL || ret == -ENOSYS ||
 		    ret == -ENOENT) {
 			result->hwpoint_supported = 0U;
