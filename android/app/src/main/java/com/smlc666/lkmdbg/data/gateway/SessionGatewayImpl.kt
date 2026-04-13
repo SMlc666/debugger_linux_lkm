@@ -18,16 +18,15 @@ class SessionGatewayImpl(
     }
 
     override suspend fun connect(): SessionGatewayResult {
-        repository.connect()
-        val afterConnect = repository.state.value
-        if (afterConnect.hello == null) {
-            // connect() swallows exceptions, so use the post-connect snapshot deterministically.
-            return SessionGatewayResult.Error(afterConnect.lastMessage)
+        val before = currentState()
+        if (before.isConnected) {
+            return SessionGatewayResult.Ok(before)
         }
 
+        repository.connect()
         repository.refreshStatus()
-        val snapshot = currentState()
-        return if (snapshot.isConnected) SessionGatewayResult.Ok(snapshot) else SessionGatewayResult.Error(snapshot.message)
+        val after = currentState()
+        return if (after.isConnected) SessionGatewayResult.Ok(after) else SessionGatewayResult.Error(after.message)
     }
 
     override suspend fun openSession(): SessionGatewayResult {
