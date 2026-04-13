@@ -3,6 +3,7 @@ package com.smlc666.lkmdbg.overlay.presentation.workspace
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 class WorkspaceViewModel(initialState: WorkspaceUiState) {
     private val mutableState = MutableStateFlow(initialState)
@@ -13,6 +14,8 @@ class WorkspaceViewModel(initialState: WorkspaceUiState) {
         val action = when (intent) {
             is WorkspaceIntent.SelectSection -> WorkspaceAction.SetSection(intent.section)
         }
-        mutableState.value = WorkspaceReducer.reduce(mutableState.value, action)
+        mutableState.update { current ->
+            WorkspaceReducer.reduce(current, action)
+        }
     }
 }

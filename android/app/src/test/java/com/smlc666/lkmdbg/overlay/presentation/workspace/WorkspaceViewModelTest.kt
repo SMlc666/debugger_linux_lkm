@@ -14,4 +14,15 @@ class WorkspaceViewModelTest {
 
         assertEquals(WorkspaceSection.Events, vm.state.value.section)
     }
+
+    @Test
+    fun dispatch_repeatedSelectSection_keepsLastSectionState() = runBlocking {
+        val vm = WorkspaceViewModel(WorkspaceUiState.initial())
+
+        vm.dispatch(WorkspaceIntent.SelectSection(WorkspaceSection.Threads))
+        vm.dispatch(WorkspaceIntent.SelectSection(WorkspaceSection.Events))
+        vm.dispatch(WorkspaceIntent.SelectSection(WorkspaceSection.Memory))
+
+        assertEquals(WorkspaceSection.Memory, vm.state.value.section)
+    }
 }
