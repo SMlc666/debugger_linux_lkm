@@ -444,7 +444,11 @@ class LkmdbgOverlayService : LifecycleService() {
         if (state.workspaceSection != WorkspaceSection.Processes)
             processPickerController.hide()
 
-        processPickerController.render(state)
+        // Rendering the process picker is expensive (rebuilds the whole list).
+        // Only do it when the picker is actually visible; otherwise frequent state
+        // updates (status loop / event auto-poll) can starve the Compose UI thread.
+        if (processPickerController.isVisible())
+            processPickerController.render(state)
         syncEventAutoPoll(state)
     }
 
