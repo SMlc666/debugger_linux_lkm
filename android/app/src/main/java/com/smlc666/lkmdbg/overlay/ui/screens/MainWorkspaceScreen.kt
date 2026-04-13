@@ -259,6 +259,15 @@ fun MainWorkspaceScreen(
 ) {
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val dispatchBridge = remember(onSectionSelected, onSelectThread) {
+        { intent: WorkspaceIntent ->
+            when (intent) {
+                is WorkspaceIntent.SelectSection -> onSectionSelected(intent.section)
+                is WorkspaceIntent.SelectThread -> onSelectThread(intent.tid)
+            }
+        }
+    }
+    val adapters = remember(dispatchBridge) { workspaceDispatchAdapters(dispatchBridge) }
     val sections = listOf(
         WorkspaceSection.Session,
         WorkspaceSection.Processes,
@@ -320,7 +329,7 @@ fun MainWorkspaceScreen(
                     onToggleEventsAutoPoll = onToggleEventsAutoPoll,
                     onClearEvents = onClearEvents,
                     onTogglePinnedEvent = onTogglePinnedEvent,
-                    onOpenEventThread = onOpenEventThread,
+                    onOpenEventThread = adapters.openEventThread,
                     onOpenEventValue = onOpenEventValue,
                     onStepMemoryPage = onStepMemoryPage,
                     onSelectMemoryAddress = onSelectMemoryAddress,
@@ -403,7 +412,7 @@ fun MainWorkspaceScreen(
                     onToggleEventsAutoPoll = onToggleEventsAutoPoll,
                     onClearEvents = onClearEvents,
                     onTogglePinnedEvent = onTogglePinnedEvent,
-                    onOpenEventThread = onOpenEventThread,
+                    onOpenEventThread = adapters.openEventThread,
                     onOpenEventValue = onOpenEventValue,
                     onStepMemoryPage = onStepMemoryPage,
                     onSelectMemoryAddress = onSelectMemoryAddress,

@@ -23,4 +23,3 @@ class WorkspaceViewModel(initialState: WorkspaceUiState) {
         mutableState.update { current -> WorkspaceReducer.reduce(current, action) }
     }
 }
-}
