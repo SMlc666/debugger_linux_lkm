@@ -52,6 +52,8 @@ import com.smlc666.lkmdbg.data.ResolvedProcessRecord
 import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.data.SessionEventEntry
 import com.smlc666.lkmdbg.data.WorkspaceSection
+import com.smlc666.lkmdbg.overlay.presentation.workspace.WorkspaceIntent
+import com.smlc666.lkmdbg.overlay.presentation.workspace.WorkspaceUiState
 import com.smlc666.lkmdbg.overlay.ui.components.OverlayModalContainer
 import com.smlc666.lkmdbg.shared.BridgeHwpointRecord
 import com.smlc666.lkmdbg.shared.BridgeStopState
@@ -137,6 +139,54 @@ fun WorkingBar(
                     tint = MaterialTheme.colorScheme.primary,
                 )
             }
+        }
+    }
+}
+
+@Composable
+fun MainWorkspaceScreen(
+    state: WorkspaceUiState,
+    dispatch: (WorkspaceIntent) -> Unit,
+    onClose: () -> Unit,
+    onCollapse: () -> Unit,
+) {
+    val adapters = remember(dispatch) { workspaceDispatchAdapters(dispatch) }
+    val sections = remember {
+        listOf(
+            WorkspaceSection.Session,
+            WorkspaceSection.Processes,
+            WorkspaceSection.Memory,
+            WorkspaceSection.Threads,
+            WorkspaceSection.Events,
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(onClick = onCollapse) {
+                Text(text = "Collapse")
+            }
+            OutlinedButton(onClick = onClose) {
+                Text(text = "Close")
+            }
+        }
+        CategoryRow(
+            sections = sections,
+            selectedSection = state.section,
+            onSectionSelected = { section -> dispatch(WorkspaceIntent.SelectSection(section)) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedButton(onClick = { adapters.openEventThread(1234) }) {
+            Text(text = "Open Event Thread 1234")
         }
     }
 }
