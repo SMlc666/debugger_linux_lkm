@@ -150,7 +150,6 @@ fun MainWorkspaceScreen(
     onClose: () -> Unit,
     onCollapse: () -> Unit,
 ) {
-    val adapters = remember(dispatch) { workspaceDispatchAdapters(dispatch) }
     val sections = remember {
         listOf(
             WorkspaceSection.Session,
@@ -185,9 +184,6 @@ fun MainWorkspaceScreen(
             onSectionSelected = { section -> dispatch(WorkspaceIntent.SelectSection(section)) },
             modifier = Modifier.fillMaxWidth(),
         )
-        OutlinedButton(onClick = { adapters.openEventThread(1234) }) {
-            Text(text = "Open Event Thread 1234")
-        }
     }
 }
 
