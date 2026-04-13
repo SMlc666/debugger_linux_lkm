@@ -5,7 +5,6 @@ import android.graphics.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +52,7 @@ import com.smlc666.lkmdbg.data.ResolvedProcessRecord
 import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.data.SessionEventEntry
 import com.smlc666.lkmdbg.data.WorkspaceSection
+import com.smlc666.lkmdbg.overlay.ui.components.OverlayModalContainer
 import com.smlc666.lkmdbg.shared.BridgeHwpointRecord
 import com.smlc666.lkmdbg.shared.BridgeStopState
 import com.smlc666.lkmdbg.shared.BridgeThreadRegistersReply
@@ -2637,29 +2637,9 @@ private fun ActionDialog(
     onDismiss: () -> Unit,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val dismissInteractionSource = remember { MutableInteractionSource() }
-    val contentInteractionSource = remember { MutableInteractionSource() }
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.65f))
-            .clickable(
-                interactionSource = dismissInteractionSource,
-                indication = null,
-            ) {
-                onDismiss()
-            },
-        contentAlignment = Alignment.Center,
-    ) {
+    OverlayModalContainer(onDismiss = onDismiss) {
         Surface(
-            modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth()
-                .clickable(
-                    interactionSource = contentInteractionSource,
-                    indication = null,
-                ) {
-                },
+            modifier = Modifier.fillMaxWidth(),
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 4.dp,
         ) {
