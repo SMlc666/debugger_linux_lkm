@@ -2093,8 +2093,11 @@ static void qemu_run_behavior_cluster(void)
 	unsigned int disturbance_attempt = 0;
 	unsigned int disturbance_attempts_run = 0;
 	bool disturbance_degraded = false;
+	bool behavior_strict;
 
 	qemu_cluster_begin("behavior");
+	behavior_strict =
+		qemu_cmdline_get_u32("lkmdbg.behavior_strict", 0U) != 0U;
 
 	qemu_behavior_set_stealth_flags(0, NULL, NULL);
 	qemu_behavior_run_perf_samples("baseline", &perf_base);
@@ -2167,11 +2170,12 @@ static void qemu_run_behavior_cluster(void)
 	minflt_delta = faults_after_min - faults_before_min;
 	majflt_delta = faults_after_maj - faults_before_maj;
 
-	printf("LKMDBG_QEMU_BEHAVIOR_DEBUG freeze_rounds=%u step_rounds=%u hwpoint_rounds=%u hwpoint_supported=%u mmu_supported=%u mmu_armed=%u disturbance_ret=%d attempts=%u degraded=%u\n",
+	printf("LKMDBG_QEMU_BEHAVIOR_DEBUG freeze_rounds=%u step_rounds=%u hwpoint_rounds=%u hwpoint_supported=%u mmu_supported=%u mmu_armed=%u disturbance_ret=%d attempts=%u degraded=%u strict=%u\n",
 	       disturbance.freeze_rounds, disturbance.step_rounds,
 	       disturbance.hwpoint_rounds, disturbance.hwpoint_supported,
 	       disturbance.mmu_supported, disturbance.mmu_armed, disturbance_ret,
-	       disturbance_attempts_run, disturbance_degraded ? 1U : 0U);
+	       disturbance_attempts_run, disturbance_degraded ? 1U : 0U,
+	       behavior_strict ? 1U : 0U);
 	printf("LKMDBG_QEMU_BEHAVIOR_MEMORY minflt_delta=%llu majflt_delta=%llu syscall_base_ns=%.2f syscall_stress_ns=%.2f\n",
 	       (unsigned long long)minflt_delta, (unsigned long long)majflt_delta,
 	       syscall_base_ns, syscall_stress_ns);
@@ -2183,6 +2187,13 @@ static void qemu_run_behavior_cluster(void)
 	fflush(stdout);
 
 	qemu_check(disturbance.freeze_rounds >= 1U, "behavior_no_freeze_rounds");
+	if (behavior_strict) {
+		qemu_check(!disturbance_degraded,
+			   "behavior_strict_degraded ret=%d attempts=%u freeze=%u step=%u hwpoint=%u",
+			   disturbance_ret, disturbance_attempts_run,
+			   disturbance.freeze_rounds, disturbance.step_rounds,
+			   disturbance.hwpoint_rounds);
+	}
 	if (!disturbance_degraded) {
 		qemu_check(disturbance.step_rounds >= 1U, "behavior_no_step_rounds");
 		if (disturbance.hwpoint_supported != 0U)

@@ -674,7 +674,7 @@ jobs:
             -nic none \
             -kernel "$KERNEL_IMAGE" \
             -initrd "$INITRAMFS" \
-            -append "console=ttyAMA0 rdinit=/init panic=-1 lkmdbg.proc_version_repeats=1 lkmdbg.smoke_clusters=transport,behavior" \
+            -append "console=ttyAMA0 rdinit=/init panic=-1 lkmdbg.proc_version_repeats=1 lkmdbg.smoke_clusters=transport,behavior lkmdbg.behavior_strict=1" \
             -no-reboot | tee "$LOG"
           grep -q 'LKMDBG_QEMU_CLUSTER_OK name=transport-negative' "$LOG"
           grep -q 'LKMDBG_QEMU_CLUSTER_OK name=transport' "$LOG"
