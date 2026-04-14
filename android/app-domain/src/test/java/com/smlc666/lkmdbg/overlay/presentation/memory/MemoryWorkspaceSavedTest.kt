@@ -18,9 +18,9 @@ class MemoryWorkspaceSavedTest {
         )
 
         assertEquals(setOf(0x1000uL, 0x2000uL), next.saved.entries.keys.toSet())
-        assertEquals(emptySet(), next.saved.selection)
+        assertEquals(emptySet<ULong>(), next.saved.selection)
         assertEquals(setOf(0x1000uL, 0x2000uL), next.search.selection)
-        assertEquals(emptySet(), next.page.selection)
+        assertEquals(emptySet<ULong>(), next.page.selection)
     }
 
     @Test

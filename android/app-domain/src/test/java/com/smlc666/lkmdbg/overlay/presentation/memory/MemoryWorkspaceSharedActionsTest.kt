@@ -35,6 +35,6 @@ class MemoryWorkspaceSharedActionsTest {
 
         assertEquals(setOf(0x1234uL), b.page.selection)
         assertEquals(setOf(0x1234uL), b.saved.selection)
-        assertEquals(emptySet(), b.search.selection)
+        assertEquals(emptySet<ULong>(), b.search.selection)
     }
 }

@@ -19,7 +19,7 @@ class MemoryWorkspaceReducerTest {
 
         assertEquals(MemoryTab.Saved, switched.activeTab)
         assertEquals(setOf(0x1000uL), switched.search.selection)
-        assertEquals(emptySet(), switched.saved.selection)
-        assertEquals(emptySet(), switched.page.selection)
+        assertEquals(emptySet<ULong>(), switched.saved.selection)
+        assertEquals(emptySet<ULong>(), switched.page.selection)
     }
 }
