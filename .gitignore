@@ -20,6 +20,7 @@ tools/lkmdbg_open_session
 tools/lkmdbg_stealth_ctl
 tools/lkmdbg_input_ctl
 android/.gradle/
+android/buildSrc/.gradle/
 android/**/build/
 android/local.properties
 android/.cxx/
