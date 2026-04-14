@@ -36,6 +36,9 @@ abstract class BuildBundledAgentTask @Inject constructor(
     @get:Input
     abstract val ndkVersion: Property<String>
 
+    @get:Input
+    abstract val cmakeVersion: Property<String>
+
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -45,8 +48,9 @@ abstract class BuildBundledAgentTask @Inject constructor(
     @TaskAction
     fun buildBundledAgent() {
         val sdkRoot = sdkRootPath.get()
-        val cmakeBin = File("$sdkRoot/cmake/3.22.1/bin/cmake")
-        val ninjaBin = File("$sdkRoot/cmake/3.22.1/bin/ninja")
+        val cmakeVersionValue = cmakeVersion.get()
+        val cmakeBin = File("$sdkRoot/cmake/$cmakeVersionValue/bin/cmake")
+        val ninjaBin = File("$sdkRoot/cmake/$cmakeVersionValue/bin/ninja")
         val toolchainFile = File("$sdkRoot/ndk/${ndkVersion.get()}/build/cmake/android.toolchain.cmake")
         val configureDirFile = configureDir.get().asFile
         val outputDirFile = outputDir.get().asFile

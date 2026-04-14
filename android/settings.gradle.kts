@@ -17,3 +17,6 @@ dependencyResolutionManagement {
 rootProject.name = "lkmdbg-android"
 include(":app")
 include(":shared")
+include(":app-ui")
+include(":app-domain")
+include(":app-data")

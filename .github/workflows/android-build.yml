@@ -36,8 +36,8 @@ jobs:
       - name: Install Android SDK packages
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;27.1.12297006"
 
-      - name: Run shared and app JVM tests, then build debug APK
-        run: gradle -p android :shared:build :app:testDebugUnitTest :app:assembleDebug
+      - name: Run JVM tests, lint, and build debug APK
+        run: gradle -p android :shared:build :app-domain:test :app-data:testDebugUnitTest :app-ui:testDebugUnitTest :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

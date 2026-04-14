@@ -7,11 +7,26 @@ plugins {
 }
 
 val bundledAgentAssetRoot = layout.buildDirectory.dir("generated/assets/bundledAgent/main")
-val androidNdkVersion = "27.1.12297006"
+val androidCompileSdk = libs.versions.androidCompileSdk.get().toInt()
+val androidTargetSdk = libs.versions.androidTargetSdk.get().toInt()
+val androidMinSdk = libs.versions.androidMinSdk.get().toInt()
+val androidNdkVersion = libs.versions.androidNdk.get()
+val androidCmakeVersion = libs.versions.androidCmake.get()
+
+val releaseStoreFilePath = providers.gradleProperty("android.release.storeFile").orNull
+val releaseStorePassword = providers.gradleProperty("android.release.storePassword").orNull
+val releaseKeyAlias = providers.gradleProperty("android.release.keyAlias").orNull
+val releaseKeyPassword = providers.gradleProperty("android.release.keyPassword").orNull
+val hasReleaseSigning = listOf(
+    releaseStoreFilePath,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
 
 android {
     namespace = "com.smlc666.lkmdbg"
-    compileSdk = 35
+    compileSdk = androidCompileSdk
     ndkVersion = androidNdkVersion
 
     signingConfigs {
@@ -22,12 +37,21 @@ android {
             keyPassword = "androiddebug"
             storeType = "PKCS12"
         }
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStoreFilePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                storeType = "PKCS12"
+            }
+        }
     }
 
     defaultConfig {
         applicationId = "com.smlc666.lkmdbg"
-        minSdk = 26
-        targetSdk = 35
+        minSdk = androidMinSdk
+        targetSdk = androidTargetSdk
         versionCode = 1
         versionName = "0.1.0"
 
@@ -56,8 +80,10 @@ android {
         }
 
         release {
-            signingConfig = signingConfigs.getByName("fixedDebug")
-            isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -81,7 +107,7 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+            version = androidCmakeVersion
         }
     }
 
@@ -98,6 +124,9 @@ android {
 
 dependencies {
     implementation(project(":shared"))
+    implementation(project(":app-domain"))
+    implementation(project(":app-data"))
+    implementation(project(":app-ui"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
@@ -106,13 +135,12 @@ dependencies {
     implementation(libs.google.material)
     implementation(libs.kotlinx.coroutines.android)
 
-    val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
-    implementation(composeBom)
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-graphics")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.activity:activity-compose:1.9.3")
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.activity.compose)
 
     testImplementation(libs.junit4)
     testImplementation(libs.robolectric)
@@ -129,6 +157,7 @@ val buildBundledAgentDebug by tasks.registering(BuildBundledAgentTask::class) {
     )
     sdkRootPath.set(sdkRoot)
     ndkVersion.set(androidNdkVersion)
+    cmakeVersion.set(androidCmakeVersion)
     outputDir.set(layout.buildDirectory.dir("generated/assets/bundledAgent/main/agent/arm64-v8a"))
     configureDir.set(layout.buildDirectory.dir("intermediates/bundledAgent/debug/arm64-v8a"))
     description = "Builds the bundled Android root agent and stages it into debug assets."
