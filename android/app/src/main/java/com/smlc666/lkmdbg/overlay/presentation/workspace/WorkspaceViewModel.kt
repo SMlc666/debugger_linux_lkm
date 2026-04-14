@@ -30,13 +30,16 @@ class WorkspaceViewModel(
             is WorkspaceIntent.SelectThread -> {
                 scope.launch {
                     val next = threadUseCases.selectThread(mutableState.value, intent.tid)
-                    mutableState.value = next
+                    // Only merge the slice this intent owns. The usecase returns a full WorkspaceUiState
+                    // derived from a snapshot, so assigning it wholesale can roll back concurrent updates.
+                    mutableState.update { current -> current.copy(threads = next.threads) }
                 }
             }
             is WorkspaceIntent.TogglePinnedEvent -> {
                 scope.launch {
                     val next = eventUseCases.togglePinnedEvent(mutableState.value, intent.seq)
-                    mutableState.value = next
+                    // See note above: only merge the relevant slice to avoid clobbering concurrent updates.
+                    mutableState.update { current -> current.copy(events = next.events) }
                 }
             }
         }
