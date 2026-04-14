@@ -222,10 +222,8 @@ class LkmdbgOverlayService : LifecycleService() {
                                 dispatchWorkspaceIntent(WorkspaceIntent.TogglePinnedEvent(seq))
                             },
                             onOpenEventThread = { tid ->
-                                lifecycleScope.launch {
-                                    hostController.selectSection(WorkspaceSection.Threads)
-                                    repository.selectThread(tid)
-                                }
+                                dispatchWorkspaceIntent(WorkspaceIntent.SelectSection(WorkspaceSection.Threads))
+                                dispatchWorkspaceIntent(WorkspaceIntent.SelectThread(tid))
                             },
                             onOpenEventValue = { value ->
                                 lifecycleScope.launch {
