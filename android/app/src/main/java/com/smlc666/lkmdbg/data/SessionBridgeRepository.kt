@@ -2,6 +2,7 @@ package com.smlc666.lkmdbg.data
 
 import android.content.Context
 import com.smlc666.lkmdbg.R
+import com.smlc666.lkmdbg.data.bridge.SessionBridgeClient
 import com.smlc666.lkmdbg.shared.BridgeContinueTargetRequest
 import com.smlc666.lkmdbg.shared.BridgeEventRecord
 import com.smlc666.lkmdbg.shared.BridgeFreezeThreadsRequest
@@ -190,9 +191,12 @@ class SessionBridgeRepository(
         memoryPreviewBuilder = memoryPreviewBuilder,
         discardMemorySearchSnapshot = { memorySearchCoordinator.discardSnapshot() },
     )
+    private val sessionBridgeClient: SessionBridgeClient = client.asSessionBridgeClient()
     val state: StateFlow<SessionBridgeState> = _state.asStateFlow()
 
     fun rootBridgeDiagnostics(): RootBridgeDiagnostics = client.diagnostics()
+
+    fun bridgeClient(): SessionBridgeClient = sessionBridgeClient
 
     fun updateTargetPidInput(value: String) {
         _state.update { current ->

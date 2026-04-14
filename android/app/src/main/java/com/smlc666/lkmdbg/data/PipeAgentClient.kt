@@ -2,6 +2,8 @@ package com.smlc666.lkmdbg.data
 
 import android.content.Context
 import android.os.Process as AndroidProcess
+import com.smlc666.lkmdbg.data.bridge.SessionBridgeClient
+import com.smlc666.lkmdbg.data.bridge.SessionBridgeClientImpl
 import com.smlc666.lkmdbg.shared.BridgeCommand
 import com.smlc666.lkmdbg.shared.BridgeEventBatchReply
 import com.smlc666.lkmdbg.shared.BridgeFreezeThreadsReply
@@ -66,6 +68,8 @@ class PipeAgentClient(
             agentPath = agentPathHint,
             suCandidates = rootBinaryCandidates(),
         )
+
+    fun asSessionBridgeClient(): SessionBridgeClient = SessionBridgeClientImpl(this)
 
     suspend fun connect(): BridgeHelloReply = withContext(Dispatchers.IO) {
         synchronized(lock) {

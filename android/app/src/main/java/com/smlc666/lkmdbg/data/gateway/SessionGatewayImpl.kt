@@ -1,41 +1,88 @@
 package com.smlc666.lkmdbg.data.gateway
 
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
+import com.smlc666.lkmdbg.data.bridge.SessionBridgeClient
 import com.smlc666.lkmdbg.domain.gateway.SessionGateway
 import com.smlc666.lkmdbg.domain.gateway.SessionGatewayResult
 import com.smlc666.lkmdbg.domain.gateway.SessionGatewayState
+import com.smlc666.lkmdbg.shared.BridgeStatusCode
+import com.smlc666.lkmdbg.shared.BridgeStatusSnapshot
 
 class SessionGatewayImpl(
-    private val repository: SessionBridgeRepository,
+    private val bridgeClient: SessionBridgeClient,
 ) : SessionGateway {
-    override fun currentState(): SessionGatewayState {
-        val state = repository.state.value
-        return SessionGatewayState(
-            isConnected = state.snapshot.connected,
-            isSessionOpen = state.snapshot.sessionOpen,
-            message = state.lastMessage,
-        )
-    }
+    constructor(repository: SessionBridgeRepository) : this(repository.bridgeClient())
+
+    private var current = SessionGatewayState(
+        isConnected = false,
+        isSessionOpen = false,
+        message = "",
+    )
+
+    override fun currentState(): SessionGatewayState = current
 
     override suspend fun connect(): SessionGatewayResult {
-        val before = currentState()
-        if (before.isConnected) {
-            return SessionGatewayResult.Ok(before)
+        val hello = bridgeClient.connect()
+        if (hello.status != BridgeStatusCode.Ok.wireValue) {
+            return errorResult("connect", hello.status, hello.message)
         }
 
-        repository.connect()
-        repository.refreshStatus()
-        val after = currentState()
-        return if (after.isConnected) SessionGatewayResult.Ok(after) else SessionGatewayResult.Error(after.message)
+        val snapshot = bridgeClient.statusSnapshot()
+        if (snapshot.status != BridgeStatusCode.Ok.wireValue) {
+            return errorResult("statusSnapshot", snapshot.status, snapshot.message)
+        }
+        return applySnapshot(snapshot, requireSessionOpen = false)
     }
 
     override suspend fun openSession(): SessionGatewayResult {
-        repository.openSession()
-        val snapshot = currentState()
-        return if (snapshot.isSessionOpen) {
-            SessionGatewayResult.Ok(snapshot)
-        } else {
-            SessionGatewayResult.Error(snapshot.message)
+        val open = bridgeClient.openSession()
+        if (open.status != BridgeStatusCode.Ok.wireValue) {
+            return errorResult("openSession", open.status, open.message)
         }
+
+        val snapshot = bridgeClient.statusSnapshot()
+        if (snapshot.status != BridgeStatusCode.Ok.wireValue) {
+            return errorResult("statusSnapshot", snapshot.status, snapshot.message)
+        }
+        return applySnapshot(snapshot, requireSessionOpen = true)
+    }
+
+    private fun applySnapshot(
+        snapshot: BridgeStatusSnapshot,
+        requireSessionOpen: Boolean,
+    ): SessionGatewayResult {
+        current = SessionGatewayState(
+            isConnected = snapshot.connected,
+            isSessionOpen = snapshot.sessionOpen,
+            message = snapshot.message,
+        )
+        val success = if (requireSessionOpen) {
+            snapshot.connected && snapshot.sessionOpen
+        } else {
+            snapshot.connected
+        }
+        return if (success) {
+            SessionGatewayResult.Ok(current)
+        } else {
+            SessionGatewayResult.Error(current.message)
+        }
+    }
+
+    private fun errorResult(operation: String, status: Int, message: String): SessionGatewayResult {
+        val statusLabel = BridgeStatusCode.entries
+            .firstOrNull { it.wireValue == status }
+            ?.name
+            ?: "Status($status)"
+        val mergedMessage = if (message.isBlank()) {
+            "$operation failed: $statusLabel"
+        } else {
+            "$operation failed: $statusLabel ($message)"
+        }
+        current = current.copy(
+            isConnected = false,
+            isSessionOpen = false,
+            message = mergedMessage,
+        )
+        return SessionGatewayResult.Error(mergedMessage)
     }
 }
