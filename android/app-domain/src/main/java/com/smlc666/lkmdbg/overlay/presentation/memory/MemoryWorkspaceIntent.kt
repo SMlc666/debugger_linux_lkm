@@ -9,8 +9,7 @@ sealed interface MemoryWorkspaceIntent {
 
     data class ClearSelection(val tab: MemoryTab) : MemoryWorkspaceIntent
 
-    data class AddSelectionToSaved(val fromTab: MemoryTab) : MemoryWorkspaceIntent
+    data class AddToSaved(val addresses: Set<ULong>) : MemoryWorkspaceIntent
 
     data class RemoveFromSaved(val address: ULong) : MemoryWorkspaceIntent
 }
-

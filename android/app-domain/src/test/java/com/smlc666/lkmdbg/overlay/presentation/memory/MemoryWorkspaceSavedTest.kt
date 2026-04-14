@@ -14,7 +14,7 @@ class MemoryWorkspaceSavedTest {
 
         val next = MemoryWorkspaceReducer.reduce(
             initial,
-            MemoryWorkspaceIntent.AddSelectionToSaved(fromTab = MemoryTab.Search),
+            MemoryWorkspaceIntent.AddToSaved(addresses = initial.search.selection),
         )
 
         assertEquals(setOf(0x1000uL, 0x2000uL), next.saved.entries.keys.toSet())

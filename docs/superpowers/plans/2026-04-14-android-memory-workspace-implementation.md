@@ -260,7 +260,7 @@ class MemoryWorkspaceSavedTest {
 
         val next = MemoryWorkspaceReducer.reduce(
             initial,
-            MemoryWorkspaceIntent.AddSelectionToSaved(fromTab = MemoryTab.Search),
+            MemoryWorkspaceIntent.AddToSaved(addresses = initial.search.selection),
         )
 
         assertEquals(setOf(0x1000uL, 0x2000uL), next.saved.entries.keys)
@@ -290,7 +290,7 @@ data class MemorySavedViewState(
 ```kotlin
 sealed interface MemoryWorkspaceIntent {
     data class SwitchTab(val tab: MemoryTab) : MemoryWorkspaceIntent
-    data class AddSelectionToSaved(val fromTab: MemoryTab) : MemoryWorkspaceIntent
+    data class AddToSaved(val addresses: Set<ULong>) : MemoryWorkspaceIntent
 }
 ```
 
@@ -299,12 +299,8 @@ object MemoryWorkspaceReducer {
     fun reduce(state: MemoryWorkspaceState, intent: MemoryWorkspaceIntent): MemoryWorkspaceState =
         when (intent) {
             is MemoryWorkspaceIntent.SwitchTab -> state.copy(activeTab = intent.tab)
-            is MemoryWorkspaceIntent.AddSelectionToSaved -> {
-                val addresses = when (intent.fromTab) {
-                    MemoryTab.Search -> state.search.selection
-                    MemoryTab.Saved -> state.saved.selection
-                    MemoryTab.Page -> state.page.selection
-                }
+            is MemoryWorkspaceIntent.AddToSaved -> {
+                val addresses = intent.addresses
                 if (addresses.isEmpty()) return state
                 val nextEntries = LinkedHashMap(state.saved.entries)
                 addresses.forEach { addr ->
@@ -359,7 +355,7 @@ class MemoryWorkspaceSharedActionsTest {
 ```kotlin
 sealed interface MemoryWorkspaceIntent {
     data class SwitchTab(val tab: MemoryTab) : MemoryWorkspaceIntent
-    data class AddSelectionToSaved(val fromTab: MemoryTab) : MemoryWorkspaceIntent
+    data class AddToSaved(val addresses: Set<ULong>) : MemoryWorkspaceIntent
     data class SetFilter(val tab: MemoryTab, val text: String) : MemoryWorkspaceIntent
     data class ToggleSelected(val tab: MemoryTab, val address: ULong) : MemoryWorkspaceIntent
     data class ClearSelection(val tab: MemoryTab) : MemoryWorkspaceIntent

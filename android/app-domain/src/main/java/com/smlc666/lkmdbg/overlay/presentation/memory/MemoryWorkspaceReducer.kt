@@ -28,17 +28,12 @@ object MemoryWorkspaceReducer {
                 MemoryTab.Page -> state.copy(page = state.page.copy(selection = emptySet()))
             }
 
-            is MemoryWorkspaceIntent.AddSelectionToSaved -> {
-                val addresses = when (intent.fromTab) {
-                    MemoryTab.Search -> state.search.selection
-                    MemoryTab.Saved -> state.saved.selection
-                    MemoryTab.Page -> state.page.selection
-                }
-                if (addresses.isEmpty()) {
+            is MemoryWorkspaceIntent.AddToSaved -> {
+                if (intent.addresses.isEmpty()) {
                     state
                 } else {
                     val nextEntries = LinkedHashMap(state.saved.entries)
-                    addresses.toList().sorted().forEach { address ->
+                    intent.addresses.toList().sorted().forEach { address ->
                         nextEntries.putIfAbsent(address, SavedMemoryEntry(address = address))
                     }
                     state.copy(saved = state.saved.copy(entries = nextEntries))
@@ -64,4 +59,3 @@ object MemoryWorkspaceReducer {
     private fun toggle(selection: Set<ULong>, address: ULong): Set<ULong> =
         if (address in selection) selection - address else selection + address
 }
-
