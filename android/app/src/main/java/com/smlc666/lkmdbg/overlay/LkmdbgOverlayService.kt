@@ -21,18 +21,15 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.smlc666.lkmdbg.CrashLogger
 import com.smlc666.lkmdbg.LkmdbgApplication
 import com.smlc666.lkmdbg.R
-import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
-import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.data.WorkspaceSection
 import com.smlc666.lkmdbg.overlay.ui.screens.CollapsedWorkspaceScreen
 import com.smlc666.lkmdbg.overlay.ui.screens.MainWorkspaceScreen
 import com.smlc666.lkmdbg.overlay.ui.theme.LkmdbgTheme
+import com.smlc666.lkmdbg.platform.overlay.OverlayHostController
 import com.smlc666.lkmdbg.shell.AppIconLoader
 import com.smlc666.lkmdbg.shell.SessionAutomationController
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -45,11 +42,11 @@ class LkmdbgOverlayService : LifecycleService() {
     private lateinit var gestureController: OverlayGestureController
     private lateinit var processPickerController: OverlayProcessPickerController
     private lateinit var stateBinder: OverlayStateBinder
+    private lateinit var hostController: OverlayHostController
     private lateinit var overlaySavedStateOwner: OverlaySavedStateOwner
     private var rootView: FrameLayout? = null
     private var workspaceView: ComposeView? = null
     private var overlayJob: Job? = null
-    private var eventAutoPollJob: Job? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var expanded = false
 
@@ -75,17 +72,18 @@ class LkmdbgOverlayService : LifecycleService() {
             ) { action ->
                 lifecycleScope.launch {
                     action()
-                    if (repository.state.value.workspaceSection == WorkspaceSection.Memory) {
-                        updateMemoryViewMode(0)
-                        repository.updateMemoryToolsOpen(false)
-                    }
-                    renderOverlayState()
+                    hostController.afterProcessPickerAction()
                 }
             }
+            hostController = OverlayHostController(
+                repository = repository,
+                processPickerController = processPickerController,
+                scope = lifecycleScope,
+            )
             stateBinder = OverlayStateBinder(
                 repository = repository,
-                onStateChanged = { state ->
-                    renderOverlayState(state)
+                onStateChanged = { _, state ->
+                    hostController.onRepositoryStateChanged(state)
                 },
             )
             automation.requestWarmStart(lifecycleScope)
@@ -113,7 +111,7 @@ class LkmdbgOverlayService : LifecycleService() {
 
     override fun onDestroy() {
         overlayJob?.cancel()
-        stopEventAutoPoll()
+        hostController.setExpanded(false)
         if (::automation.isInitialized)
             automation.stopStatusLoop()
         removeOverlay()
@@ -129,6 +127,7 @@ class LkmdbgOverlayService : LifecycleService() {
     }
 
     private fun mountOverlay(expanded: Boolean) {
+        hostController.setExpanded(expanded)
         val params = windowController.createLayoutParams(expanded)
         val density = resources.displayMetrics.density
         val root = FrameLayout(overlayContext).apply {
@@ -147,16 +146,11 @@ class LkmdbgOverlayService : LifecycleService() {
                             state = state,
                             memoryViewMode = state.memoryViewMode,
                             memoryToolsOpen = state.memoryToolsOpen,
-                            onSectionSelected = { section ->
-                                repository.updateWorkspaceSection(section)
-                                handleSectionSelection(section)
-                            },
+                            onSectionSelected = hostController::selectSection,
                             onToggleProcessPicker = {
-                                repository.updateWorkspaceSection(WorkspaceSection.Processes)
-                                handleSectionSelection(WorkspaceSection.Processes)
-                                processPickerController.toggle(repository.state.value)
+                                hostController.toggleProcessPicker()
                             },
-                            onToggleMemoryTools = { toggleMemoryTools() },
+                            onToggleMemoryTools = hostController::toggleMemoryTools,
                             onTargetPidInputChanged = repository::updateTargetPidInput,
                             onTargetTidInputChanged = repository::updateTargetTidInput,
                             onConnect = { lifecycleScope.launch { repository.connect() } },
@@ -165,7 +159,7 @@ class LkmdbgOverlayService : LifecycleService() {
                             onAttachTarget = {
                                 lifecycleScope.launch {
                                     repository.attachTarget()
-                                    repository.updateWorkspaceSection(WorkspaceSection.Memory)
+                                    hostController.selectSection(WorkspaceSection.Memory)
                                 }
                             },
                             onRefreshStopState = { lifecycleScope.launch { repository.refreshStopState() } },
@@ -179,8 +173,8 @@ class LkmdbgOverlayService : LifecycleService() {
                             onAttachSelectedProcess = { pid ->
                                 lifecycleScope.launch {
                                     if (repository.attachProcess(pid)) {
-                                        repository.updateWorkspaceSection(WorkspaceSection.Memory)
-                                        updateMemoryViewMode(0)
+                                        hostController.selectSection(WorkspaceSection.Memory)
+                                        hostController.setMemoryViewModePage()
                                     }
                                 }
                             },
@@ -203,36 +197,33 @@ class LkmdbgOverlayService : LifecycleService() {
                             onRefreshHwpoints = { lifecycleScope.launch { repository.refreshHwpoints() } },
                             onRefreshEvents = { lifecycleScope.launch { repository.refreshEvents(timeoutMs = 100, maxEvents = 32) } },
                             onToggleEventsAutoPoll = {
-                                repository.updateEventsAutoPollEnabled(!repository.state.value.eventsAutoPollEnabled)
-                                renderOverlayState()
+                                hostController.toggleEventsAutoPollEnabled()
                             },
                             onClearEvents = repository::clearRecentEvents,
                             onTogglePinnedEvent = repository::togglePinnedEvent,
                             onOpenEventThread = { tid ->
                                 lifecycleScope.launch {
-                                    repository.updateWorkspaceSection(WorkspaceSection.Threads)
-                                    handleSectionSelection(WorkspaceSection.Threads)
+                                    hostController.selectSection(WorkspaceSection.Threads)
                                     repository.selectThread(tid)
                                 }
                             },
                             onOpenEventValue = { value ->
                                 lifecycleScope.launch {
-                                    repository.updateWorkspaceSection(WorkspaceSection.Memory)
-                                    handleSectionSelection(WorkspaceSection.Memory)
+                                    hostController.selectSection(WorkspaceSection.Memory)
                                     repository.selectMemoryAddress(value)
-                                    updateMemoryViewMode(0)
+                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onStepMemoryPage = { direction ->
                                 lifecycleScope.launch {
                                     repository.stepMemoryPage(direction)
-                                    updateMemoryViewMode(0)
+                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onSelectMemoryAddress = { address ->
                                 lifecycleScope.launch {
                                     repository.selectMemoryAddress(address)
-                                    updateMemoryViewMode(0)
+                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onMemorySearchQueryChanged = repository::updateMemorySearchQuery,
@@ -247,7 +238,7 @@ class LkmdbgOverlayService : LifecycleService() {
                             onJumpMemoryAddress = {
                                 lifecycleScope.launch {
                                     repository.jumpToMemoryAddress()
-                                    updateMemoryViewMode(0)
+                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onLoadSelectionIntoHexSearch = {
@@ -268,13 +259,13 @@ class LkmdbgOverlayService : LifecycleService() {
                             onWriteHexAtFocus = {
                                 lifecycleScope.launch {
                                     repository.writeHexAtFocus()
-                                    updateMemoryViewMode(0)
+                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onWriteAsciiAtFocus = {
                                 lifecycleScope.launch {
                                     repository.writeAsciiAtFocus()
-                                    updateMemoryViewMode(0)
+                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onAssembleToEditors = {
@@ -285,29 +276,29 @@ class LkmdbgOverlayService : LifecycleService() {
                             onAssembleAndWrite = {
                                 lifecycleScope.launch {
                                     repository.assembleArm64AndWrite()
-                                    updateMemoryViewMode(0)
+                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onRunMemorySearch = {
                                 lifecycleScope.launch {
                                     repository.runMemorySearch()
-                                    updateMemoryViewMode(1)
+                                    hostController.setMemoryViewModeResults()
                                 }
                             },
                             onRefineMemorySearch = {
                                 lifecycleScope.launch {
                                     repository.refineMemorySearch()
-                                    updateMemoryViewMode(1)
+                                    hostController.setMemoryViewModeResults()
                                 }
                             },
                             onRefreshVmas = { lifecycleScope.launch { repository.refreshVmas() } },
                             onRefreshImages = { lifecycleScope.launch { repository.refreshImages() } },
-                            onShowMemoryResults = { updateMemoryViewMode(1) },
-                            onShowMemoryPage = { updateMemoryViewMode(0) },
+                            onShowMemoryResults = hostController::setMemoryViewModeResults,
+                            onShowMemoryPage = hostController::setMemoryViewModePage,
                             onPreviewSelectedPc = {
                                 lifecycleScope.launch {
                                     repository.previewSelectedPc()
-                                    updateMemoryViewMode(0)
+                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onClose = { stopSelf() },
@@ -384,15 +375,16 @@ class LkmdbgOverlayService : LifecycleService() {
         windowManager.addView(root, params)
         overlayJob?.cancel()
         overlayJob = stateBinder.bind(lifecycleScope)
-        renderOverlayState()
+        hostController.onRepositoryStateChanged(repository.state.value)
     }
 
     private fun updateExpandedState(nextExpanded: Boolean) {
         if (expanded == nextExpanded)
             return
-        expanded = nextExpanded
         overlayJob?.cancel()
-        stopEventAutoPoll()
+        // Stop host-side background work and expensive views before tearing down.
+        hostController.setExpanded(false)
+        expanded = nextExpanded
         rootView?.let { view ->
             runCatching { windowManager.removeViewImmediate(view) }
         }
@@ -404,7 +396,7 @@ class LkmdbgOverlayService : LifecycleService() {
 
     private fun removeOverlay() {
         overlayJob?.cancel()
-        stopEventAutoPoll()
+        hostController.setExpanded(false)
         rootView?.let { view ->
             runCatching { windowManager.removeView(view) }
         }
@@ -413,72 +405,6 @@ class LkmdbgOverlayService : LifecycleService() {
         layoutParams = null
         if (::processPickerController.isInitialized)
             processPickerController.clear()
-    }
-
-    private fun toggleMemoryTools() {
-        if (repository.state.value.workspaceSection != WorkspaceSection.Memory)
-            return
-        repository.updateMemoryToolsOpen(!repository.state.value.memoryToolsOpen)
-        renderOverlayState()
-    }
-
-    private fun updateMemoryViewMode(mode: Int) {
-        if (repository.state.value.memoryViewMode == mode)
-            return
-        repository.updateMemoryViewMode(mode)
-        renderOverlayState()
-    }
-
-    private fun handleSectionSelection(section: WorkspaceSection) {
-        if (section == WorkspaceSection.Events) {
-            repository.updateEventsAutoPollEnabled(true)
-        } else {
-            repository.updateEventsAutoPollEnabled(false)
-        }
-        if (section != WorkspaceSection.Processes)
-            processPickerController.hide()
-        renderOverlayState()
-    }
-
-    private fun renderOverlayState(state: SessionBridgeState = repository.state.value) {
-        if (!expanded) {
-            stopEventAutoPoll()
-            return
-        }
-        if (state.workspaceSection != WorkspaceSection.Processes)
-            processPickerController.hide()
-
-        // Rendering the process picker is expensive (rebuilds the whole list).
-        // Only do it when the picker is actually visible; otherwise frequent state
-        // updates (status loop / event auto-poll) can starve the Compose UI thread.
-        if (processPickerController.isVisible())
-            processPickerController.render(state)
-        syncEventAutoPoll(state)
-    }
-
-    private fun syncEventAutoPoll(state: SessionBridgeState) {
-        val shouldPoll =
-            expanded &&
-                state.workspaceSection == WorkspaceSection.Events &&
-                state.eventsAutoPollEnabled &&
-                state.snapshot.sessionOpen
-        if (!shouldPoll) {
-            stopEventAutoPoll()
-            return
-        }
-        if (eventAutoPollJob?.isActive == true)
-            return
-        eventAutoPollJob = lifecycleScope.launch {
-            while (isActive) {
-                repository.refreshEventsBackground(timeoutMs = 100, maxEvents = 16)
-                delay(400)
-            }
-        }
-    }
-
-    private fun stopEventAutoPoll() {
-        eventAutoPollJob?.cancel()
-        eventAutoPollJob = null
     }
 
     companion object {

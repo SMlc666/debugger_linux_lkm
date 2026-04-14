@@ -9,12 +9,14 @@ import kotlinx.coroutines.launch
 
 internal class OverlayStateBinder(
     private val repository: SessionBridgeRepository,
-    private val onStateChanged: (SessionBridgeState) -> Unit,
+    private val onStateChanged: (prev: SessionBridgeState?, next: SessionBridgeState) -> Unit,
 ) {
     fun bind(scope: CoroutineScope): Job =
         scope.launch {
+            var prev: SessionBridgeState? = null
             repository.state.collect { state ->
-                onStateChanged(state)
+                onStateChanged(prev, state)
+                prev = state
             }
         }
 }
