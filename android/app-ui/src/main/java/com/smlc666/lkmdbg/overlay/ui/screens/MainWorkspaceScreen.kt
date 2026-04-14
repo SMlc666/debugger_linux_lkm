@@ -108,14 +108,15 @@ fun WorkingBar(
             val currentProcess = state.processes.find { it.pid == state.snapshot.targetPid }
             val processName = currentProcess?.processName ?: ""
             val emptyTargetLabel = stringResource(R.string.process_select_prompt)
+            val memoryPage = state.memoryPage
             val statusText = buildString {
                 append("[")
                 append(state.snapshot.targetPid)
                 append("] ")
                 append(processName.ifBlank { emptyTargetLabel })
-                if (state.memoryPage != null) {
+                if (memoryPage != null) {
                     append(" · ")
-                    append(hex64(state.memoryPage.focusAddress))
+                    append(hex64(memoryPage.focusAddress))
                 }
                 if (memoryToolsOpen)
                     append(" · tools")
@@ -252,11 +253,12 @@ fun MainWorkspaceScreen(
 ) {
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-    val dispatchBridge = remember(onSectionSelected, onSelectThread) {
+    val dispatchBridge = remember(onSectionSelected, onSelectThread, onTogglePinnedEvent) {
         { intent: WorkspaceIntent ->
             when (intent) {
                 is WorkspaceIntent.SelectSection -> onSectionSelected(intent.section)
                 is WorkspaceIntent.SelectThread -> onSelectThread(intent.tid)
+                is WorkspaceIntent.TogglePinnedEvent -> onTogglePinnedEvent(intent.seq)
             }
         }
     }
@@ -2440,9 +2442,10 @@ private fun ProcessRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = if (selected || attached) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (!process.packageName.isNullOrBlank()) {
+            val packageName = process.packageName
+            if (!packageName.isNullOrBlank()) {
                 Text(
-                    text = process.packageName,
+                    text = packageName,
                     style = MaterialTheme.typography.bodySmall,
                     color = if (selected || attached) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
