@@ -164,12 +164,11 @@ val buildBundledAgentDebug by tasks.registering(BuildBundledAgentTask::class) {
     group = "build"
 }
 
-tasks.matching { it.name == "mergeDebugAssets" }.configureEach {
-    dependsOn(buildBundledAgentDebug)
-}
-
 tasks.matching {
-    it.name.startsWith("generateDebugLint") || it.name == "generateDebugLintReportModel"
+    it.name == "mergeDebugAssets" ||
+        it.name == "lintDebug" ||
+        it.name.startsWith("generateDebugLint") ||
+        it.name.startsWith("lintAnalyzeDebug")
 }.configureEach {
     dependsOn(buildBundledAgentDebug)
 }
