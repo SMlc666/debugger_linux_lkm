@@ -23,6 +23,13 @@ import com.smlc666.lkmdbg.LkmdbgApplication
 import com.smlc666.lkmdbg.R
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.data.WorkspaceSection
+import com.smlc666.lkmdbg.data.gateway.EventGatewayImpl
+import com.smlc666.lkmdbg.data.gateway.ThreadGatewayImpl
+import com.smlc666.lkmdbg.domain.event.EventUseCases
+import com.smlc666.lkmdbg.domain.thread.ThreadUseCases
+import com.smlc666.lkmdbg.overlay.presentation.workspace.WorkspaceIntent
+import com.smlc666.lkmdbg.overlay.presentation.workspace.WorkspaceUiState
+import com.smlc666.lkmdbg.overlay.presentation.workspace.WorkspaceViewModel
 import com.smlc666.lkmdbg.overlay.ui.screens.CollapsedWorkspaceScreen
 import com.smlc666.lkmdbg.overlay.ui.screens.MainWorkspaceScreen
 import com.smlc666.lkmdbg.overlay.ui.theme.LkmdbgTheme
@@ -44,6 +51,7 @@ class LkmdbgOverlayService : LifecycleService() {
     private lateinit var stateBinder: OverlayStateBinder
     private lateinit var hostController: OverlayHostController
     private lateinit var overlaySavedStateOwner: OverlaySavedStateOwner
+    private lateinit var workspaceViewModel: WorkspaceViewModel
     private var rootView: FrameLayout? = null
     private var workspaceView: ComposeView? = null
     private var overlayJob: Job? = null
@@ -78,6 +86,12 @@ class LkmdbgOverlayService : LifecycleService() {
             hostController = OverlayHostController(
                 repository = repository,
                 processPickerController = processPickerController,
+                scope = lifecycleScope,
+            )
+            workspaceViewModel = WorkspaceViewModel(
+                initialState = WorkspaceUiState.initial(),
+                threadUseCases = ThreadUseCases(ThreadGatewayImpl(repository)),
+                eventUseCases = EventUseCases(EventGatewayImpl(repository)),
                 scope = lifecycleScope,
             )
             stateBinder = OverlayStateBinder(
@@ -146,7 +160,9 @@ class LkmdbgOverlayService : LifecycleService() {
                             state = state,
                             memoryViewMode = state.memoryViewMode,
                             memoryToolsOpen = state.memoryToolsOpen,
-                            onSectionSelected = hostController::selectSection,
+                            onSectionSelected = { section ->
+                                dispatchWorkspaceIntent(WorkspaceIntent.SelectSection(section))
+                            },
                             onToggleProcessPicker = {
                                 hostController.toggleProcessPicker()
                             },
@@ -179,7 +195,9 @@ class LkmdbgOverlayService : LifecycleService() {
                                 }
                             },
                             onRefreshThreads = { lifecycleScope.launch { repository.refreshThreads() } },
-                            onSelectThread = { tid -> lifecycleScope.launch { repository.selectThread(tid) } },
+                            onSelectThread = { tid ->
+                                dispatchWorkspaceIntent(WorkspaceIntent.SelectThread(tid))
+                            },
                             onRefreshSelectedThreadRegisters = {
                                 lifecycleScope.launch {
                                     repository.state.value.selectedThreadTid?.let { repository.refreshThreadRegisters(it) }
@@ -200,7 +218,9 @@ class LkmdbgOverlayService : LifecycleService() {
                                 hostController.toggleEventsAutoPollEnabled()
                             },
                             onClearEvents = repository::clearRecentEvents,
-                            onTogglePinnedEvent = repository::togglePinnedEvent,
+                            onTogglePinnedEvent = { seq ->
+                                dispatchWorkspaceIntent(WorkspaceIntent.TogglePinnedEvent(seq))
+                            },
                             onOpenEventThread = { tid ->
                                 lifecycleScope.launch {
                                     hostController.selectSection(WorkspaceSection.Threads)
@@ -376,6 +396,12 @@ class LkmdbgOverlayService : LifecycleService() {
         overlayJob?.cancel()
         overlayJob = stateBinder.bind(lifecycleScope)
         hostController.onRepositoryStateChanged(repository.state.value)
+    }
+
+    private fun dispatchWorkspaceIntent(intent: WorkspaceIntent) {
+        if (intent is WorkspaceIntent.SelectSection)
+            hostController.selectSection(intent.section)
+        workspaceViewModel.dispatch(intent)
     }
 
     private fun updateExpandedState(nextExpanded: Boolean) {
