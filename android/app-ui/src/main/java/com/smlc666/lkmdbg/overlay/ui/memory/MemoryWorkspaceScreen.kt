@@ -50,6 +50,8 @@ fun MemoryWorkspaceSection(
     onCycleRegionPreset: () -> Unit,
     onStepPage: (Int) -> Unit,
     onSelectAddress: (ULong) -> Unit,
+    onWriteHexAtAddress: ((ULong, String) -> Unit)? = null,
+    onWriteHexAtAddresses: ((Set<ULong>, String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     // Session-local only: clear the saved list whenever a new session starts.
@@ -78,6 +80,8 @@ fun MemoryWorkspaceSection(
         onCycleRegionPreset = onCycleRegionPreset,
         onStepPage = onStepPage,
         onSelectAddress = onSelectAddress,
+        onWriteHexAtAddress = onWriteHexAtAddress,
+        onWriteHexAtAddresses = onWriteHexAtAddresses,
         modifier = modifier,
     )
 }
@@ -95,11 +99,15 @@ fun MemoryWorkspaceScreen(
     onCycleRegionPreset: () -> Unit,
     onStepPage: (Int) -> Unit,
     onSelectAddress: (ULong) -> Unit,
+    onWriteHexAtAddress: ((ULong, String) -> Unit)? = null,
+    onWriteHexAtAddresses: ((Set<ULong>, String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
 
     var menuTarget by remember { mutableStateOf<MenuTarget?>(null) }
+    var modifyTargets by remember { mutableStateOf<Set<ULong>?>(null) }
+    val canModify = onWriteHexAtAddress != null || onWriteHexAtAddresses != null
 
     val searchRows = remember(bridgeState.memorySearch.results) {
         bridgeState.memorySearch.results.map { it.toRow() }
@@ -162,6 +170,9 @@ fun MemoryWorkspaceScreen(
                     onAddSelectionToSaved = {
                         dispatch(MemoryWorkspaceIntent.AddToSaved(workspaceState.search.selection))
                     },
+                    onModifySelection = if (!canModify) null else ({ addresses ->
+                        modifyTargets = addresses
+                    }),
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -183,6 +194,9 @@ fun MemoryWorkspaceScreen(
                     onClearSelection = {
                         dispatch(MemoryWorkspaceIntent.ClearSelection(MemoryTab.Saved))
                     },
+                    onModifySelection = if (!canModify) null else ({ addresses ->
+                        modifyTargets = addresses
+                    }),
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -212,6 +226,9 @@ fun MemoryWorkspaceScreen(
                     onAddSelectionToSaved = {
                         dispatch(MemoryWorkspaceIntent.AddToSaved(workspaceState.page.selection))
                     },
+                    onModifySelection = if (!canModify) null else ({ addresses ->
+                        modifyTargets = addresses
+                    }),
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -222,6 +239,11 @@ fun MemoryWorkspaceScreen(
             expanded = target != null,
             title = target?.addressHex().orEmpty(),
             onDismiss = { menuTarget = null },
+            onModify = target?.let { t ->
+                if (!canModify) null else ({
+                    modifyTargets = setOf(t.address)
+                })
+            },
             onGoToPage = target?.let { t ->
                 {
                     onSelectAddress(t.address)
@@ -238,6 +260,24 @@ fun MemoryWorkspaceScreen(
                 { clipboard.setText(AnnotatedString(t.addressHex())) }
             },
         )
+
+        modifyTargets?.let { targets ->
+            MemoryModifyDialog(
+                targets = targets,
+                onDismiss = { modifyTargets = null },
+                onConfirm = { hexBytes ->
+                    if (hexBytes.isNotBlank()) {
+                        onWriteHexAtAddresses?.invoke(targets, hexBytes)
+                            ?: onWriteHexAtAddress?.let { writeOne ->
+                                targets.forEach { address ->
+                                    writeOne(address, hexBytes)
+                                }
+                            }
+                    }
+                    modifyTargets = null
+                },
+            )
+        }
     }
 }
 

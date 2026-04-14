@@ -38,6 +38,7 @@ fun MemoryDataView(
     onOpenMenu: (ULong) -> Unit,
     onClearSelection: () -> Unit,
     onAddSelectionToSaved: (() -> Unit)? = null,
+    onModifySelection: ((Set<ULong>) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val filteredRows by remember(rows, filterText) {
@@ -77,6 +78,13 @@ fun MemoryDataView(
                 label = { Text("Filter") },
             )
             if (selectedAddresses.isNotEmpty()) {
+                if (onModifySelection != null) {
+                    TextButton(
+                        onClick = { onModifySelection(selectedAddresses) },
+                    ) {
+                        Text("Modify")
+                    }
+                }
                 if (onAddSelectionToSaved != null) {
                     TextButton(
                         onClick = onAddSelectionToSaved,

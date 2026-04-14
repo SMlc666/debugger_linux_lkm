@@ -17,6 +17,7 @@ fun MemoryActionMenu(
     title: String,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    onModify: (() -> Unit)? = null,
     onGoToPage: (() -> Unit)? = null,
     onAddToSaved: (() -> Unit)? = null,
     onRemoveFromSaved: (() -> Unit)? = null,
@@ -33,6 +34,9 @@ fun MemoryActionMenu(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                onModify?.let { action ->
+                    TextButton(onClick = { action(); onDismiss() }) { Text("Modify") }
+                }
                 onGoToPage?.let { action ->
                     TextButton(onClick = { action(); onDismiss() }) { Text("Go to page") }
                 }
@@ -59,4 +63,3 @@ fun MemoryActionMenu(
         },
     )
 }
-
