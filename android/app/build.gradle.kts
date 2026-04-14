@@ -167,3 +167,9 @@ val buildBundledAgentDebug by tasks.registering(BuildBundledAgentTask::class) {
 tasks.matching { it.name == "mergeDebugAssets" }.configureEach {
     dependsOn(buildBundledAgentDebug)
 }
+
+tasks.matching {
+    it.name.startsWith("generateDebugLint") || it.name == "generateDebugLintReportModel"
+}.configureEach {
+    dependsOn(buildBundledAgentDebug)
+}
