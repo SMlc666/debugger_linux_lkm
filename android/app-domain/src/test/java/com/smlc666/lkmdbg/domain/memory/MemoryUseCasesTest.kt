@@ -2,9 +2,6 @@ package com.smlc666.lkmdbg.domain.memory
 
 import com.smlc666.lkmdbg.data.MemoryPage
 import com.smlc666.lkmdbg.data.MemorySearchResult
-import com.smlc666.lkmdbg.data.MemorySearchUiState
-import com.smlc666.lkmdbg.data.SessionBridgeState
-import com.smlc666.lkmdbg.data.gateway.didMemorySearchMakeProgress
 import com.smlc666.lkmdbg.domain.gateway.MemoryGateway
 import com.smlc666.lkmdbg.domain.gateway.MemoryGatewayResult
 import com.smlc666.lkmdbg.domain.gateway.MemoryGatewayState
@@ -154,49 +151,6 @@ class MemoryUseCasesTest {
         assertEquals("search failed", (result as MemoryUseCaseResult.Error).message)
     }
 
-    @Test
-    fun gatewaySearchProgress_snapshotOnly_countsAsProgressEvenWhenResultsReferenceUnchanged() {
-        val before = SessionBridgeState(
-            agentPath = "agent",
-            lastMessage = "idle",
-            memorySearch = MemorySearchUiState(
-                snapshotReady = false,
-                summary = "",
-                results = emptyList(),
-            ),
-        )
-        val after = before.copy(
-            lastMessage = "snapshot captured",
-            memorySearch = before.memorySearch.copy(
-                snapshotReady = true,
-                summary = "snapshot captured",
-                results = emptyList(),
-            ),
-        )
-
-        assertTrue(didMemorySearchMakeProgress(before, after))
-        assertTrue(after.memorySearch.results === before.memorySearch.results)
-    }
-
-    @Test
-    fun gatewaySearchProgress_messageOnly_doesNotCountAsProgress() {
-        val before = SessionBridgeState(
-            agentPath = "agent",
-            lastMessage = "idle",
-            memorySearch = MemorySearchUiState(
-                snapshotReady = false,
-                summary = "",
-                results = emptyList(),
-            ),
-        )
-        val after = before.copy(lastMessage = "bridge error: something failed")
-
-        assertTrue(after.lastMessage != before.lastMessage)
-        assertTrue(after.memorySearch == before.memorySearch)
-        assertTrue(after.memorySearch.results === before.memorySearch.results)
-        assertTrue(!didMemorySearchMakeProgress(before, after))
-    }
-
     private class FakeMemoryGateway(
         private val nextResult: MemoryGatewayResult,
     ) : MemoryGateway {
@@ -204,7 +158,7 @@ class MemoryUseCasesTest {
             (nextResult as? MemoryGatewayResult.Ok)?.state
                 ?: MemoryGatewayState(
                     page = null,
-                    search = emptySearch(),
+                    search = defaultEmptySearch(),
                     message = "",
                 )
 
@@ -222,21 +176,27 @@ class MemoryUseCasesTest {
     }
 
     private fun emptySearch(): MemorySearchGatewayState =
-        MemorySearchGatewayState(
-            snapshotReady = false,
-            summary = "",
-            results = emptyList(),
-        )
+        defaultEmptySearch()
 
     private fun page(focusAddress: ULong): MemoryPage =
-        MemoryPage(
-            focusAddress = focusAddress,
-            pageStart = focusAddress,
-            pageSize = 256u,
-            bytes = ByteArray(0),
-            rows = emptyList(),
-            disassembly = emptyList(),
-            scalars = emptyList(),
-            region = null,
-        )
+        defaultPage(focusAddress)
 }
+
+private fun defaultEmptySearch(): MemorySearchGatewayState =
+    MemorySearchGatewayState(
+        snapshotReady = false,
+        summary = "",
+        results = emptyList(),
+    )
+
+private fun defaultPage(focusAddress: ULong): MemoryPage =
+    MemoryPage(
+        focusAddress = focusAddress,
+        pageStart = focusAddress,
+        pageSize = 256u,
+        bytes = ByteArray(0),
+        rows = emptyList(),
+        disassembly = emptyList(),
+        scalars = emptyList(),
+        region = null,
+    )

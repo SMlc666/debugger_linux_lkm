@@ -69,7 +69,7 @@ class ThreadUseCasesTest {
                     ),
                 ),
                 selectedTid = 7,
-                selectedRegisters = registers(tid = 7, message = "seeded"),
+                selectedRegisters = buildRegisters(tid = 7, message = "seeded"),
                 message = "stale",
             ),
         )
@@ -100,28 +100,27 @@ class ThreadUseCasesTest {
         override suspend fun selectThread(tid: Int): ThreadGatewayResult {
             current = current.copy(
                 selectedTid = tid,
-                selectedRegisters = registers(tid = tid, message = "selected $tid"),
+                selectedRegisters = buildRegisters(tid = tid, message = "selected $tid"),
                 message = "selected $tid",
             )
             return ThreadGatewayResult.Ok(current)
         }
     }
-
-    private fun registers(tid: Int, message: String): BridgeThreadRegistersReply =
-        BridgeThreadRegistersReply(
-            status = 0,
-            tid = tid,
-            flags = 0u,
-            regs = ULongArray(31),
-            sp = 0uL,
-            pc = 0uL,
-            pstate = 0uL,
-            features = 0u,
-            fpsr = 0u,
-            fpcr = 0u,
-            v0Lo = 0uL,
-            v0Hi = 0uL,
-            message = message,
-        )
 }
 
+private fun buildRegisters(tid: Int, message: String): BridgeThreadRegistersReply =
+    BridgeThreadRegistersReply(
+        status = 0,
+        tid = tid,
+        flags = 0u,
+        regs = ULongArray(31),
+        sp = 0uL,
+        pc = 0uL,
+        pstate = 0uL,
+        features = 0u,
+        fpsr = 0u,
+        fpcr = 0u,
+        v0Lo = 0uL,
+        v0Hi = 0uL,
+        message = message,
+    )
