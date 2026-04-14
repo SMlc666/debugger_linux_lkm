@@ -6,4 +6,6 @@ sealed interface WorkspaceIntent {
     data class SelectSection(val section: WorkspaceSection) : WorkspaceIntent
 
     data class SelectThread(val tid: Int) : WorkspaceIntent
+
+    data class TogglePinnedEvent(val seq: ULong) : WorkspaceIntent
 }
