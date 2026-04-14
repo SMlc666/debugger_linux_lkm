@@ -7,6 +7,7 @@ import com.smlc666.lkmdbg.domain.gateway.SessionGatewayResult
 import com.smlc666.lkmdbg.domain.gateway.SessionGatewayState
 import com.smlc666.lkmdbg.shared.BridgeStatusCode
 import com.smlc666.lkmdbg.shared.BridgeStatusSnapshot
+import kotlinx.coroutines.CancellationException
 
 class SessionGatewayImpl(
     private val bridgeClient: SessionBridgeClient,
@@ -22,29 +23,41 @@ class SessionGatewayImpl(
     override fun currentState(): SessionGatewayState = current
 
     override suspend fun connect(): SessionGatewayResult {
-        val hello = bridgeClient.connect()
-        if (hello.status != BridgeStatusCode.Ok.wireValue) {
-            return errorResult("connect", hello.status, hello.message)
-        }
+        return try {
+            val hello = bridgeClient.connect()
+            if (hello.status != BridgeStatusCode.Ok.wireValue) {
+                return errorResult("connect", hello.status, hello.message)
+            }
 
-        val snapshot = bridgeClient.statusSnapshot()
-        if (snapshot.status != BridgeStatusCode.Ok.wireValue) {
-            return errorResult("statusSnapshot", snapshot.status, snapshot.message)
+            val snapshot = bridgeClient.statusSnapshot()
+            if (snapshot.status != BridgeStatusCode.Ok.wireValue) {
+                return errorResult("statusSnapshot", snapshot.status, snapshot.message)
+            }
+            applySnapshot(snapshot, requireSessionOpen = false)
+        } catch (t: Throwable) {
+            if (t is CancellationException)
+                throw t
+            exceptionResult("connect", t)
         }
-        return applySnapshot(snapshot, requireSessionOpen = false)
     }
 
     override suspend fun openSession(): SessionGatewayResult {
-        val open = bridgeClient.openSession()
-        if (open.status != BridgeStatusCode.Ok.wireValue) {
-            return errorResult("openSession", open.status, open.message)
-        }
+        return try {
+            val open = bridgeClient.openSession()
+            if (open.status != BridgeStatusCode.Ok.wireValue) {
+                return errorResult("openSession", open.status, open.message)
+            }
 
-        val snapshot = bridgeClient.statusSnapshot()
-        if (snapshot.status != BridgeStatusCode.Ok.wireValue) {
-            return errorResult("statusSnapshot", snapshot.status, snapshot.message)
+            val snapshot = bridgeClient.statusSnapshot()
+            if (snapshot.status != BridgeStatusCode.Ok.wireValue) {
+                return errorResult("statusSnapshot", snapshot.status, snapshot.message)
+            }
+            applySnapshot(snapshot, requireSessionOpen = true)
+        } catch (t: Throwable) {
+            if (t is CancellationException)
+                throw t
+            exceptionResult("openSession", t)
         }
-        return applySnapshot(snapshot, requireSessionOpen = true)
     }
 
     private fun applySnapshot(
@@ -78,6 +91,16 @@ class SessionGatewayImpl(
         } else {
             "$operation failed: $statusLabel ($message)"
         }
+        current = current.copy(
+            isConnected = false,
+            isSessionOpen = false,
+            message = mergedMessage,
+        )
+        return SessionGatewayResult.Error(mergedMessage)
+    }
+
+    private fun exceptionResult(operation: String, throwable: Throwable): SessionGatewayResult {
+        val mergedMessage = "$operation failed: ${throwable.message ?: throwable::class.java.simpleName}"
         current = current.copy(
             isConnected = false,
             isSessionOpen = false,
