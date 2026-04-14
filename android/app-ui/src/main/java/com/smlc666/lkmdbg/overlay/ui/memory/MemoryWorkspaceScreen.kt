@@ -55,7 +55,7 @@ fun MemoryWorkspaceSection(
     modifier: Modifier = Modifier,
 ) {
     // Session-local only: clear the saved list whenever a new session starts.
-    val viewModel = remember(bridgeState.snapshot.sessionId) {
+    val viewModel = remember(bridgeState.snapshot.sessionOpen, bridgeState.snapshot.sessionId) {
         MemoryWorkspaceViewModel(MemoryWorkspaceState.initial())
     }
     val workspaceState by viewModel.state.collectAsState()

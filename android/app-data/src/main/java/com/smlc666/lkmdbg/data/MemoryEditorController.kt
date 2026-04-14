@@ -183,6 +183,69 @@ internal class MemoryEditorController(
         writeBytesAtFocus(page.focusAddress, data)
     }
 
+    suspend fun writeHexAtAddress(remoteAddr: ULong, hexBytes: String) {
+        val data = parseHexBytes(hexBytes)
+        if (data == null || data.isEmpty())
+            throw IllegalStateException(appContext.getString(R.string.memory_error_invalid_hex))
+        writeBytesAtAddress(remoteAddr, data)
+    }
+
+    suspend fun writeHexAtAddresses(addresses: Set<ULong>, hexBytes: String) {
+        if (addresses.isEmpty())
+            return
+        val data = parseHexBytes(hexBytes)
+        if (data == null || data.isEmpty())
+            throw IllegalStateException(appContext.getString(R.string.memory_error_invalid_hex))
+
+        val page = stateFlow.value.memoryPage
+        var refreshPage = false
+        var lastReplyMessage = ""
+        for (remoteAddr in addresses) {
+            val reply = client.writeMemory(remoteAddr, data)
+            if (reply.status != 0 || reply.bytesDone.toInt() != data.size)
+                throw IllegalStateException(reply.message.ifBlank { "write failed bytes_done=${reply.bytesDone}" })
+            lastReplyMessage = reply.message
+            if (page != null && memoryPreviewBuilder.addressInsidePage(page, remoteAddr))
+                refreshPage = true
+        }
+        if (refreshPage && page != null) {
+            openPage(page.focusAddress)
+        }
+        stateFlow.update { current ->
+            current.copy(
+                lastMessage = lastReplyMessage.ifBlank {
+                    appContext.getString(
+                        R.string.memory_message_write_complete,
+                        data.size,
+                        hex64(addresses.first()),
+                    )
+                },
+            )
+        }
+    }
+
+    private suspend fun writeBytesAtAddress(remoteAddr: ULong, data: ByteArray) {
+        val reply = client.writeMemory(remoteAddr, data)
+        if (reply.status != 0 || reply.bytesDone.toInt() != data.size)
+            throw IllegalStateException(reply.message.ifBlank { "write failed bytes_done=${reply.bytesDone}" })
+
+        val page = stateFlow.value.memoryPage
+        if (page != null && memoryPreviewBuilder.addressInsidePage(page, remoteAddr))
+            openPage(page.focusAddress)
+
+        stateFlow.update { current ->
+            current.copy(
+                lastMessage = reply.message.ifBlank {
+                    appContext.getString(
+                        R.string.memory_message_write_complete,
+                        data.size,
+                        hex64(remoteAddr),
+                    )
+                },
+            )
+        }
+    }
+
     private suspend fun writeBytesAtFocus(focusAddress: ULong, data: ByteArray) {
         val reply = client.writeMemory(focusAddress, data)
         if (reply.status != 0 || reply.bytesDone.toInt() != data.size)

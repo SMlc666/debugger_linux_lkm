@@ -50,8 +50,6 @@ import com.smlc666.lkmdbg.data.ResolvedProcessRecord
 import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.data.SessionEventEntry
 import com.smlc666.lkmdbg.data.WorkspaceSection
-import com.smlc666.lkmdbg.overlay.presentation.workspace.WorkspaceIntent
-import com.smlc666.lkmdbg.overlay.presentation.workspace.WorkspaceUiState
 import com.smlc666.lkmdbg.overlay.ui.components.OverlayModalContainer
 import com.smlc666.lkmdbg.overlay.ui.memory.MemoryWorkspaceSection
 import com.smlc666.lkmdbg.shared.BridgeHwpointRecord
@@ -73,8 +71,6 @@ private data class MetricTileSpec(
 @Composable
 fun WorkingBar(
     state: SessionBridgeState,
-    memoryToolsOpen: Boolean,
-    onToggleMemoryTools: () -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -110,8 +106,6 @@ fun WorkingBar(
                     append(" · ")
                     append(hex64(memoryPage.focusAddress))
                 }
-                if (memoryToolsOpen)
-                    append(" · tools")
             }
             Text(
                 text = statusText,
@@ -120,67 +114,15 @@ fun WorkingBar(
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
             )
-
-            IconButton(
-                onClick = onToggleMemoryTools,
-                modifier = Modifier
-                    .width(36.dp)
-                    .height(36.dp),
-            ) {
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_lkmdbg_radar),
-                    contentDescription = stringResource(R.string.memory_action_tools),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(4.dp),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
         }
     }
 }
 
 @Composable
 fun MainWorkspaceScreen(
-    state: WorkspaceUiState,
-    dispatch: (WorkspaceIntent) -> Unit,
-    onClose: () -> Unit,
-    onCollapse: () -> Unit,
-) {
-    val sections = remember {
-        listOf(
-            WorkspaceSection.Session,
-            WorkspaceSection.Processes,
-            WorkspaceSection.Memory,
-            WorkspaceSection.Threads,
-            WorkspaceSection.Events,
-        )
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        CategoryRow(
-            sections = sections,
-            selectedSection = state.section,
-            onSectionSelected = { section -> dispatch(WorkspaceIntent.SelectSection(section)) },
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
-}
-
-@Composable
-fun MainWorkspaceScreen(
     state: SessionBridgeState,
-    memoryViewMode: Int,
-    memoryToolsOpen: Boolean,
     onSectionSelected: (WorkspaceSection) -> Unit,
     onToggleProcessPicker: () -> Unit,
-    onToggleMemoryTools: () -> Unit,
     onTargetPidInputChanged: (String) -> Unit,
     onTargetTidInputChanged: (String) -> Unit,
     onConnect: () -> Unit,
@@ -212,334 +154,84 @@ fun MainWorkspaceScreen(
     onToggleEventsAutoPoll: () -> Unit,
     onClearEvents: () -> Unit,
     onTogglePinnedEvent: (ULong) -> Unit,
-    onOpenEventThread: (Int) -> Unit,
     onOpenEventValue: (ULong) -> Unit,
     onStepMemoryPage: (Int) -> Unit,
     onSelectMemoryAddress: (ULong) -> Unit,
     onMemorySearchQueryChanged: (String) -> Unit,
-    onMemoryAddressInputChanged: (String) -> Unit,
-    onMemorySelectionSizeChanged: (Int) -> Unit,
-    onMemoryWriteHexChanged: (String) -> Unit,
-    onMemoryWriteAsciiChanged: (String) -> Unit,
-    onMemoryWriteAsmChanged: (String) -> Unit,
     onCycleMemorySearchValueType: () -> Unit,
     onCycleMemorySearchRefineMode: () -> Unit,
     onCycleMemoryRegionPreset: () -> Unit,
-    onJumpMemoryAddress: () -> Unit,
-    onLoadSelectionIntoHexSearch: () -> Unit,
-    onLoadSelectionIntoAsciiSearch: () -> Unit,
-    onLoadSelectionIntoEditors: () -> Unit,
-    onWriteHexAtFocus: () -> Unit,
-    onWriteAsciiAtFocus: () -> Unit,
-    onAssembleToEditors: () -> Unit,
-    onAssembleAndWrite: () -> Unit,
     onRunMemorySearch: () -> Unit,
     onRefineMemorySearch: () -> Unit,
-    onRefreshVmas: () -> Unit,
-    onRefreshImages: () -> Unit,
-    onShowMemoryResults: () -> Unit,
-    onShowMemoryPage: () -> Unit,
+    onWriteHexAtAddress: ((ULong, String) -> Unit)? = null,
+    onWriteHexAtAddresses: ((Set<ULong>, String) -> Unit)? = null,
     onPreviewSelectedPc: () -> Unit,
     onClose: () -> Unit,
     onCollapse: () -> Unit,
 ) {
-    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-    val dispatchBridge = remember(onSectionSelected, onSelectThread, onTogglePinnedEvent) {
-        { intent: WorkspaceIntent ->
-            when (intent) {
-                is WorkspaceIntent.SelectSection -> onSectionSelected(intent.section)
-                is WorkspaceIntent.SelectThread -> onSelectThread(intent.tid)
-                is WorkspaceIntent.TogglePinnedEvent -> onTogglePinnedEvent(intent.seq)
-            }
-        }
+    var workspaceNavOpen by rememberSaveable { mutableStateOf(false) }
+
+    val closeWorkspaceNavToMemory = {
+        workspaceNavOpen = false
+        onSectionSelected(WorkspaceSection.Memory)
     }
-    val adapters = remember(dispatchBridge) { workspaceDispatchAdapters(dispatchBridge) }
-    val sections = listOf(
-        WorkspaceSection.Session,
-        WorkspaceSection.Processes,
-        WorkspaceSection.Memory,
-        WorkspaceSection.Threads,
-        WorkspaceSection.Events,
-    )
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
-        if (isLandscape) {
-            Row(modifier = Modifier.fillMaxSize()) {
-                CategoryColumn(
-                    sections = sections,
-                    selectedSection = state.workspaceSection,
-                    onSectionSelected = onSectionSelected,
-                    modifier = Modifier
-                        .width(80.dp)
-                        .fillMaxHeight(),
-                )
-
-                WorkspaceColumn(
-                    state = state,
-                    memoryViewMode = memoryViewMode,
-                    memoryToolsOpen = memoryToolsOpen,
-                    onToggleProcessPicker = onToggleProcessPicker,
-                    onToggleMemoryTools = onToggleMemoryTools,
-                    onTargetPidInputChanged = onTargetPidInputChanged,
-                    onTargetTidInputChanged = onTargetTidInputChanged,
-                    onConnect = onConnect,
-                    onOpenSession = onOpenSession,
-                    onRefreshSession = onRefreshSession,
-                    onAttachTarget = onAttachTarget,
-                    onRefreshStopState = onRefreshStopState,
-                    onFreezeThreads = onFreezeThreads,
-                    onThawThreads = onThawThreads,
-                    onContinueTarget = onContinueTarget,
-                    onSingleStep = onSingleStep,
-                    onRefreshProcesses = onRefreshProcesses,
-                    onProcessFilterSelected = onProcessFilterSelected,
-                    onSelectProcess = onSelectProcess,
-                    onAttachSelectedProcess = onAttachSelectedProcess,
-                    onRefreshThreads = onRefreshThreads,
-                    onSelectThread = onSelectThread,
-                    onRefreshSelectedThreadRegisters = onRefreshSelectedThreadRegisters,
-                    onHwpointAddressChanged = onHwpointAddressChanged,
-                    onHwpointLengthChanged = onHwpointLengthChanged,
-                    onCycleHwpointPreset = onCycleHwpointPreset,
-                    onUseSelectedPcForHwpoint = onUseSelectedPcForHwpoint,
-                    onUseMemoryFocusForHwpoint = onUseMemoryFocusForHwpoint,
-                    onAddHwpoint = onAddHwpoint,
-                    onSelectHwpoint = onSelectHwpoint,
-                    onRemoveSelectedHwpoint = onRemoveSelectedHwpoint,
-                    onRefreshHwpoints = onRefreshHwpoints,
-                    onRefreshEvents = onRefreshEvents,
-                    onToggleEventsAutoPoll = onToggleEventsAutoPoll,
-                    onClearEvents = onClearEvents,
-                    onTogglePinnedEvent = onTogglePinnedEvent,
-                    onOpenEventThread = adapters.openEventThread,
-                    onOpenEventValue = onOpenEventValue,
-                    onStepMemoryPage = onStepMemoryPage,
-                    onSelectMemoryAddress = onSelectMemoryAddress,
-                    onMemorySearchQueryChanged = onMemorySearchQueryChanged,
-                    onMemoryAddressInputChanged = onMemoryAddressInputChanged,
-                    onMemorySelectionSizeChanged = onMemorySelectionSizeChanged,
-                    onMemoryWriteHexChanged = onMemoryWriteHexChanged,
-                    onMemoryWriteAsciiChanged = onMemoryWriteAsciiChanged,
-                    onMemoryWriteAsmChanged = onMemoryWriteAsmChanged,
-                    onCycleMemorySearchValueType = onCycleMemorySearchValueType,
-                    onCycleMemorySearchRefineMode = onCycleMemorySearchRefineMode,
-                    onCycleMemoryRegionPreset = onCycleMemoryRegionPreset,
-                    onJumpMemoryAddress = onJumpMemoryAddress,
-                    onLoadSelectionIntoHexSearch = onLoadSelectionIntoHexSearch,
-                    onLoadSelectionIntoAsciiSearch = onLoadSelectionIntoAsciiSearch,
-                    onLoadSelectionIntoEditors = onLoadSelectionIntoEditors,
-                    onWriteHexAtFocus = onWriteHexAtFocus,
-                    onWriteAsciiAtFocus = onWriteAsciiAtFocus,
-                    onAssembleToEditors = onAssembleToEditors,
-                    onAssembleAndWrite = onAssembleAndWrite,
-                    onRunMemorySearch = onRunMemorySearch,
-                    onRefineMemorySearch = onRefineMemorySearch,
-                    onRefreshVmas = onRefreshVmas,
-                    onRefreshImages = onRefreshImages,
-                    onShowMemoryResults = onShowMemoryResults,
-                    onShowMemoryPage = onShowMemoryPage,
-                    onPreviewSelectedPc = onPreviewSelectedPc,
-                    onClose = onClose,
-                    onCollapse = onCollapse,
-                )
-            }
-        } else {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CategoryRow(
-                        sections = sections,
-                        selectedSection = state.workspaceSection,
-                        onSectionSelected = onSectionSelected,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Spacer(modifier = Modifier.width(48.dp))
-                }
-                WorkspaceColumn(
-                    state = state,
-                    memoryViewMode = memoryViewMode,
-                    memoryToolsOpen = memoryToolsOpen,
-                    onToggleProcessPicker = onToggleProcessPicker,
-                    onToggleMemoryTools = onToggleMemoryTools,
-                    onTargetPidInputChanged = onTargetPidInputChanged,
-                    onTargetTidInputChanged = onTargetTidInputChanged,
-                    onConnect = onConnect,
-                    onOpenSession = onOpenSession,
-                    onRefreshSession = onRefreshSession,
-                    onAttachTarget = onAttachTarget,
-                    onRefreshStopState = onRefreshStopState,
-                    onFreezeThreads = onFreezeThreads,
-                    onThawThreads = onThawThreads,
-                    onContinueTarget = onContinueTarget,
-                    onSingleStep = onSingleStep,
-                    onRefreshProcesses = onRefreshProcesses,
-                    onProcessFilterSelected = onProcessFilterSelected,
-                    onSelectProcess = onSelectProcess,
-                    onAttachSelectedProcess = onAttachSelectedProcess,
-                    onRefreshThreads = onRefreshThreads,
-                    onSelectThread = onSelectThread,
-                    onRefreshSelectedThreadRegisters = onRefreshSelectedThreadRegisters,
-                    onHwpointAddressChanged = onHwpointAddressChanged,
-                    onHwpointLengthChanged = onHwpointLengthChanged,
-                    onCycleHwpointPreset = onCycleHwpointPreset,
-                    onUseSelectedPcForHwpoint = onUseSelectedPcForHwpoint,
-                    onUseMemoryFocusForHwpoint = onUseMemoryFocusForHwpoint,
-                    onAddHwpoint = onAddHwpoint,
-                    onSelectHwpoint = onSelectHwpoint,
-                    onRemoveSelectedHwpoint = onRemoveSelectedHwpoint,
-                    onRefreshHwpoints = onRefreshHwpoints,
-                    onRefreshEvents = onRefreshEvents,
-                    onToggleEventsAutoPoll = onToggleEventsAutoPoll,
-                    onClearEvents = onClearEvents,
-                    onTogglePinnedEvent = onTogglePinnedEvent,
-                    onOpenEventThread = adapters.openEventThread,
-                    onOpenEventValue = onOpenEventValue,
-                    onStepMemoryPage = onStepMemoryPage,
-                    onSelectMemoryAddress = onSelectMemoryAddress,
-                    onMemorySearchQueryChanged = onMemorySearchQueryChanged,
-                    onMemoryAddressInputChanged = onMemoryAddressInputChanged,
-                    onMemorySelectionSizeChanged = onMemorySelectionSizeChanged,
-                    onMemoryWriteHexChanged = onMemoryWriteHexChanged,
-                    onMemoryWriteAsciiChanged = onMemoryWriteAsciiChanged,
-                    onMemoryWriteAsmChanged = onMemoryWriteAsmChanged,
-                    onCycleMemorySearchValueType = onCycleMemorySearchValueType,
-                    onCycleMemorySearchRefineMode = onCycleMemorySearchRefineMode,
-                    onCycleMemoryRegionPreset = onCycleMemoryRegionPreset,
-                    onJumpMemoryAddress = onJumpMemoryAddress,
-                    onLoadSelectionIntoHexSearch = onLoadSelectionIntoHexSearch,
-                    onLoadSelectionIntoAsciiSearch = onLoadSelectionIntoAsciiSearch,
-                    onLoadSelectionIntoEditors = onLoadSelectionIntoEditors,
-                    onWriteHexAtFocus = onWriteHexAtFocus,
-                    onWriteAsciiAtFocus = onWriteAsciiAtFocus,
-                    onAssembleToEditors = onAssembleToEditors,
-                    onAssembleAndWrite = onAssembleAndWrite,
-                    onRunMemorySearch = onRunMemorySearch,
-                    onRefineMemorySearch = onRefineMemorySearch,
-                    onRefreshVmas = onRefreshVmas,
-                    onRefreshImages = onRefreshImages,
-                    onShowMemoryResults = onShowMemoryResults,
-                    onShowMemoryPage = onShowMemoryPage,
-                    onPreviewSelectedPc = onPreviewSelectedPc,
-                    onClose = onClose,
-                    onCollapse = onCollapse,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun WorkspaceColumn(
-    state: SessionBridgeState,
-    memoryViewMode: Int,
-    memoryToolsOpen: Boolean,
-    onToggleProcessPicker: () -> Unit,
-    onToggleMemoryTools: () -> Unit,
-    onTargetPidInputChanged: (String) -> Unit,
-    onTargetTidInputChanged: (String) -> Unit,
-    onConnect: () -> Unit,
-    onOpenSession: () -> Unit,
-    onRefreshSession: () -> Unit,
-    onAttachTarget: () -> Unit,
-    onRefreshStopState: () -> Unit,
-    onFreezeThreads: () -> Unit,
-    onThawThreads: () -> Unit,
-    onContinueTarget: () -> Unit,
-    onSingleStep: () -> Unit,
-    onRefreshProcesses: () -> Unit,
-    onProcessFilterSelected: (ProcessFilter) -> Unit,
-    onSelectProcess: (Int) -> Unit,
-    onAttachSelectedProcess: (Int) -> Unit,
-    onRefreshThreads: () -> Unit,
-    onSelectThread: (Int) -> Unit,
-    onRefreshSelectedThreadRegisters: () -> Unit,
-    onHwpointAddressChanged: (String) -> Unit,
-    onHwpointLengthChanged: (String) -> Unit,
-    onCycleHwpointPreset: () -> Unit,
-    onUseSelectedPcForHwpoint: () -> Unit,
-    onUseMemoryFocusForHwpoint: () -> Unit,
-    onAddHwpoint: () -> Unit,
-    onSelectHwpoint: (ULong) -> Unit,
-    onRemoveSelectedHwpoint: () -> Unit,
-    onRefreshHwpoints: () -> Unit,
-    onRefreshEvents: () -> Unit,
-    onToggleEventsAutoPoll: () -> Unit,
-    onClearEvents: () -> Unit,
-    onTogglePinnedEvent: (ULong) -> Unit,
-    onOpenEventThread: (Int) -> Unit,
-    onOpenEventValue: (ULong) -> Unit,
-    onStepMemoryPage: (Int) -> Unit,
-    onSelectMemoryAddress: (ULong) -> Unit,
-    onMemorySearchQueryChanged: (String) -> Unit,
-    onMemoryAddressInputChanged: (String) -> Unit,
-    onMemorySelectionSizeChanged: (Int) -> Unit,
-    onMemoryWriteHexChanged: (String) -> Unit,
-    onMemoryWriteAsciiChanged: (String) -> Unit,
-    onMemoryWriteAsmChanged: (String) -> Unit,
-    onCycleMemorySearchValueType: () -> Unit,
-    onCycleMemorySearchRefineMode: () -> Unit,
-    onCycleMemoryRegionPreset: () -> Unit,
-    onJumpMemoryAddress: () -> Unit,
-    onLoadSelectionIntoHexSearch: () -> Unit,
-    onLoadSelectionIntoAsciiSearch: () -> Unit,
-    onLoadSelectionIntoEditors: () -> Unit,
-    onWriteHexAtFocus: () -> Unit,
-    onWriteAsciiAtFocus: () -> Unit,
-    onAssembleToEditors: () -> Unit,
-    onAssembleAndWrite: () -> Unit,
-    onRunMemorySearch: () -> Unit,
-    onRefineMemorySearch: () -> Unit,
-    onRefreshVmas: () -> Unit,
-    onRefreshImages: () -> Unit,
-    onShowMemoryResults: () -> Unit,
-    onShowMemoryPage: () -> Unit,
-    onPreviewSelectedPc: () -> Unit,
-    onClose: () -> Unit,
-    onCollapse: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(8.dp),
-    ) {
-        TopBarArea(
-            onClose = onClose,
-            onCollapse = onCollapse,
-            state = state,
-            onToggleProcessPicker = onToggleProcessPicker,
-        )
-
-        if (state.workspaceSection == WorkspaceSection.Memory) {
-            WorkingBar(
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TopBarArea(
+                onClose = onClose,
+                onCollapse = onCollapse,
                 state = state,
-                memoryToolsOpen = memoryToolsOpen,
-                onToggleMemoryTools = onToggleMemoryTools,
+                onToggleProcessPicker = onToggleProcessPicker,
+                onOpenWorkspaceNav = {
+                    workspaceNavOpen = true
+                    if (state.workspaceSection == WorkspaceSection.Memory) {
+                        onSectionSelected(WorkspaceSection.Session)
+                    }
+                },
+            )
+
+            WorkingBar(state = state)
+
+            MemoryWorkspaceSection(
+                bridgeState = state,
+                onSearchQueryChanged = onMemorySearchQueryChanged,
+                onRunSearch = onRunMemorySearch,
+                onRefineSearch = onRefineMemorySearch,
+                onCycleValueType = onCycleMemorySearchValueType,
+                onCycleRefineMode = onCycleMemorySearchRefineMode,
+                onCycleRegionPreset = onCycleMemoryRegionPreset,
+                onStepPage = onStepMemoryPage,
+                onSelectAddress = onSelectMemoryAddress,
+                onWriteHexAtAddress = onWriteHexAtAddress,
+                onWriteHexAtAddresses = onWriteHexAtAddresses,
+                modifier = Modifier.weight(1f),
             )
         }
 
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(top = 8.dp),
-        ) {
-            MainContentArea(
+        if (workspaceNavOpen) {
+            WorkspaceNavDialog(
                 state = state,
-                memoryViewMode = memoryViewMode,
-                memoryToolsOpen = memoryToolsOpen,
+                onDismiss = closeWorkspaceNavToMemory,
+                onSectionSelected = onSectionSelected,
                 onTargetPidInputChanged = onTargetPidInputChanged,
                 onTargetTidInputChanged = onTargetTidInputChanged,
                 onConnect = onConnect,
                 onOpenSession = onOpenSession,
                 onRefreshSession = onRefreshSession,
-                onAttachTarget = onAttachTarget,
+                onAttachTarget = {
+                    closeWorkspaceNavToMemory()
+                    onAttachTarget()
+                },
                 onRefreshStopState = onRefreshStopState,
                 onFreezeThreads = onFreezeThreads,
                 onThawThreads = onThawThreads,
@@ -548,7 +240,10 @@ private fun WorkspaceColumn(
                 onRefreshProcesses = onRefreshProcesses,
                 onProcessFilterSelected = onProcessFilterSelected,
                 onSelectProcess = onSelectProcess,
-                onAttachSelectedProcess = onAttachSelectedProcess,
+                onAttachSelectedProcess = { pid ->
+                    closeWorkspaceNavToMemory()
+                    onAttachSelectedProcess(pid)
+                },
                 onRefreshThreads = onRefreshThreads,
                 onSelectThread = onSelectThread,
                 onRefreshSelectedThreadRegisters = onRefreshSelectedThreadRegisters,
@@ -565,35 +260,176 @@ private fun WorkspaceColumn(
                 onToggleEventsAutoPoll = onToggleEventsAutoPoll,
                 onClearEvents = onClearEvents,
                 onTogglePinnedEvent = onTogglePinnedEvent,
-                onOpenEventThread = onOpenEventThread,
-                onOpenEventValue = onOpenEventValue,
-                onStepMemoryPage = onStepMemoryPage,
-                onSelectMemoryAddress = onSelectMemoryAddress,
-                onMemorySearchQueryChanged = onMemorySearchQueryChanged,
-                onMemoryAddressInputChanged = onMemoryAddressInputChanged,
-                onMemorySelectionSizeChanged = onMemorySelectionSizeChanged,
-                onMemoryWriteHexChanged = onMemoryWriteHexChanged,
-                onMemoryWriteAsciiChanged = onMemoryWriteAsciiChanged,
-                onMemoryWriteAsmChanged = onMemoryWriteAsmChanged,
-                onCycleMemorySearchValueType = onCycleMemorySearchValueType,
-                onCycleMemorySearchRefineMode = onCycleMemorySearchRefineMode,
-                onCycleMemoryRegionPreset = onCycleMemoryRegionPreset,
-                onJumpMemoryAddress = onJumpMemoryAddress,
-                onLoadSelectionIntoHexSearch = onLoadSelectionIntoHexSearch,
-                onLoadSelectionIntoAsciiSearch = onLoadSelectionIntoAsciiSearch,
-                onLoadSelectionIntoEditors = onLoadSelectionIntoEditors,
-                onWriteHexAtFocus = onWriteHexAtFocus,
-                onWriteAsciiAtFocus = onWriteAsciiAtFocus,
-                onAssembleToEditors = onAssembleToEditors,
-                onAssembleAndWrite = onAssembleAndWrite,
-                onRunMemorySearch = onRunMemorySearch,
-                onRefineMemorySearch = onRefineMemorySearch,
-                onRefreshVmas = onRefreshVmas,
-                onRefreshImages = onRefreshImages,
-                onShowMemoryResults = onShowMemoryResults,
-                onShowMemoryPage = onShowMemoryPage,
-                onPreviewSelectedPc = onPreviewSelectedPc,
+                onOpenEventThread = { tid ->
+                    onSectionSelected(WorkspaceSection.Threads)
+                    onSelectThread(tid)
+                },
+                onOpenEventValue = { value ->
+                    closeWorkspaceNavToMemory()
+                    onOpenEventValue(value)
+                },
+                onPreviewSelectedPc = {
+                    closeWorkspaceNavToMemory()
+                    onPreviewSelectedPc()
+                },
             )
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceNavDialog(
+    state: SessionBridgeState,
+    onDismiss: () -> Unit,
+    onSectionSelected: (WorkspaceSection) -> Unit,
+    onTargetPidInputChanged: (String) -> Unit,
+    onTargetTidInputChanged: (String) -> Unit,
+    onConnect: () -> Unit,
+    onOpenSession: () -> Unit,
+    onRefreshSession: () -> Unit,
+    onAttachTarget: () -> Unit,
+    onRefreshStopState: () -> Unit,
+    onFreezeThreads: () -> Unit,
+    onThawThreads: () -> Unit,
+    onContinueTarget: () -> Unit,
+    onSingleStep: () -> Unit,
+    onRefreshProcesses: () -> Unit,
+    onProcessFilterSelected: (ProcessFilter) -> Unit,
+    onSelectProcess: (Int) -> Unit,
+    onAttachSelectedProcess: (Int) -> Unit,
+    onRefreshThreads: () -> Unit,
+    onSelectThread: (Int) -> Unit,
+    onRefreshSelectedThreadRegisters: () -> Unit,
+    onHwpointAddressChanged: (String) -> Unit,
+    onHwpointLengthChanged: (String) -> Unit,
+    onCycleHwpointPreset: () -> Unit,
+    onUseSelectedPcForHwpoint: () -> Unit,
+    onUseMemoryFocusForHwpoint: () -> Unit,
+    onAddHwpoint: () -> Unit,
+    onSelectHwpoint: (ULong) -> Unit,
+    onRemoveSelectedHwpoint: () -> Unit,
+    onRefreshHwpoints: () -> Unit,
+    onRefreshEvents: () -> Unit,
+    onToggleEventsAutoPoll: () -> Unit,
+    onClearEvents: () -> Unit,
+    onTogglePinnedEvent: (ULong) -> Unit,
+    onOpenEventThread: (Int) -> Unit,
+    onOpenEventValue: (ULong) -> Unit,
+    onPreviewSelectedPc: () -> Unit,
+) {
+    val sections = remember {
+        listOf(
+            WorkspaceSection.Memory,
+            WorkspaceSection.Session,
+            WorkspaceSection.Processes,
+            WorkspaceSection.Threads,
+            WorkspaceSection.Events,
+        )
+    }
+
+    OverlayModalContainer(onDismiss = onDismiss) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.9f),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 4.dp,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Spacer(modifier = Modifier.weight(1f))
+                    OutlinedButton(onClick = onDismiss) {
+                        Text(stringResource(R.string.memory_ranges_close))
+                    }
+                }
+
+                CompactFilterRow(
+                    filters = sections,
+                    selectedFilter = state.workspaceSection,
+                    labelFor = { stringResource(workspaceSectionLabelRes(it)) },
+                    onSelected = { section ->
+                        if (section == WorkspaceSection.Memory) {
+                            onDismiss()
+                        } else {
+                            onSectionSelected(section)
+                        }
+                    },
+                )
+
+                HorizontalDivider()
+
+                Box(modifier = Modifier.weight(1f)) {
+                    when (state.workspaceSection) {
+                        WorkspaceSection.Session -> SessionSectionContent(
+                            state = state,
+                            onTargetPidInputChanged = onTargetPidInputChanged,
+                            onTargetTidInputChanged = onTargetTidInputChanged,
+                            onConnect = onConnect,
+                            onOpenSession = onOpenSession,
+                            onRefreshSession = onRefreshSession,
+                            onAttachTarget = onAttachTarget,
+                            onRefreshStopState = onRefreshStopState,
+                            onFreezeThreads = onFreezeThreads,
+                            onThawThreads = onThawThreads,
+                            onContinueTarget = onContinueTarget,
+                            onSingleStep = onSingleStep,
+                            onHwpointAddressChanged = onHwpointAddressChanged,
+                            onHwpointLengthChanged = onHwpointLengthChanged,
+                            onCycleHwpointPreset = onCycleHwpointPreset,
+                            onUseSelectedPcForHwpoint = onUseSelectedPcForHwpoint,
+                            onUseMemoryFocusForHwpoint = onUseMemoryFocusForHwpoint,
+                            onAddHwpoint = onAddHwpoint,
+                            onSelectHwpoint = onSelectHwpoint,
+                            onRemoveSelectedHwpoint = onRemoveSelectedHwpoint,
+                            onRefreshHwpoints = onRefreshHwpoints,
+                        )
+
+                        WorkspaceSection.Processes -> ProcessesSectionContent(
+                            state = state,
+                            onRefreshProcesses = onRefreshProcesses,
+                            onProcessFilterSelected = onProcessFilterSelected,
+                            onSelectProcess = onSelectProcess,
+                            onAttachSelectedProcess = onAttachSelectedProcess,
+                        )
+
+                        WorkspaceSection.Threads -> ThreadsSectionContent(
+                            state = state,
+                            onRefreshThreads = onRefreshThreads,
+                            onSelectThread = onSelectThread,
+                            onRefreshSelectedThreadRegisters = onRefreshSelectedThreadRegisters,
+                            onPreviewSelectedPc = onPreviewSelectedPc,
+                            onSingleStep = onSingleStep,
+                        )
+
+                        WorkspaceSection.Events -> EventsSectionContent(
+                            state = state,
+                            onRefreshEvents = onRefreshEvents,
+                            onToggleEventsAutoPoll = onToggleEventsAutoPoll,
+                            onClearEvents = onClearEvents,
+                            onTogglePinnedEvent = onTogglePinnedEvent,
+                            onOpenEventThread = onOpenEventThread,
+                            onOpenEventValue = onOpenEventValue,
+                        )
+
+                        else -> {
+                            Text(
+                                text = stringResource(workspaceSectionLabelRes(WorkspaceSection.Memory)),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -604,6 +440,7 @@ fun TopBarArea(
     onCollapse: () -> Unit,
     state: SessionBridgeState,
     onToggleProcessPicker: () -> Unit,
+    onOpenWorkspaceNav: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -627,85 +464,14 @@ fun TopBarArea(
             modifier = Modifier.padding(start = 8.dp),
         )
         Spacer(modifier = Modifier.weight(1f))
+        IconButton(onClick = onOpenWorkspaceNav) {
+            Text("...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         IconButton(onClick = onCollapse) {
             Text("-", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         IconButton(onClick = onClose) {
             Text("X", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-fun CategoryColumn(
-    sections: List<WorkspaceSection>,
-    selectedSection: WorkspaceSection,
-    onSectionSelected: (WorkspaceSection) -> Unit,
-    modifier: Modifier,
-) {
-    Column(
-        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        sections.forEach { section ->
-            val isSelected = selectedSection == section
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .background(
-                        if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                    )
-                    .clickable { onSectionSelected(section) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painter = painterResource(id = workspaceSectionIconRes(section)),
-                    contentDescription = stringResource(id = workspaceSectionLabelRes(section)),
-                    tint = if (isSelected) {
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun CategoryRow(
-    sections: List<WorkspaceSection>,
-    selectedSection: WorkspaceSection,
-    onSectionSelected: (WorkspaceSection) -> Unit,
-    modifier: Modifier,
-) {
-    Row(
-        modifier = modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .height(48.dp),
-    ) {
-        sections.forEach { section ->
-            val isSelected = selectedSection == section
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .background(
-                        if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                    )
-                    .clickable { onSectionSelected(section) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painter = painterResource(id = workspaceSectionIconRes(section)),
-                    contentDescription = stringResource(id = workspaceSectionLabelRes(section)),
-                    tint = if (isSelected) {
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
         }
     }
 }
@@ -753,157 +519,6 @@ fun AppListButton(state: SessionBridgeState, onClick: () -> Unit) {
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-    }
-}
-
-@Composable
-fun MainContentArea(
-    state: SessionBridgeState,
-    memoryViewMode: Int,
-    memoryToolsOpen: Boolean,
-    onTargetPidInputChanged: (String) -> Unit,
-    onTargetTidInputChanged: (String) -> Unit,
-    onConnect: () -> Unit,
-    onOpenSession: () -> Unit,
-    onRefreshSession: () -> Unit,
-    onAttachTarget: () -> Unit,
-    onRefreshStopState: () -> Unit,
-    onFreezeThreads: () -> Unit,
-    onThawThreads: () -> Unit,
-    onContinueTarget: () -> Unit,
-    onSingleStep: () -> Unit,
-    onRefreshProcesses: () -> Unit,
-    onProcessFilterSelected: (ProcessFilter) -> Unit,
-    onSelectProcess: (Int) -> Unit,
-    onAttachSelectedProcess: (Int) -> Unit,
-    onRefreshThreads: () -> Unit,
-    onSelectThread: (Int) -> Unit,
-    onRefreshSelectedThreadRegisters: () -> Unit,
-    onHwpointAddressChanged: (String) -> Unit,
-    onHwpointLengthChanged: (String) -> Unit,
-    onCycleHwpointPreset: () -> Unit,
-    onUseSelectedPcForHwpoint: () -> Unit,
-    onUseMemoryFocusForHwpoint: () -> Unit,
-    onAddHwpoint: () -> Unit,
-    onSelectHwpoint: (ULong) -> Unit,
-    onRemoveSelectedHwpoint: () -> Unit,
-    onRefreshHwpoints: () -> Unit,
-    onRefreshEvents: () -> Unit,
-    onToggleEventsAutoPoll: () -> Unit,
-    onClearEvents: () -> Unit,
-    onTogglePinnedEvent: (ULong) -> Unit,
-    onOpenEventThread: (Int) -> Unit,
-    onOpenEventValue: (ULong) -> Unit,
-    onStepMemoryPage: (Int) -> Unit,
-    onSelectMemoryAddress: (ULong) -> Unit,
-    onMemorySearchQueryChanged: (String) -> Unit,
-    onMemoryAddressInputChanged: (String) -> Unit,
-    onMemorySelectionSizeChanged: (Int) -> Unit,
-    onMemoryWriteHexChanged: (String) -> Unit,
-    onMemoryWriteAsciiChanged: (String) -> Unit,
-    onMemoryWriteAsmChanged: (String) -> Unit,
-    onCycleMemorySearchValueType: () -> Unit,
-    onCycleMemorySearchRefineMode: () -> Unit,
-    onCycleMemoryRegionPreset: () -> Unit,
-    onJumpMemoryAddress: () -> Unit,
-    onLoadSelectionIntoHexSearch: () -> Unit,
-    onLoadSelectionIntoAsciiSearch: () -> Unit,
-    onLoadSelectionIntoEditors: () -> Unit,
-    onWriteHexAtFocus: () -> Unit,
-    onWriteAsciiAtFocus: () -> Unit,
-    onAssembleToEditors: () -> Unit,
-    onAssembleAndWrite: () -> Unit,
-    onRunMemorySearch: () -> Unit,
-    onRefineMemorySearch: () -> Unit,
-    onRefreshVmas: () -> Unit,
-    onRefreshImages: () -> Unit,
-    onShowMemoryResults: () -> Unit,
-    onShowMemoryPage: () -> Unit,
-    onPreviewSelectedPc: () -> Unit,
-) {
-    when (state.workspaceSection) {
-        WorkspaceSection.Session -> SessionSectionContent(
-            state = state,
-            onTargetPidInputChanged = onTargetPidInputChanged,
-            onTargetTidInputChanged = onTargetTidInputChanged,
-            onConnect = onConnect,
-            onOpenSession = onOpenSession,
-            onRefreshSession = onRefreshSession,
-            onAttachTarget = onAttachTarget,
-            onRefreshStopState = onRefreshStopState,
-            onFreezeThreads = onFreezeThreads,
-            onThawThreads = onThawThreads,
-            onContinueTarget = onContinueTarget,
-            onSingleStep = onSingleStep,
-            onHwpointAddressChanged = onHwpointAddressChanged,
-            onHwpointLengthChanged = onHwpointLengthChanged,
-            onCycleHwpointPreset = onCycleHwpointPreset,
-            onUseSelectedPcForHwpoint = onUseSelectedPcForHwpoint,
-            onUseMemoryFocusForHwpoint = onUseMemoryFocusForHwpoint,
-            onAddHwpoint = onAddHwpoint,
-            onSelectHwpoint = onSelectHwpoint,
-            onRemoveSelectedHwpoint = onRemoveSelectedHwpoint,
-            onRefreshHwpoints = onRefreshHwpoints,
-        )
-
-        WorkspaceSection.Processes -> ProcessesSectionContent(
-            state = state,
-            onRefreshProcesses = onRefreshProcesses,
-            onProcessFilterSelected = onProcessFilterSelected,
-            onSelectProcess = onSelectProcess,
-            onAttachSelectedProcess = onAttachSelectedProcess,
-        )
-
-        WorkspaceSection.Memory -> MemorySectionContent(
-            state = state,
-            memoryToolsOpen = memoryToolsOpen,
-            viewMode = memoryViewMode,
-            onStepPage = onStepMemoryPage,
-            onSelectAddress = onSelectMemoryAddress,
-            onSearchQueryChanged = onMemorySearchQueryChanged,
-            onAddressInputChanged = onMemoryAddressInputChanged,
-            onSelectionSizeChanged = onMemorySelectionSizeChanged,
-            onHexInputChanged = onMemoryWriteHexChanged,
-            onAsciiInputChanged = onMemoryWriteAsciiChanged,
-            onAsmInputChanged = onMemoryWriteAsmChanged,
-            onCycleValueType = onCycleMemorySearchValueType,
-            onCycleRefineMode = onCycleMemorySearchRefineMode,
-            onCycleRegionPreset = onCycleMemoryRegionPreset,
-            onJumpAddress = onJumpMemoryAddress,
-            onLoadSelectionIntoHexSearch = onLoadSelectionIntoHexSearch,
-            onLoadSelectionIntoAsciiSearch = onLoadSelectionIntoAsciiSearch,
-            onLoadSelectionIntoEditors = onLoadSelectionIntoEditors,
-            onWriteHexAtFocus = onWriteHexAtFocus,
-            onWriteAsciiAtFocus = onWriteAsciiAtFocus,
-            onAssembleToEditors = onAssembleToEditors,
-            onAssembleAndWrite = onAssembleAndWrite,
-            onRunSearch = onRunMemorySearch,
-            onRefineSearch = onRefineMemorySearch,
-            onRefreshVmas = onRefreshVmas,
-            onRefreshImages = onRefreshImages,
-            onShowResults = onShowMemoryResults,
-            onShowPage = onShowMemoryPage,
-            onPreviewSelectedPc = onPreviewSelectedPc,
-        )
-
-        WorkspaceSection.Threads -> ThreadsSectionContent(
-            state = state,
-            onRefreshThreads = onRefreshThreads,
-            onSelectThread = onSelectThread,
-            onRefreshSelectedThreadRegisters = onRefreshSelectedThreadRegisters,
-            onPreviewSelectedPc = onPreviewSelectedPc,
-            onSingleStep = onSingleStep,
-        )
-
-        WorkspaceSection.Events -> EventsSectionContent(
-            state = state,
-            onRefreshEvents = onRefreshEvents,
-            onToggleEventsAutoPoll = onToggleEventsAutoPoll,
-            onClearEvents = onClearEvents,
-            onTogglePinnedEvent = onTogglePinnedEvent,
-            onOpenEventThread = onOpenEventThread,
-            onOpenEventValue = onOpenEventValue,
-        )
     }
 }
 
@@ -1665,52 +1280,6 @@ private fun EventsSectionContent(
 }
 
 @Composable
-private fun MemorySectionContent(
-    state: SessionBridgeState,
-    memoryToolsOpen: Boolean,
-    viewMode: Int,
-    onStepPage: (Int) -> Unit,
-    onSelectAddress: (ULong) -> Unit,
-    onSearchQueryChanged: (String) -> Unit,
-    onAddressInputChanged: (String) -> Unit,
-    onSelectionSizeChanged: (Int) -> Unit,
-    onHexInputChanged: (String) -> Unit,
-    onAsciiInputChanged: (String) -> Unit,
-    onAsmInputChanged: (String) -> Unit,
-    onCycleValueType: () -> Unit,
-    onCycleRefineMode: () -> Unit,
-    onCycleRegionPreset: () -> Unit,
-    onJumpAddress: () -> Unit,
-    onLoadSelectionIntoHexSearch: () -> Unit,
-    onLoadSelectionIntoAsciiSearch: () -> Unit,
-    onLoadSelectionIntoEditors: () -> Unit,
-    onWriteHexAtFocus: () -> Unit,
-    onWriteAsciiAtFocus: () -> Unit,
-    onAssembleToEditors: () -> Unit,
-    onAssembleAndWrite: () -> Unit,
-    onRunSearch: () -> Unit,
-    onRefineSearch: () -> Unit,
-    onRefreshVmas: () -> Unit,
-    onRefreshImages: () -> Unit,
-    onShowResults: () -> Unit,
-    onShowPage: () -> Unit,
-    onPreviewSelectedPc: () -> Unit,
-) {
-    MemoryWorkspaceSection(
-        bridgeState = state,
-        onSearchQueryChanged = onSearchQueryChanged,
-        onRunSearch = onRunSearch,
-        onRefineSearch = onRefineSearch,
-        onCycleValueType = onCycleValueType,
-        onCycleRefineMode = onCycleRefineMode,
-        onCycleRegionPreset = onCycleRegionPreset,
-        onStepPage = onStepPage,
-        onSelectAddress = onSelectAddress,
-        modifier = Modifier.fillMaxSize(),
-    )
-}
-
-@Composable
 private fun ThreadListPanel(
     state: SessionBridgeState,
     selectedThread: BridgeThreadRecord?,
@@ -2426,15 +1995,6 @@ private fun workspaceSectionLabelRes(section: WorkspaceSection): Int =
         WorkspaceSection.Memory -> R.string.workspace_memory
         WorkspaceSection.Threads -> R.string.workspace_threads
         WorkspaceSection.Events -> R.string.workspace_events
-    }
-
-private fun workspaceSectionIconRes(section: WorkspaceSection): Int =
-    when (section) {
-        WorkspaceSection.Session -> R.drawable.ic_lkmdbg_terminal
-        WorkspaceSection.Processes -> R.drawable.ic_lkmdbg_radar
-        WorkspaceSection.Memory -> R.drawable.ic_lkmdbg_cpu
-        WorkspaceSection.Threads -> R.drawable.ic_lkmdbg_cpu
-        WorkspaceSection.Events -> R.drawable.ic_lkmdbg_terminal
     }
 
 private fun hwpointPresetLabelRes(preset: HwpointPreset): Int =

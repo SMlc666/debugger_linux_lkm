@@ -22,32 +22,15 @@ class OverlayHostControllerTest {
 
         var updateWorkspaceSectionCalls: Int = 0
         var updateEventsAutoPollEnabledCalls: MutableList<Boolean> = mutableListOf()
-        var updateMemoryToolsOpenCalls: MutableList<Boolean> = mutableListOf()
-        var updateMemoryViewModeCalls: MutableList<Int> = mutableListOf()
 
         override fun updateWorkspaceSection(section: WorkspaceSection) {
             updateWorkspaceSectionCalls += 1
-            val current = _state.value
-            _state.value = current.copy(
-                workspaceSection = section,
-                memoryToolsOpen = if (section != WorkspaceSection.Memory) false else current.memoryToolsOpen,
-                memoryViewMode = if (section != WorkspaceSection.Memory) 0 else current.memoryViewMode,
-            )
+            _state.value = _state.value.copy(workspaceSection = section)
         }
 
         override fun updateEventsAutoPollEnabled(enabled: Boolean) {
             updateEventsAutoPollEnabledCalls.add(enabled)
             _state.value = _state.value.copy(eventsAutoPollEnabled = enabled)
-        }
-
-        override fun updateMemoryToolsOpen(open: Boolean) {
-            updateMemoryToolsOpenCalls.add(open)
-            _state.value = _state.value.copy(memoryToolsOpen = open)
-        }
-
-        override fun updateMemoryViewMode(mode: Int) {
-            updateMemoryViewModeCalls.add(mode)
-            _state.value = _state.value.copy(memoryViewMode = mode)
         }
 
         override suspend fun refreshEventsBackground(timeoutMs: Int, maxEvents: Int) {
@@ -130,7 +113,7 @@ class OverlayHostControllerTest {
     }
 
     @Test
-    fun toggleProcessPicker_selectsProcessesAndCallsPicker() {
+    fun toggleProcessPicker_doesNotSwitchWorkspaceSection() {
         val repository = FakeRepository(
             SessionBridgeState(
                 agentPath = "test-agent",
@@ -145,12 +128,12 @@ class OverlayHostControllerTest {
         )
 
         controller.toggleProcessPicker()
-        assertEquals(WorkspaceSection.Processes, repository.state.value.workspaceSection)
-        assertEquals(1, repository.updateWorkspaceSectionCalls)
-        assertEquals(listOf(false), repository.updateEventsAutoPollEnabledCalls)
+        assertEquals(WorkspaceSection.Memory, repository.state.value.workspaceSection)
+        assertEquals(0, repository.updateWorkspaceSectionCalls)
+        assertEquals(emptyList<Boolean>(), repository.updateEventsAutoPollEnabledCalls)
 
         assertEquals(1, picker.toggleStates.size)
-        assertEquals(WorkspaceSection.Processes, picker.toggleStates[0].workspaceSection)
+        assertEquals(WorkspaceSection.Memory, picker.toggleStates[0].workspaceSection)
         assertEquals(0, picker.hideCalls)
     }
 
@@ -179,4 +162,3 @@ class OverlayHostControllerTest {
         assertFalse(repository.state.value.eventsAutoPollEnabled)
     }
 }
-
