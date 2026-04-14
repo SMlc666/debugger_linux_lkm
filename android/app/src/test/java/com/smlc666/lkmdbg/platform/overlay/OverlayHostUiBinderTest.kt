@@ -22,4 +22,3 @@ class OverlayHostUiBinderTest {
         assertTrue(model.showCollapsedChip)
     }
 }
-

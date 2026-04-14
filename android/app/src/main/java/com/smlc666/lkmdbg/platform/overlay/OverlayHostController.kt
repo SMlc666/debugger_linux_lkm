@@ -129,4 +129,3 @@ class OverlayHostController(
         eventAutoPollJob = null
     }
 }
-
