@@ -1,10 +1,22 @@
 package com.smlc666.lkmdbg.data.gateway
 
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
+import com.smlc666.lkmdbg.data.SessionBridgeState
 import com.smlc666.lkmdbg.domain.gateway.MemoryGateway
 import com.smlc666.lkmdbg.domain.gateway.MemoryGatewayResult
 import com.smlc666.lkmdbg.domain.gateway.MemoryGatewayState
 import com.smlc666.lkmdbg.domain.gateway.MemorySearchGatewayState
+
+internal fun didMemorySearchMakeProgress(
+    before: SessionBridgeState,
+    after: SessionBridgeState,
+): Boolean {
+    val beforeSearch = before.memorySearch
+    val afterSearch = after.memorySearch
+    return afterSearch.snapshotReady != beforeSearch.snapshotReady ||
+        afterSearch.summary != beforeSearch.summary ||
+        afterSearch.results !== beforeSearch.results
+}
 
 class MemoryGatewayImpl(
     private val repository: SessionBridgeRepository,
@@ -76,7 +88,7 @@ class MemoryGatewayImpl(
         repository.runMemorySearch()
         val after = repository.state.value
         val snapshot = currentState()
-        return if (after.memorySearch.results !== before.memorySearch.results) {
+        return if (didMemorySearchMakeProgress(before, after)) {
             MemoryGatewayResult.Ok(snapshot)
         } else {
             MemoryGatewayResult.Error(snapshot.message)
@@ -88,11 +100,10 @@ class MemoryGatewayImpl(
         repository.refineMemorySearch()
         val after = repository.state.value
         val snapshot = currentState()
-        return if (after.memorySearch.results !== before.memorySearch.results) {
+        return if (didMemorySearchMakeProgress(before, after)) {
             MemoryGatewayResult.Ok(snapshot)
         } else {
             MemoryGatewayResult.Error(snapshot.message)
         }
     }
 }
-
