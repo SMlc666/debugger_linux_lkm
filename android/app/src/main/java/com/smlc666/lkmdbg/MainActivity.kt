@@ -14,6 +14,7 @@ import androidx.core.view.setPadding
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
+import com.smlc666.lkmdbg.appdata.R
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.overlay.LkmdbgOverlayService
 import com.smlc666.lkmdbg.overlay.OverlayPermission

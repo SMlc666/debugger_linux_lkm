@@ -10,7 +10,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.google.android.material.button.MaterialButton
-import com.smlc666.lkmdbg.R
+import com.smlc666.lkmdbg.appdata.R
 import com.smlc666.lkmdbg.data.ProcessFilter
 import com.smlc666.lkmdbg.data.ResolvedProcessRecord
 import com.smlc666.lkmdbg.data.SessionBridgeRepository

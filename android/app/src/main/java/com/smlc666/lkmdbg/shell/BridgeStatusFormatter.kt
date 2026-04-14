@@ -1,7 +1,7 @@
 package com.smlc666.lkmdbg.shell
 
 import android.content.Context
-import com.smlc666.lkmdbg.R
+import com.smlc666.lkmdbg.appdata.R
 import com.smlc666.lkmdbg.data.SessionBridgeState
 
 internal object BridgeStatusFormatter {

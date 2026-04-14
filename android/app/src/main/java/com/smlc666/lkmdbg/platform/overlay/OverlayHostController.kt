@@ -96,7 +96,7 @@ class OverlayHostController internal constructor(
         }
     }
 
-    constructor(
+    internal constructor(
         repository: SessionBridgeRepository,
         processPickerController: OverlayProcessPickerController,
         scope: CoroutineScope,

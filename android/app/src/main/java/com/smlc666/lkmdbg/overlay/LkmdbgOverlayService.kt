@@ -20,7 +20,7 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.smlc666.lkmdbg.CrashLogger
 import com.smlc666.lkmdbg.LkmdbgApplication
-import com.smlc666.lkmdbg.R
+import com.smlc666.lkmdbg.appdata.R
 import com.smlc666.lkmdbg.data.SessionBridgeRepository
 import com.smlc666.lkmdbg.data.WorkspaceSection
 import com.smlc666.lkmdbg.data.gateway.EventGatewayImpl
