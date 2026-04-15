@@ -4229,12 +4229,16 @@ static int verify_cross_page_permission_flip(int session_fd,
 {
 	unsigned char payload[SELFTEST_PERMISSION_SPAN];
 	unsigned char readback[SELFTEST_PERMISSION_SPAN];
+	unsigned char *original_pages = NULL;
 	struct lkmdbg_mem_op op;
 	struct lkmdbg_mem_request req;
 	uintptr_t page1;
 	uintptr_t page2;
+	size_t tracked_len;
 	size_t prefix = SELFTEST_PERMISSION_SPAN / 2U;
 	size_t i;
+	uint32_t bytes_done = 0;
+	int ret = -1;
 
 	page1 = info->large_addr + (uintptr_t)(info->page_size * 20U);
 	page2 = page1 + info->page_size;
@@ -4242,16 +4246,31 @@ static int verify_cross_page_permission_flip(int session_fd,
 		fprintf(stderr, "permission flip region out of range\n");
 		return -1;
 	}
+	tracked_len = info->page_size * 2U;
+	original_pages = malloc(tracked_len);
+	if (!original_pages) {
+		fprintf(stderr, "permission flip snapshot allocation failed\n");
+		return -1;
+	}
+	if (read_target_memory_flags(session_fd, page1, original_pages, tracked_len,
+				     LKMDBG_MEM_OP_FLAG_FORCE_ACCESS, &bytes_done,
+				     0) < 0 ||
+	    bytes_done != tracked_len) {
+		fprintf(stderr,
+			"permission flip snapshot read failed bytes_done=%u expected=%zu\n",
+			bytes_done, tracked_len);
+		goto out;
+	}
 
 	for (i = 0; i < sizeof(payload); i++)
 		payload[i] = (unsigned char)(0x60U + i);
 
 	if (child_fill_remote_range(cmd_fd, resp_fd, page1, info->page_size * 2U,
 				    0x11U) < 0)
-		return -1;
+		goto out;
 	if (child_mprotect_range(cmd_fd, resp_fd, page2, info->page_size,
 				 PROT_NONE) < 0)
-		return -1;
+		goto out;
 
 	memset(&op, 0, sizeof(op));
 	memset(&req, 0, sizeof(req));
@@ -4265,29 +4284,29 @@ static int verify_cross_page_permission_flip(int session_fd,
 		fprintf(stderr,
 				"perm flip PROT_NONE write mismatch errno=%d bytes_done=%u expected=%zu\n",
 				errno, op.bytes_done, prefix);
-			return -1;
+			goto out;
 		}
 	memset(readback, 0, sizeof(readback));
 	if (read_target_memory_flags(session_fd, page2 - prefix, readback,
 				     sizeof(readback),
 				     LKMDBG_MEM_OP_FLAG_FORCE_ACCESS, NULL, 0) < 0)
-		return -1;
+		goto out;
 	if (memcmp(readback, payload, prefix) != 0) {
 		fprintf(stderr, "perm flip PROT_NONE first-page write missing\n");
-		return -1;
+		goto out;
 	}
 	for (i = prefix; i < sizeof(readback); i++) {
 		if (readback[i] != 0x11U) {
 			fprintf(stderr,
 				"perm flip PROT_NONE leaked into protected page index=%zu val=0x%x\n",
 				i, readback[i]);
-			return -1;
+			goto out;
 		}
 	}
 
 	if (child_mprotect_range(cmd_fd, resp_fd, page2, info->page_size,
 				 PROT_READ) < 0)
-		return -1;
+		goto out;
 	memset(&op, 0, sizeof(op));
 	memset(&req, 0, sizeof(req));
 	op.remote_addr = page2 - prefix;
@@ -4298,10 +4317,10 @@ static int verify_cross_page_permission_flip(int session_fd,
 	     errno != EFAULT) ||
 	    op.bytes_done != prefix) {
 		fprintf(stderr,
-			"perm flip PROT_READ write mismatch errno=%d bytes_done=%u expected=%zu\n",
-			errno, op.bytes_done, prefix);
-		return -1;
-	}
+				"perm flip PROT_READ write mismatch errno=%d bytes_done=%u expected=%zu\n",
+				errno, op.bytes_done, prefix);
+			goto out;
+		}
 
 	memset(readback, 0, sizeof(readback));
 	if (read_target_memory_flags(session_fd, page2 - prefix, readback,
@@ -4310,20 +4329,20 @@ static int verify_cross_page_permission_flip(int session_fd,
 	    memcmp(readback, payload, prefix) != 0) {
 		fprintf(stderr,
 			"perm flip PROT_READ readback mismatch\n");
-		return -1;
+		goto out;
 	}
 	for (i = prefix; i < sizeof(readback); i++) {
 		if (readback[i] != 0x11U) {
 			fprintf(stderr,
 				"perm flip PROT_READ readback mismatch index=%zu val=0x%x\n",
 				i, readback[i]);
-			return -1;
+			goto out;
 		}
 	}
 
 	if (child_mprotect_range(cmd_fd, resp_fd, page2, info->page_size,
 				 PROT_READ | PROT_WRITE) < 0)
-		return -1;
+		goto out;
 	memset(&op, 0, sizeof(op));
 	memset(&req, 0, sizeof(req));
 	op.remote_addr = page2 - prefix;
@@ -4334,12 +4353,24 @@ static int verify_cross_page_permission_flip(int session_fd,
 		fprintf(stderr,
 			"perm flip restore write mismatch bytes_done=%u\n",
 			op.bytes_done);
-		return -1;
+		goto out;
+	}
+	if (write_target_memory(session_fd, page1, original_pages, tracked_len,
+				&bytes_done, 0) < 0 ||
+	    bytes_done != tracked_len) {
+		fprintf(stderr,
+			"perm flip snapshot restore failed bytes_done=%u expected=%zu\n",
+			bytes_done, tracked_len);
+		goto out;
 	}
 
 	printf("selftest cross-page permission flip ok span=%u partial=%zu\n",
 	       SELFTEST_PERMISSION_SPAN, prefix);
-	return 0;
+	ret = 0;
+
+out:
+	free(original_pages);
+	return ret;
 }
 
 static int verify_randomized_mem_soak(int session_fd, pid_t child,
