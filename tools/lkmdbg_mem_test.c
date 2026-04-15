@@ -4263,12 +4263,14 @@ static int verify_cross_page_permission_flip(int session_fd,
 	     errno != EFAULT) ||
 	    op.bytes_done != prefix) {
 		fprintf(stderr,
-			"perm flip PROT_NONE write mismatch errno=%d bytes_done=%u expected=%zu\n",
-			errno, op.bytes_done, prefix);
-		return -1;
-	}
-	if (child_read_remote_range(cmd_fd, resp_fd, page2 - prefix, readback,
-				    sizeof(readback)) < 0)
+				"perm flip PROT_NONE write mismatch errno=%d bytes_done=%u expected=%zu\n",
+				errno, op.bytes_done, prefix);
+			return -1;
+		}
+	memset(readback, 0, sizeof(readback));
+	if (read_target_memory_flags(session_fd, page2 - prefix, readback,
+				     sizeof(readback),
+				     LKMDBG_MEM_OP_FLAG_FORCE_ACCESS, NULL, 0) < 0)
 		return -1;
 	if (memcmp(readback, payload, prefix) != 0) {
 		fprintf(stderr, "perm flip PROT_NONE first-page write missing\n");
@@ -4302,17 +4304,12 @@ static int verify_cross_page_permission_flip(int session_fd,
 	}
 
 	memset(readback, 0, sizeof(readback));
-	memset(&op, 0, sizeof(op));
-	memset(&req, 0, sizeof(req));
-	op.remote_addr = page2 - prefix;
-	op.local_addr = (uintptr_t)readback;
-	op.length = sizeof(readback);
-	if (xfer_target_memory(session_fd, &op, 1, 0, &req, 0) < 0 ||
-	    op.bytes_done != sizeof(readback) ||
+	if (read_target_memory_flags(session_fd, page2 - prefix, readback,
+				     sizeof(readback),
+				     LKMDBG_MEM_OP_FLAG_FORCE_ACCESS, NULL, 0) < 0 ||
 	    memcmp(readback, payload, prefix) != 0) {
 		fprintf(stderr,
-			"perm flip PROT_READ readback mismatch bytes_done=%u\n",
-			op.bytes_done);
+			"perm flip PROT_READ readback mismatch\n");
 		return -1;
 	}
 	for (i = prefix; i < sizeof(readback); i++) {
