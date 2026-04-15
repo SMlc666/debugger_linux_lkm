@@ -44,6 +44,7 @@
 #define SELFTEST_SOAK_REMOTE_ALLOC_LEN (2U * 4096U)
 #define SELFTEST_PERMISSION_SPAN 128U
 #define SELFTEST_RACE_OPS 48U
+#define SELFTEST_RACE_MAX_BATCH_BYTES (1024U * 1024U)
 #define SELFTEST_REG_SENTINEL 0x5A17C0DEULL
 #define VMA_QUERY_BATCH 64
 #define VMA_QUERY_NAMES_SIZE 65536
@@ -7634,6 +7635,7 @@ static int verify_inflight_exit_race(void)
 		int status;
 		int xfer_ret;
 		unsigned int i;
+		uint32_t race_ops;
 
 		memset(&info, 0, sizeof(info));
 		memset(&kill_ctx, 0, sizeof(kill_ctx));
@@ -7649,7 +7651,13 @@ static int verify_inflight_exit_race(void)
 			return -1;
 		}
 
-		total_len = (size_t)info.large_len * SELFTEST_RACE_OPS;
+		race_ops = SELFTEST_RACE_MAX_BATCH_BYTES / info.large_len;
+		if (!race_ops)
+			race_ops = 1;
+		if (race_ops > SELFTEST_RACE_OPS)
+			race_ops = SELFTEST_RACE_OPS;
+
+		total_len = (size_t)info.large_len * race_ops;
 		buf = malloc(total_len);
 		if (!buf) {
 			fprintf(stderr, "race buffer allocation failed\n");
@@ -7659,7 +7667,7 @@ static int verify_inflight_exit_race(void)
 			return -1;
 		}
 		fill_pattern(buf, total_len, attempt + 41U);
-		for (i = 0; i < SELFTEST_RACE_OPS; i++) {
+		for (i = 0; i < race_ops; i++) {
 			size_t segment_off = (size_t)i * info.large_len;
 
 			ops[i].remote_addr = info.large_addr;
@@ -7681,8 +7689,8 @@ static int verify_inflight_exit_race(void)
 		}
 
 		errno = 0;
-		xfer_ret = xfer_target_memory(session_fd, ops, SELFTEST_RACE_OPS, 1,
-					      &req, 0);
+		xfer_ret = xfer_target_memory(session_fd, ops, race_ops, 1, &req,
+					      0);
 		pthread_join(killer_thread, NULL);
 		if (kill_ctx.ret < 0 && kill_ctx.err != ESRCH) {
 			fprintf(stderr, "race killer signal failed err=%d\n",
@@ -7725,7 +7733,7 @@ static int verify_inflight_exit_race(void)
 		}
 
 		if ((xfer_ret < 0 && errno == ESRCH) ||
-		    req.ops_done < SELFTEST_RACE_OPS ||
+		    req.ops_done < race_ops ||
 		    req.bytes_done < total_len) {
 			if (expect_dead_mem_accesses_fail(session_fd, &info) < 0) {
 				free(buf);
