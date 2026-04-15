@@ -38,6 +38,12 @@
 #define SELFTEST_LARGE_MAP_LEN (192U * 1024U)
 #define SELFTEST_BATCH_OPS 4
 #define SELFTEST_FREEZE_THREADS 2
+#define SELFTEST_MULTI_SESSION_COUNT 3
+#define SELFTEST_MULTI_SESSION_FREEZE_ROUNDS 4
+#define SELFTEST_SOAK_ITERS 96
+#define SELFTEST_SOAK_REMOTE_ALLOC_LEN (2U * 4096U)
+#define SELFTEST_PERMISSION_SPAN 128U
+#define SELFTEST_RACE_OPS 48U
 #define SELFTEST_REG_SENTINEL 0x5A17C0DEULL
 #define VMA_QUERY_BATCH 64
 #define VMA_QUERY_NAMES_SIZE 65536
@@ -136,6 +142,14 @@ struct remote_alloc_query_buffer {
 	struct lkmdbg_remote_alloc_entry *entries;
 };
 
+struct delayed_signal_ctx {
+	pid_t pid;
+	int signo;
+	useconds_t delay_us;
+	int ret;
+	int err;
+};
+
 static int create_test_memfd(const char *name)
 {
 	unsigned int flags = MFD_CLOEXEC | MFD_ALLOW_SEALING;
@@ -218,6 +232,7 @@ enum {
 	CHILD_OP_PING = 11,
 	CHILD_OP_WRITE_REMOTE = 12,
 	CHILD_OP_CALL_REMOTE = 13,
+	CHILD_OP_MPROTECT = 14,
 };
 
 static int expect_stop_state(int session_fd, uint32_t reason,
@@ -228,6 +243,8 @@ static int child_trigger_syscall(int cmd_fd, int resp_fd, int64_t *retval_out);
 static int child_trigger_syscall_ex(int cmd_fd, int resp_fd, long syscall_nr,
 				    uint64_t arg0, int use_arg0,
 				    int64_t *retval_out);
+static int child_mprotect_range(int cmd_fd, int resp_fd, uintptr_t addr,
+				size_t len, int prot);
 static int child_read_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
 				   void *buf, size_t len);
 static int child_write_remote_range(int cmd_fd, int resp_fd, uintptr_t addr,
@@ -260,6 +277,13 @@ static const char *describe_pte_mode(uint32_t mode, uint32_t flags, char *buf,
 				     size_t buf_size);
 static const char *describe_pte_patch_state(uint32_t state, char *buf,
 					    size_t buf_size);
+static int start_selftest_child(pid_t *child_out, int *info_fd_out,
+				int *cmd_fd_out, int *resp_fd_out,
+				struct child_info *info_out);
+static int request_child_exit(int cmd_fd);
+static int wait_for_child_exit(pid_t child, int *status_out);
+static int stop_selftest_child(pid_t child, int cmd_fd, int resp_fd,
+			       int send_exit);
 
 static int wait_for_stop_event_or_state(int session_fd, uint32_t reason,
 					int timeout_ms,
@@ -3087,6 +3111,163 @@ out:
 	return ret;
 }
 
+static int open_target_session(pid_t child)
+{
+	int session_fd;
+
+	session_fd = open_session_fd();
+	if (session_fd < 0)
+		return -1;
+	if (set_target(session_fd, child) < 0) {
+		close(session_fd);
+		return -1;
+	}
+
+	return session_fd;
+}
+
+static int verify_remote_string(int session_fd, uintptr_t remote_addr,
+				const char *expected)
+{
+	char buf[SELFTEST_SLOT_SIZE];
+	uint32_t bytes_done = 0;
+	size_t len = strlen(expected) + 1;
+
+	memset(buf, 0, sizeof(buf));
+	if (len > sizeof(buf)) {
+		fprintf(stderr, "verify remote string length too large\n");
+		return -1;
+	}
+	if (read_target_memory(session_fd, remote_addr, buf, len, &bytes_done,
+			       0) < 0 ||
+	    bytes_done != len || strcmp(buf, expected) != 0) {
+		fprintf(stderr,
+			"remote string verify failed addr=0x%" PRIxPTR " bytes_done=%u got=%s expected=%s\n",
+			remote_addr, bytes_done, buf, expected);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int wait_for_target_exit_event(int session_fd, pid_t child,
+				      struct lkmdbg_event_record *event_out)
+{
+	struct lkmdbg_event_record event;
+
+	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_EXIT, 0, 5000,
+				   &event) < 0)
+		return -1;
+	if (event.tgid != child) {
+		fprintf(stderr,
+			"target exit event tgid mismatch got=%d expected=%d\n",
+			event.tgid, child);
+		return -1;
+	}
+	if (event.tid <= 0) {
+		fprintf(stderr, "target exit event tid invalid=%d\n", event.tid);
+		return -1;
+	}
+	if (event_out)
+		*event_out = event;
+	return 0;
+}
+
+static int expect_dead_mem_accesses_fail(int session_fd,
+					 const struct child_info *info)
+{
+	unsigned char read_buf[64] = { 0 };
+	unsigned char write_buf[64];
+	struct lkmdbg_mem_op ops[2];
+	struct lkmdbg_mem_request req;
+	size_t payload_len = sizeof("dead-target-write");
+	unsigned int i;
+
+	memset(write_buf, 0x4b, sizeof(write_buf));
+
+	memset(ops, 0, sizeof(ops));
+	ops[0].remote_addr = info->basic_addr;
+	ops[0].local_addr = (uintptr_t)read_buf;
+	ops[0].length = sizeof(read_buf);
+	memset(&req, 0, sizeof(req));
+	errno = 0;
+	if (xfer_target_memory(session_fd, ops, 1, 0, &req, 0) == 0 ||
+	    errno != ESRCH || req.ops_done || req.bytes_done ||
+	    ops[0].bytes_done) {
+		fprintf(stderr,
+			"dead target READ_MEM mismatch errno=%d ops_done=%u bytes_done=%" PRIu64 " op0=%u\n",
+			errno, req.ops_done, (uint64_t)req.bytes_done,
+			ops[0].bytes_done);
+		return -1;
+	}
+
+	memset(ops, 0, sizeof(ops));
+	ops[0].remote_addr = info->basic_addr;
+	ops[0].local_addr = (uintptr_t)write_buf;
+	ops[0].length = payload_len;
+	memset(&req, 0, sizeof(req));
+	errno = 0;
+	if (xfer_target_memory(session_fd, ops, 1, 1, &req, 0) == 0 ||
+	    errno != ESRCH || req.ops_done || req.bytes_done ||
+	    ops[0].bytes_done) {
+		fprintf(stderr,
+			"dead target WRITE_MEM mismatch errno=%d ops_done=%u bytes_done=%" PRIu64 " op0=%u\n",
+			errno, req.ops_done, (uint64_t)req.bytes_done,
+			ops[0].bytes_done);
+		return -1;
+	}
+
+	memset(ops, 0, sizeof(ops));
+	for (i = 0; i < 2; i++) {
+		ops[i].remote_addr = info->large_addr + (uintptr_t)(i * 64U);
+		ops[i].local_addr = (uintptr_t)(read_buf + (i * 16U));
+		ops[i].length = 16;
+	}
+	memset(&req, 0, sizeof(req));
+	errno = 0;
+	if (xfer_target_memory(session_fd, ops, 2, 0, &req, 0) == 0 ||
+	    errno != ESRCH || req.ops_done || req.bytes_done ||
+	    ops[0].bytes_done || ops[1].bytes_done) {
+		fprintf(stderr,
+			"dead target READ_MEMV mismatch errno=%d ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
+			errno, req.ops_done, (uint64_t)req.bytes_done,
+			ops[0].bytes_done, ops[1].bytes_done);
+		return -1;
+	}
+
+	memset(ops, 0, sizeof(ops));
+	for (i = 0; i < 2; i++) {
+		ops[i].remote_addr = info->large_addr + (uintptr_t)(i * 64U);
+		ops[i].local_addr = (uintptr_t)(write_buf + (i * 16U));
+		ops[i].length = 16;
+	}
+	memset(&req, 0, sizeof(req));
+	errno = 0;
+	if (xfer_target_memory(session_fd, ops, 2, 1, &req, 0) == 0 ||
+	    errno != ESRCH || req.ops_done || req.bytes_done ||
+	    ops[0].bytes_done || ops[1].bytes_done) {
+		fprintf(stderr,
+			"dead target WRITE_MEMV mismatch errno=%d ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
+			errno, req.ops_done, (uint64_t)req.bytes_done,
+			ops[0].bytes_done, ops[1].bytes_done);
+		return -1;
+	}
+
+	printf("selftest target exit hard failure ok errno=%d\n", ESRCH);
+	return 0;
+}
+
+static void *delayed_signal_thread_main(void *arg)
+{
+	struct delayed_signal_ctx *ctx = arg;
+
+	usleep(ctx->delay_us);
+	errno = 0;
+	ctx->ret = kill(ctx->pid, ctx->signo);
+	ctx->err = ctx->ret < 0 ? errno : 0;
+	return NULL;
+}
+
 static int dump_session_events(int session_fd, unsigned int max_events,
 			       int timeout_ms)
 {
@@ -3478,6 +3659,17 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 				return 2;
 			break;
 		}
+		case CHILD_OP_MPROTECT:
+			resident = 0;
+			if (!cmd.addr || !cmd.length)
+				return 2;
+			if (mprotect((void *)(uintptr_t)cmd.addr, cmd.length,
+				     (int)cmd.value) < 0)
+				resident = -errno;
+			if (write_full(resp_fd, &resident, sizeof(resident)) !=
+			    (ssize_t)sizeof(resident))
+				return 2;
+			break;
 		case CHILD_OP_CALL_REMOTE:
 		{
 			uint64_t (*fn)(void);
@@ -3610,6 +3802,37 @@ static int child_trigger_syscall(int cmd_fd, int resp_fd, int64_t *retval_out)
 					retval_out);
 }
 
+static int child_mprotect_range(int cmd_fd, int resp_fd, uintptr_t addr,
+				size_t len, int prot)
+{
+	struct child_cmd cmd = {
+		.op = CHILD_OP_MPROTECT,
+		.addr = addr,
+		.length = (uint32_t)len,
+		.value = (uint32_t)prot,
+	};
+	int ret;
+
+	if (!addr || !len || len > UINT32_MAX)
+		return -1;
+
+	if (write_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
+		fprintf(stderr, "failed to send child mprotect command\n");
+		return -1;
+	}
+
+	if (read_full(resp_fd, &ret, sizeof(ret)) != (ssize_t)sizeof(ret)) {
+		fprintf(stderr, "failed to read child mprotect reply\n");
+		return -1;
+	}
+	if (ret) {
+		fprintf(stderr, "child mprotect failed ret=%d\n", ret);
+		return -1;
+	}
+
+	return 0;
+}
+
 static int child_read_syscall_result(int resp_fd, int64_t *retval_out)
 {
 	int64_t retval;
@@ -3636,6 +3859,105 @@ static int send_child_command(int cmd_fd, uint32_t op)
 		return -1;
 	}
 
+	return 0;
+}
+
+static int request_child_exit(int cmd_fd)
+{
+	return send_child_command(cmd_fd, CHILD_OP_EXIT);
+}
+
+static int wait_for_child_exit(pid_t child, int *status_out)
+{
+	int status;
+
+	if (waitpid(child, &status, 0) < 0) {
+		fprintf(stderr, "waitpid failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (status_out)
+		*status_out = status;
+	return 0;
+}
+
+static int stop_selftest_child(pid_t child, int cmd_fd, int resp_fd,
+			       int send_exit)
+{
+	int status;
+
+	if (send_exit && request_child_exit(cmd_fd) < 0)
+		fprintf(stderr, "failed to send child exit command\n");
+	close(cmd_fd);
+	close(resp_fd);
+	if (wait_for_child_exit(child, &status) < 0)
+		return -1;
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+		fprintf(stderr, "child exited abnormally status=%d\n", status);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int start_selftest_child(pid_t *child_out, int *info_fd_out,
+				int *cmd_fd_out, int *resp_fd_out,
+				struct child_info *info_out)
+{
+	int info_pipe[2];
+	int cmd_pipe[2];
+	int resp_pipe[2];
+	pid_t child;
+
+	if (!child_out || !info_fd_out || !cmd_fd_out || !resp_fd_out ||
+	    !info_out)
+		return -1;
+
+	if (pipe(info_pipe) < 0 || pipe(cmd_pipe) < 0 || pipe(resp_pipe) < 0) {
+		fprintf(stderr, "pipe failed: %s\n", strerror(errno));
+		return -1;
+	}
+
+	child = fork();
+	if (child < 0) {
+		fprintf(stderr, "fork failed: %s\n", strerror(errno));
+		close(info_pipe[0]);
+		close(info_pipe[1]);
+		close(cmd_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		close(resp_pipe[1]);
+		return -1;
+	}
+
+	if (child == 0) {
+		int ret;
+
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		ret = child_selftest_main(info_pipe[1], cmd_pipe[0], resp_pipe[1]);
+		_exit(ret);
+	}
+
+	close(info_pipe[1]);
+	close(cmd_pipe[0]);
+	close(resp_pipe[1]);
+	if (read_full(info_pipe[0], info_out, sizeof(*info_out)) !=
+	    (ssize_t)sizeof(*info_out)) {
+		fprintf(stderr, "failed to read child info\n");
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return -1;
+	}
+
+	*child_out = child;
+	*info_fd_out = info_pipe[0];
+	*cmd_fd_out = cmd_pipe[1];
+	*resp_fd_out = resp_pipe[0];
 	return 0;
 }
 
@@ -3828,6 +4150,389 @@ static void *worker_thread_main(void *arg)
 	}
 
 	return NULL;
+}
+
+static int verify_multi_session_conflict(int session_fd, pid_t child,
+					 const struct child_info *info)
+{
+	int aux_sessions[SELFTEST_MULTI_SESSION_COUNT - 1] = { -1, -1 };
+	pthread_t threads[SELFTEST_MULTI_SESSION_COUNT - 1];
+	struct worker_ctx workers[SELFTEST_MULTI_SESSION_COUNT - 1];
+	struct lkmdbg_freeze_request freeze_req;
+	struct lkmdbg_stop_query_request stop_req;
+	unsigned int i;
+	int ret = -1;
+
+	memset(&freeze_req, 0, sizeof(freeze_req));
+	memset(&stop_req, 0, sizeof(stop_req));
+	memset(workers, 0, sizeof(workers));
+
+	for (i = 0; i < SELFTEST_MULTI_SESSION_COUNT - 1; i++) {
+		aux_sessions[i] = open_target_session(child);
+		if (aux_sessions[i] < 0)
+			goto out;
+		workers[i].session_fd = aux_sessions[i];
+		workers[i].remote_addr =
+			info->slots_addr + (uintptr_t)(i * info->slot_size);
+		workers[i].thread_index = i + 10U;
+		if (pthread_create(&threads[i], NULL, worker_thread_main,
+				   &workers[i]) != 0) {
+			fprintf(stderr,
+				"multi-session worker create failed index=%u\n", i);
+			goto out;
+		}
+	}
+
+	for (i = 0; i < SELFTEST_MULTI_SESSION_FREEZE_ROUNDS; i++) {
+		if (freeze_target_threads(session_fd, 2000, &freeze_req, 0) < 0)
+			goto out_join;
+		if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_FREEZE,
+				      &stop_req) < 0)
+			goto out_join;
+		if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
+				    NULL) < 0)
+			goto out_join;
+	}
+
+	for (i = 0; i < SELFTEST_MULTI_SESSION_COUNT - 1; i++) {
+		pthread_join(threads[i], NULL);
+		if (workers[i].failed) {
+			fprintf(stderr, "multi-session worker failed index=%u\n",
+				i);
+			goto out;
+		}
+		if (verify_remote_string(session_fd, workers[i].remote_addr,
+					 workers[i].final_payload) < 0)
+			goto out;
+	}
+
+	printf("selftest multi-session conflict ok sessions=%u freeze_rounds=%u\n",
+	       SELFTEST_MULTI_SESSION_COUNT,
+	       SELFTEST_MULTI_SESSION_FREEZE_ROUNDS);
+	ret = 0;
+	goto out;
+
+out_join:
+	for (i = 0; i < SELFTEST_MULTI_SESSION_COUNT - 1; i++)
+		pthread_join(threads[i], NULL);
+out:
+	for (i = 0; i < SELFTEST_MULTI_SESSION_COUNT - 1; i++) {
+		if (aux_sessions[i] >= 0)
+			close(aux_sessions[i]);
+	}
+	return ret;
+}
+
+static int verify_cross_page_permission_flip(int session_fd,
+					     const struct child_info *info,
+					     int cmd_fd, int resp_fd)
+{
+	unsigned char payload[SELFTEST_PERMISSION_SPAN];
+	unsigned char readback[SELFTEST_PERMISSION_SPAN];
+	struct lkmdbg_mem_op op;
+	struct lkmdbg_mem_request req;
+	uintptr_t page1;
+	uintptr_t page2;
+	size_t prefix = SELFTEST_PERMISSION_SPAN / 2U;
+	size_t i;
+
+	page1 = info->large_addr + (uintptr_t)(info->page_size * 20U);
+	page2 = page1 + info->page_size;
+	if (page2 + info->page_size > info->large_addr + info->large_len) {
+		fprintf(stderr, "permission flip region out of range\n");
+		return -1;
+	}
+
+	for (i = 0; i < sizeof(payload); i++)
+		payload[i] = (unsigned char)(0x60U + i);
+
+	if (child_fill_remote_range(cmd_fd, resp_fd, page1, info->page_size * 2U,
+				    0x11U) < 0)
+		return -1;
+	if (child_mprotect_range(cmd_fd, resp_fd, page2, info->page_size,
+				 PROT_NONE) < 0)
+		return -1;
+
+	memset(&op, 0, sizeof(op));
+	memset(&req, 0, sizeof(req));
+	op.remote_addr = page2 - prefix;
+	op.local_addr = (uintptr_t)payload;
+	op.length = sizeof(payload);
+	errno = 0;
+	if ((xfer_target_memory(session_fd, &op, 1, 1, &req, 0) < 0 &&
+	     errno != EFAULT) ||
+	    op.bytes_done != prefix) {
+		fprintf(stderr,
+			"perm flip PROT_NONE write mismatch errno=%d bytes_done=%u expected=%zu\n",
+			errno, op.bytes_done, prefix);
+		return -1;
+	}
+	if (child_read_remote_range(cmd_fd, resp_fd, page2 - prefix, readback,
+				    sizeof(readback)) < 0)
+		return -1;
+	if (memcmp(readback, payload, prefix) != 0) {
+		fprintf(stderr, "perm flip PROT_NONE first-page write missing\n");
+		return -1;
+	}
+	for (i = prefix; i < sizeof(readback); i++) {
+		if (readback[i] != 0x11U) {
+			fprintf(stderr,
+				"perm flip PROT_NONE leaked into protected page index=%zu val=0x%x\n",
+				i, readback[i]);
+			return -1;
+		}
+	}
+
+	if (child_mprotect_range(cmd_fd, resp_fd, page2, info->page_size,
+				 PROT_READ) < 0)
+		return -1;
+	memset(&op, 0, sizeof(op));
+	memset(&req, 0, sizeof(req));
+	op.remote_addr = page2 - prefix;
+	op.local_addr = (uintptr_t)payload;
+	op.length = sizeof(payload);
+	errno = 0;
+	if ((xfer_target_memory(session_fd, &op, 1, 1, &req, 0) < 0 &&
+	     errno != EFAULT) ||
+	    op.bytes_done != prefix) {
+		fprintf(stderr,
+			"perm flip PROT_READ write mismatch errno=%d bytes_done=%u expected=%zu\n",
+			errno, op.bytes_done, prefix);
+		return -1;
+	}
+
+	memset(readback, 0, sizeof(readback));
+	memset(&op, 0, sizeof(op));
+	memset(&req, 0, sizeof(req));
+	op.remote_addr = page2 - prefix;
+	op.local_addr = (uintptr_t)readback;
+	op.length = sizeof(readback);
+	if (xfer_target_memory(session_fd, &op, 1, 0, &req, 0) < 0 ||
+	    op.bytes_done != sizeof(readback) ||
+	    memcmp(readback, payload, prefix) != 0) {
+		fprintf(stderr,
+			"perm flip PROT_READ readback mismatch bytes_done=%u\n",
+			op.bytes_done);
+		return -1;
+	}
+	for (i = prefix; i < sizeof(readback); i++) {
+		if (readback[i] != 0x11U) {
+			fprintf(stderr,
+				"perm flip PROT_READ readback mismatch index=%zu val=0x%x\n",
+				i, readback[i]);
+			return -1;
+		}
+	}
+
+	if (child_mprotect_range(cmd_fd, resp_fd, page2, info->page_size,
+				 PROT_READ | PROT_WRITE) < 0)
+		return -1;
+	memset(&op, 0, sizeof(op));
+	memset(&req, 0, sizeof(req));
+	op.remote_addr = page2 - prefix;
+	op.local_addr = (uintptr_t)payload;
+	op.length = sizeof(payload);
+	if (xfer_target_memory(session_fd, &op, 1, 1, &req, 0) < 0 ||
+	    op.bytes_done != sizeof(payload)) {
+		fprintf(stderr,
+			"perm flip restore write mismatch bytes_done=%u\n",
+			op.bytes_done);
+		return -1;
+	}
+
+	printf("selftest cross-page permission flip ok span=%u partial=%zu\n",
+	       SELFTEST_PERMISSION_SPAN, prefix);
+	return 0;
+}
+
+static int verify_randomized_mem_soak(int session_fd, pid_t child,
+				      const struct child_info *info)
+{
+	uint64_t state = 0x13579bdf2468ace0ULL;
+	uint64_t cookie = 0;
+	uint64_t active_alloc_id = 0;
+	uintptr_t shell_addr = info->large_addr + (uintptr_t)(info->page_size * 28U);
+	unsigned int iter;
+	int ret = -1;
+
+	if (shell_addr + SELFTEST_SOAK_REMOTE_ALLOC_LEN >
+	    info->large_addr + info->large_len) {
+		fprintf(stderr, "soak shell range out of bounds\n");
+		return -1;
+	}
+
+	for (iter = 0; iter < SELFTEST_SOAK_ITERS; iter++) {
+		uint32_t bytes_done = 0;
+		unsigned int op_sel;
+		unsigned int slot;
+		uintptr_t slot_addr;
+		char payload[SELFTEST_SLOT_SIZE];
+		char readback[SELFTEST_SLOT_SIZE];
+
+		state = state * 6364136223846793005ULL + 1ULL;
+		op_sel = (unsigned int)(state & 7U);
+		slot = (unsigned int)((state >> 8) % info->slot_count);
+		slot_addr = info->slots_addr + (uintptr_t)(slot * info->slot_size);
+
+		switch (op_sel) {
+		case 0:
+			memset(readback, 0, sizeof(readback));
+			if (read_target_memory(session_fd, slot_addr, readback,
+					       sizeof(readback), &bytes_done,
+					       0) < 0 || !bytes_done)
+				goto out;
+			break;
+		case 1:
+			snprintf(payload, sizeof(payload), "soak-%03u-%08x", iter,
+				 (unsigned int)(state >> 16));
+			if (write_target_memory(session_fd, slot_addr, payload,
+						strlen(payload) + 1,
+						&bytes_done, 0) < 0 ||
+			    bytes_done != strlen(payload) + 1)
+				goto out;
+			break;
+		case 2:
+		{
+			struct lkmdbg_mem_op ops[2];
+			struct lkmdbg_mem_request req;
+
+			memset(ops, 0, sizeof(ops));
+			memset(&req, 0, sizeof(req));
+			ops[0].remote_addr = info->large_addr;
+			ops[0].local_addr = (uintptr_t)readback;
+			ops[0].length = 16;
+			ops[1].remote_addr = info->large_addr + 128U;
+			ops[1].local_addr = (uintptr_t)(readback + 16);
+			ops[1].length = 16;
+			if (xfer_target_memory(session_fd, ops, 2, 0, &req, 0) <
+				    0 ||
+			    req.ops_done != 2)
+				goto out;
+			break;
+		}
+		case 3:
+		{
+			struct lkmdbg_mem_op ops[2];
+			struct lkmdbg_mem_request req;
+
+			snprintf(payload, sizeof(payload), "soakv-%03u", iter);
+			memset(ops, 0, sizeof(ops));
+			memset(&req, 0, sizeof(req));
+			ops[0].remote_addr = slot_addr;
+			ops[0].local_addr = (uintptr_t)payload;
+			ops[0].length = (uint32_t)(strlen(payload) + 1);
+			ops[1].remote_addr = slot_addr + 32U;
+			ops[1].local_addr = (uintptr_t)payload;
+			ops[1].length = 8;
+			if (xfer_target_memory(session_fd, ops, 2, 1, &req, 0) <
+				    0 ||
+			    req.ops_done != 2)
+				goto out;
+			break;
+		}
+		case 4:
+		{
+			struct page_query_buffer page_buf = { 0 };
+			struct lkmdbg_page_entry page_entry;
+
+			page_buf.entries =
+				calloc(PAGE_QUERY_BATCH, sizeof(*page_buf.entries));
+			if (!page_buf.entries)
+				goto out;
+			if (lookup_target_page(session_fd, info->large_addr,
+					       info->page_size, &page_buf,
+					       &page_entry) < 0) {
+				free(page_buf.entries);
+				goto out;
+			}
+			free(page_buf.entries);
+			break;
+		}
+		case 5:
+		{
+			struct vma_query_buffer vma_buf = { 0 };
+			struct lkmdbg_vma_entry entry;
+			char name_buf[256];
+
+			vma_buf.entries =
+				calloc(VMA_QUERY_BATCH, sizeof(*vma_buf.entries));
+			vma_buf.names = calloc(1, VMA_QUERY_NAMES_SIZE);
+			if (!vma_buf.entries || !vma_buf.names) {
+				free(vma_buf.entries);
+				free(vma_buf.names);
+				goto out;
+			}
+			if (lookup_target_vma(session_fd, info->large_addr, &vma_buf,
+					      &entry, name_buf,
+					      sizeof(name_buf)) < 0) {
+				free(vma_buf.entries);
+				free(vma_buf.names);
+				goto out;
+			}
+			free(vma_buf.entries);
+			free(vma_buf.names);
+			break;
+		}
+		case 6:
+		{
+			struct lkmdbg_freeze_request freeze_req;
+			struct lkmdbg_stop_query_request stop_req;
+
+			memset(&freeze_req, 0, sizeof(freeze_req));
+			memset(&stop_req, 0, sizeof(stop_req));
+			if (freeze_target_threads(session_fd, 2000, &freeze_req, 0) <
+			    0)
+				goto out;
+			if (expect_stop_state(session_fd, LKMDBG_STOP_REASON_FREEZE,
+					      &stop_req) < 0)
+				goto out;
+			cookie = stop_req.stop.cookie;
+			if (continue_target(session_fd, cookie, 2000, 0, NULL) < 0)
+				goto out;
+			cookie = 0;
+			break;
+		}
+		case 7:
+		{
+			struct lkmdbg_remote_alloc_request alloc_reply;
+			struct lkmdbg_remote_alloc_handle_request remove_reply;
+
+			memset(&alloc_reply, 0, sizeof(alloc_reply));
+			memset(&remove_reply, 0, sizeof(remove_reply));
+			if (!active_alloc_id) {
+				if (create_remote_alloc(
+					    session_fd, shell_addr,
+					    SELFTEST_SOAK_REMOTE_ALLOC_LEN,
+					    LKMDBG_REMOTE_ALLOC_PROT_READ |
+						    LKMDBG_REMOTE_ALLOC_PROT_WRITE,
+					    &alloc_reply) < 0)
+					goto out;
+				active_alloc_id = alloc_reply.alloc_id;
+			} else {
+				if (remove_remote_alloc(session_fd, active_alloc_id,
+							&remove_reply) < 0)
+					goto out;
+				active_alloc_id = 0;
+			}
+			break;
+		}
+		}
+	}
+
+	ret = 0;
+	printf("selftest bounded randomized soak ok target=%d iters=%u\n", child,
+	       SELFTEST_SOAK_ITERS);
+
+out:
+	if (cookie)
+		continue_target(session_fd, cookie, 2000, 0, NULL);
+	if (active_alloc_id) {
+		struct lkmdbg_remote_alloc_handle_request remove_reply;
+
+		memset(&remove_reply, 0, sizeof(remove_reply));
+		remove_remote_alloc(session_fd, active_alloc_id, &remove_reply);
+	}
+	return ret;
 }
 
 static int read_freeze_counters(int session_fd, const struct child_info *info,
@@ -6879,6 +7584,386 @@ out:
 	return ret;
 }
 
+static int verify_inflight_exit_race(void)
+{
+	static const useconds_t delays_us[] = { 5000U, 2000U, 500U, 100U };
+	unsigned int attempt;
+
+	for (attempt = 0; attempt < sizeof(delays_us) / sizeof(delays_us[0]);
+	     attempt++) {
+		struct delayed_signal_ctx kill_ctx;
+		struct child_info info;
+		struct lkmdbg_mem_op ops[SELFTEST_RACE_OPS];
+		struct lkmdbg_mem_request req;
+		unsigned char *buf = NULL;
+		pthread_t killer_thread;
+		size_t total_len = 0;
+		size_t chunk_len;
+		pid_t child;
+		int info_fd = -1;
+		int cmd_fd = -1;
+		int resp_fd = -1;
+		int session_fd = -1;
+		int status;
+		int xfer_ret;
+		unsigned int i;
+
+		memset(&info, 0, sizeof(info));
+		memset(&kill_ctx, 0, sizeof(kill_ctx));
+		memset(ops, 0, sizeof(ops));
+		memset(&req, 0, sizeof(req));
+		if (start_selftest_child(&child, &info_fd, &cmd_fd, &resp_fd,
+					 &info) < 0)
+			return -1;
+		session_fd = open_target_session(child);
+		if (session_fd < 0) {
+			close(info_fd);
+			stop_selftest_child(child, cmd_fd, resp_fd, 1);
+			return -1;
+		}
+
+		buf = malloc(info.large_len);
+		if (!buf) {
+			fprintf(stderr, "race buffer allocation failed\n");
+			close(session_fd);
+			close(info_fd);
+			stop_selftest_child(child, cmd_fd, resp_fd, 1);
+			return -1;
+		}
+		fill_pattern(buf, info.large_len, attempt + 41U);
+		chunk_len = info.large_len / SELFTEST_RACE_OPS;
+		if (!chunk_len)
+			chunk_len = info.page_size;
+		for (i = 0; i < SELFTEST_RACE_OPS; i++) {
+			size_t this_len = chunk_len;
+
+			if (i == SELFTEST_RACE_OPS - 1 ||
+			    total_len + this_len > info.large_len)
+				this_len = info.large_len - total_len;
+			ops[i].remote_addr = info.large_addr + total_len;
+			ops[i].local_addr = (uintptr_t)(buf + total_len);
+			ops[i].length = (uint32_t)this_len;
+			total_len += this_len;
+		}
+
+		kill_ctx.pid = child;
+		kill_ctx.signo = SIGKILL;
+		kill_ctx.delay_us = delays_us[attempt];
+		if (pthread_create(&killer_thread, NULL, delayed_signal_thread_main,
+				   &kill_ctx) != 0) {
+			fprintf(stderr, "race killer thread create failed\n");
+			free(buf);
+			close(session_fd);
+			close(info_fd);
+			stop_selftest_child(child, cmd_fd, resp_fd, 1);
+			return -1;
+		}
+
+		errno = 0;
+		xfer_ret = xfer_target_memory(session_fd, ops, SELFTEST_RACE_OPS, 1,
+					      &req, 0);
+		pthread_join(killer_thread, NULL);
+		if (kill_ctx.ret < 0 && kill_ctx.err != ESRCH) {
+			fprintf(stderr, "race killer signal failed err=%d\n",
+				kill_ctx.err);
+			free(buf);
+			close(session_fd);
+			close(info_fd);
+			close(cmd_fd);
+			close(resp_fd);
+			waitpid(child, NULL, 0);
+			return -1;
+		}
+		if (wait_for_target_exit_event(session_fd, child, NULL) < 0) {
+			free(buf);
+			close(session_fd);
+			close(info_fd);
+			close(cmd_fd);
+			close(resp_fd);
+			waitpid(child, NULL, 0);
+			return -1;
+		}
+		if (wait_for_child_exit(child, &status) < 0) {
+			free(buf);
+			close(session_fd);
+			close(info_fd);
+			close(cmd_fd);
+			close(resp_fd);
+			return -1;
+		}
+		close(cmd_fd);
+		close(resp_fd);
+		close(info_fd);
+
+		if (WIFSIGNALED(status) && WTERMSIG(status) != SIGKILL) {
+			fprintf(stderr, "race child died with signal=%d\n",
+				WTERMSIG(status));
+			free(buf);
+			close(session_fd);
+			return -1;
+		}
+
+		if ((xfer_ret < 0 && errno == ESRCH) ||
+		    req.ops_done < SELFTEST_RACE_OPS ||
+		    req.bytes_done < info.large_len) {
+			if (expect_dead_mem_accesses_fail(session_fd, &info) < 0) {
+				free(buf);
+				close(session_fd);
+				return -1;
+			}
+			printf("selftest in-flight exit race ok attempt=%u delay_us=%u ret=%d errno=%d ops_done=%u bytes_done=%" PRIu64 "\n",
+			       attempt + 1U, delays_us[attempt], xfer_ret, errno,
+			       req.ops_done, (uint64_t)req.bytes_done);
+			free(buf);
+			close(session_fd);
+			return 0;
+		}
+
+		printf("selftest in-flight exit race retry attempt=%u delay_us=%u ops_done=%u bytes_done=%" PRIu64 "\n",
+		       attempt + 1U, delays_us[attempt], req.ops_done,
+		       (uint64_t)req.bytes_done);
+		free(buf);
+		close(session_fd);
+	}
+
+	fprintf(stderr, "in-flight exit race did not observe partial/failure\n");
+	return -1;
+}
+
+static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
+						 const struct child_info *info,
+						 int cmd_fd, int resp_fd)
+{
+	struct lkmdbg_remote_map_request map_reply;
+	struct lkmdbg_remote_map_handle_request map_remove_reply;
+	struct lkmdbg_remote_map_query_request map_query_reply;
+	struct remote_map_query_buffer map_query_buf = { 0 };
+	struct lkmdbg_remote_alloc_request alloc_reply;
+	struct lkmdbg_remote_alloc_handle_request alloc_remove_reply;
+	struct lkmdbg_remote_alloc_query_request alloc_query_reply;
+	struct remote_alloc_query_buffer alloc_query_buf = { 0 };
+	struct lkmdbg_pte_patch_request pte_apply_reply;
+	struct lkmdbg_pte_patch_request pte_remove_reply;
+	struct lkmdbg_pte_patch_entry pte_entries[4];
+	struct lkmdbg_pte_patch_query_request pte_query_reply;
+	struct child_info replacement_info;
+	struct lkmdbg_event_record exit_event;
+	char replacement_readback[32];
+	char rebind_payload[32] = "rebind-target-ok";
+	char initial_payload[] = "child-buffer-initial";
+	uintptr_t shell_addr = info->large_addr + (uintptr_t)(info->page_size * 32U);
+	pid_t replacement_child = -1;
+	int replacement_info_fd = -1;
+	int replacement_cmd_fd = -1;
+	int replacement_resp_fd = -1;
+	int status;
+	int ret = -1;
+
+	memset(&map_reply, 0, sizeof(map_reply));
+	memset(&map_remove_reply, 0, sizeof(map_remove_reply));
+	memset(&map_query_reply, 0, sizeof(map_query_reply));
+	memset(&alloc_reply, 0, sizeof(alloc_reply));
+	memset(&alloc_remove_reply, 0, sizeof(alloc_remove_reply));
+	memset(&alloc_query_reply, 0, sizeof(alloc_query_reply));
+	memset(&pte_apply_reply, 0, sizeof(pte_apply_reply));
+	memset(&pte_remove_reply, 0, sizeof(pte_remove_reply));
+	memset(&pte_query_reply, 0, sizeof(pte_query_reply));
+	memset(&replacement_info, 0, sizeof(replacement_info));
+	memset(&exit_event, 0, sizeof(exit_event));
+	(void)resp_fd;
+
+	map_query_buf.entries =
+		calloc(REMOTE_MAP_QUERY_BATCH, sizeof(*map_query_buf.entries));
+	alloc_query_buf.entries = calloc(REMOTE_ALLOC_QUERY_BATCH,
+					 sizeof(*alloc_query_buf.entries));
+	if (!map_query_buf.entries || !alloc_query_buf.entries) {
+		fprintf(stderr, "exit cleanup query allocation failed\n");
+		goto out;
+	}
+	if (shell_addr + SELFTEST_SOAK_REMOTE_ALLOC_LEN >
+	    info->large_addr + info->large_len) {
+		fprintf(stderr, "exit cleanup shell range out of bounds\n");
+		goto out;
+	}
+
+	if (create_remote_map(session_fd, info->large_addr, 0, info->page_size,
+			      LKMDBG_REMOTE_MAP_PROT_READ, 0,
+			      &map_reply) < 0)
+		goto out;
+	if (map_reply.map_fd >= 0) {
+		close(map_reply.map_fd);
+		map_reply.map_fd = -1;
+	}
+	if (create_remote_alloc(session_fd, shell_addr,
+				SELFTEST_SOAK_REMOTE_ALLOC_LEN,
+				LKMDBG_REMOTE_ALLOC_PROT_READ |
+					LKMDBG_REMOTE_ALLOC_PROT_WRITE,
+				&alloc_reply) < 0)
+		goto out;
+	if (apply_pte_patch(session_fd, info->basic_addr,
+			    LKMDBG_PTE_MODE_PROTNONE, 0, 0,
+			    &pte_apply_reply) < 0)
+		goto out;
+
+	if (request_child_exit(cmd_fd) < 0)
+		goto out;
+	if (wait_for_target_exit_event(session_fd, child, &exit_event) < 0)
+		goto out;
+	if (wait_for_child_exit(child, &status) < 0)
+		goto out;
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+		fprintf(stderr, "target exit child status=%d\n", status);
+		goto out;
+	}
+
+	if (expect_dead_mem_accesses_fail(session_fd, info) < 0)
+		goto out;
+
+	if (query_remote_maps(session_fd, 0, &map_query_buf, &map_query_reply) < 0)
+		goto out;
+	if (map_query_reply.entries_filled != 1 ||
+	    map_query_buf.entries[0].map_id != map_reply.map_id) {
+		fprintf(stderr,
+			"dead target remote map query mismatch filled=%u id=%" PRIu64 "\n",
+			map_query_reply.entries_filled,
+			map_query_reply.entries_filled ?
+				(uint64_t)map_query_buf.entries[0].map_id :
+				0ULL);
+		goto out;
+	}
+	if (query_remote_allocs(session_fd, 0, &alloc_query_buf,
+				&alloc_query_reply) < 0)
+		goto out;
+	if (alloc_query_reply.entries_filled != 1 ||
+	    alloc_query_buf.entries[0].alloc_id != alloc_reply.alloc_id) {
+		fprintf(stderr,
+			"dead target remote alloc query mismatch filled=%u id=%" PRIu64 "\n",
+			alloc_query_reply.entries_filled,
+			alloc_query_reply.entries_filled ?
+				(uint64_t)alloc_query_buf.entries[0].alloc_id :
+				0ULL);
+		goto out;
+	}
+	if (query_pte_patches(session_fd, 0, pte_entries,
+			      (uint32_t)(sizeof(pte_entries) /
+					 sizeof(pte_entries[0])),
+			      &pte_query_reply) < 0)
+		goto out;
+	if (pte_query_reply.entries_filled != 1 ||
+	    pte_entries[0].id != pte_apply_reply.id ||
+	    !(pte_entries[0].state & LKMDBG_PTE_PATCH_STATE_LOST)) {
+		fprintf(stderr,
+			"dead target pte query mismatch filled=%u id=%" PRIu64 " state=0x%x\n",
+			pte_query_reply.entries_filled,
+			pte_query_reply.entries_filled ?
+				(uint64_t)pte_entries[0].id :
+				0ULL,
+			pte_query_reply.entries_filled ? pte_entries[0].state : 0U);
+		goto out;
+	}
+
+	if (remove_remote_map(session_fd, map_reply.map_id, &map_remove_reply) < 0)
+		goto out;
+	if (remove_remote_alloc(session_fd, alloc_reply.alloc_id,
+				&alloc_remove_reply) < 0)
+		goto out;
+	if (remove_pte_patch(session_fd, pte_apply_reply.id, &pte_remove_reply) <
+	    0)
+		goto out;
+	if (!(pte_remove_reply.state & LKMDBG_PTE_PATCH_STATE_LOST)) {
+		fprintf(stderr, "dead target pte remove state mismatch=0x%x\n",
+			pte_remove_reply.state);
+		goto out;
+	}
+
+	errno = 0;
+	if (create_remote_map(session_fd, info->large_addr, 0, info->page_size,
+			      LKMDBG_REMOTE_MAP_PROT_READ, 0,
+			      &map_reply) == 0 || errno != ESRCH) {
+		fprintf(stderr,
+			"dead target create remote map mismatch errno=%d\n",
+			errno);
+		goto out;
+	}
+	errno = 0;
+	if (create_remote_alloc(session_fd, shell_addr,
+				SELFTEST_SOAK_REMOTE_ALLOC_LEN,
+				LKMDBG_REMOTE_ALLOC_PROT_READ,
+				&alloc_reply) == 0 || errno != ESRCH) {
+		fprintf(stderr,
+			"dead target create remote alloc mismatch errno=%d\n",
+			errno);
+		goto out;
+	}
+
+	if (start_selftest_child(&replacement_child, &replacement_info_fd,
+				 &replacement_cmd_fd, &replacement_resp_fd,
+				 &replacement_info) < 0)
+		goto out;
+	if (child_read_remote_range(replacement_cmd_fd, replacement_resp_fd,
+				    replacement_info.basic_addr,
+				    replacement_readback,
+				    sizeof(initial_payload)) < 0)
+		goto out;
+	if (memcmp(replacement_readback, initial_payload,
+		   sizeof(initial_payload)) != 0) {
+		fprintf(stderr, "replacement child initial payload mismatch\n");
+		goto out;
+	}
+	memset(replacement_readback, 0, sizeof(replacement_readback));
+	errno = 0;
+	if (write_target_memory(session_fd, replacement_info.basic_addr,
+				"stale-session", sizeof("stale-session"), NULL,
+				0) == 0 || errno != ESRCH) {
+		fprintf(stderr, "stale session write mismatch errno=%d\n", errno);
+		goto out;
+	}
+	if (child_read_remote_range(replacement_cmd_fd, replacement_resp_fd,
+				    replacement_info.basic_addr,
+				    replacement_readback,
+				    sizeof(initial_payload)) < 0)
+		goto out;
+	if (memcmp(replacement_readback, initial_payload,
+		   sizeof(initial_payload)) != 0) {
+		fprintf(stderr,
+			"replacement child changed before rebind unexpectedly\n");
+		goto out;
+	}
+
+	if (set_target(session_fd, replacement_child) < 0)
+		goto out;
+	if (write_target_memory(session_fd, replacement_info.basic_addr,
+				rebind_payload, strlen(rebind_payload) + 1, NULL,
+				0) < 0)
+		goto out;
+	if (verify_remote_string(session_fd, replacement_info.basic_addr,
+				 rebind_payload) < 0)
+		goto out;
+	if (child_read_remote_range(replacement_cmd_fd, replacement_resp_fd,
+				    replacement_info.basic_addr,
+				    replacement_readback,
+				    strlen(rebind_payload) + 1) < 0)
+		goto out;
+	if (strcmp(replacement_readback, rebind_payload) != 0) {
+		fprintf(stderr, "replacement child rebind writeback mismatch\n");
+		goto out;
+	}
+
+	printf("selftest target exit cleanup ok exit_code=%" PRIu64 " rebind_pid=%d\n",
+	       (uint64_t)exit_event.value0, replacement_child);
+	ret = 0;
+
+out:
+	if (replacement_info_fd >= 0)
+		close(replacement_info_fd);
+	if (replacement_cmd_fd >= 0 && replacement_resp_fd >= 0)
+		stop_selftest_child(replacement_child, replacement_cmd_fd,
+				    replacement_resp_fd, 1);
+	free(map_query_buf.entries);
+	free(alloc_query_buf.entries);
+	return ret;
+}
+
 static void usage(const char *prog)
 {
 	fprintf(stderr,
@@ -6955,7 +8040,6 @@ static int run_selftest(const char *prog)
 	uint32_t ops_done = 0;
 	uint64_t batch_bytes_done = 0;
 	unsigned int i;
-	int status;
 	int resident_before;
 	int resident_after_read;
 	int resident_after_write;
@@ -7477,6 +8561,37 @@ static int run_selftest(const char *prog)
 
 	printf("selftest partial batch progress survives runtime write fault\n");
 
+	if (verify_multi_session_conflict(session_fd, child, &info) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	if (verify_cross_page_permission_flip(session_fd, &info, cmd_pipe[1],
+					      resp_pipe[0]) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
+	if (verify_randomized_mem_soak(session_fd, child, &info) < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		return 1;
+	}
+
 	large_buf = malloc(info.large_len);
 	batch_a = malloc(batch_lengths[0]);
 	batch_b = malloc(batch_lengths[1]);
@@ -7634,28 +8749,13 @@ static int run_selftest(const char *prog)
 	printf("selftest large and batched memory access ok len=%u batch_bytes=%" PRIu64 "\n",
 	       info.large_len, batch_bytes_done);
 
-	close(session_fd);
-	close(info_pipe[0]);
-
-	{
-		struct child_cmd exit_cmd = {
-			.op = CHILD_OP_EXIT,
-		};
-
-		if (write_full(cmd_pipe[1], &exit_cmd, sizeof(exit_cmd)) !=
-		    (ssize_t)sizeof(exit_cmd))
-			fprintf(stderr, "failed to send child exit command\n");
-	}
-	close(cmd_pipe[1]);
-	close(resp_pipe[0]);
-
-	if (waitpid(child, &status, 0) < 0) {
-		fprintf(stderr, "waitpid failed: %s\n", strerror(errno));
-		return 1;
-	}
-
-	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-		fprintf(stderr, "child exited abnormally status=%d\n", status);
+	if (verify_inflight_exit_race() < 0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
 		free(large_buf);
 		free(batch_a);
 		free(batch_b);
@@ -7663,6 +8763,26 @@ static int run_selftest(const char *prog)
 		free(batch_d);
 		return 1;
 	}
+
+	if (verify_target_exit_cleanup_and_rebind(session_fd, child, &info,
+						  cmd_pipe[1], resp_pipe[0]) <
+	    0) {
+		close(session_fd);
+		close(info_pipe[0]);
+		close(cmd_pipe[1]);
+		close(resp_pipe[0]);
+		free(large_buf);
+		free(batch_a);
+		free(batch_b);
+		free(batch_c);
+		free(batch_d);
+		return 1;
+	}
+
+	close(session_fd);
+	close(info_pipe[0]);
+	close(cmd_pipe[1]);
+	close(resp_pipe[0]);
 
 	free(large_buf);
 	free(batch_a);
