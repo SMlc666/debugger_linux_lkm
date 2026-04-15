@@ -4232,6 +4232,7 @@ static int verify_cross_page_permission_flip(int session_fd,
 	unsigned char readback[SELFTEST_PERMISSION_SPAN];
 	unsigned char *original_pages = NULL;
 	struct lkmdbg_mem_op op;
+	struct lkmdbg_mem_op restore_ops[2];
 	struct lkmdbg_mem_request req;
 	uintptr_t page1;
 	uintptr_t page2;
@@ -4344,16 +4345,30 @@ static int verify_cross_page_permission_flip(int session_fd,
 	if (child_mprotect_range(cmd_fd, resp_fd, page2, info->page_size,
 				 PROT_READ | PROT_WRITE) < 0)
 		goto out;
-	memset(&op, 0, sizeof(op));
+	memset(restore_ops, 0, sizeof(restore_ops));
 	memset(&req, 0, sizeof(req));
-	op.remote_addr = page2 - prefix;
-	op.local_addr = (uintptr_t)payload;
-	op.length = sizeof(payload);
-	if (xfer_target_memory(session_fd, &op, 1, 1, &req, 0) < 0 ||
-	    op.bytes_done != sizeof(payload)) {
+	restore_ops[0].remote_addr = page2 - prefix;
+	restore_ops[0].local_addr = (uintptr_t)payload;
+	restore_ops[0].length = prefix;
+	restore_ops[1].remote_addr = page2;
+	restore_ops[1].local_addr = (uintptr_t)(payload + prefix);
+	restore_ops[1].length = sizeof(payload) - prefix;
+	if (xfer_target_memory(session_fd, restore_ops, 2, 1, &req, 0) < 0 ||
+	    req.ops_done != 2 || req.bytes_done != sizeof(payload) ||
+	    restore_ops[0].bytes_done != prefix ||
+	    restore_ops[1].bytes_done != sizeof(payload) - prefix) {
 		fprintf(stderr,
-			"perm flip restore write mismatch bytes_done=%u\n",
-			op.bytes_done);
+			"perm flip restore write mismatch ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
+			req.ops_done, (uint64_t)req.bytes_done,
+			restore_ops[0].bytes_done, restore_ops[1].bytes_done);
+		goto out;
+	}
+	memset(readback, 0, sizeof(readback));
+	if (read_target_memory_flags(session_fd, page2 - prefix, readback,
+				     sizeof(readback),
+				     LKMDBG_MEM_OP_FLAG_FORCE_ACCESS, NULL, 0) < 0 ||
+	    memcmp(readback, payload, sizeof(payload)) != 0) {
+		fprintf(stderr, "perm flip restore readback mismatch\n");
 		goto out;
 	}
 	if (write_target_memory(session_fd, page1, original_pages, tracked_len,
@@ -7732,30 +7747,23 @@ static int verify_inflight_exit_race(void)
 			return -1;
 		}
 
-		if ((xfer_ret < 0 && errno == ESRCH) ||
-		    req.ops_done < race_ops ||
-		    req.bytes_done < total_len) {
-			if (expect_dead_mem_accesses_fail(session_fd, &info) < 0) {
-				free(buf);
-				close(session_fd);
-				return -1;
-			}
-			printf("selftest in-flight exit race ok attempt=%u delay_us=%u ret=%d errno=%d ops_done=%u bytes_done=%" PRIu64 "\n",
-			       attempt + 1U, delays_us[attempt], xfer_ret, errno,
-			       req.ops_done, (uint64_t)req.bytes_done);
+		if (expect_dead_mem_accesses_fail(session_fd, &info) < 0) {
 			free(buf);
 			close(session_fd);
-			return 0;
+			return -1;
 		}
-
-		printf("selftest in-flight exit race retry attempt=%u delay_us=%u ops_done=%u bytes_done=%" PRIu64 "\n",
-		       attempt + 1U, delays_us[attempt], req.ops_done,
-		       (uint64_t)req.bytes_done);
+		printf("selftest in-flight exit race ok attempt=%u delay_us=%u interrupted=%u ret=%d errno=%d ops_done=%u bytes_done=%" PRIu64 "\n",
+		       attempt + 1U, delays_us[attempt],
+		       (xfer_ret < 0 && errno == ESRCH) ||
+			       req.ops_done < race_ops ||
+			       req.bytes_done < total_len,
+		       xfer_ret, errno, req.ops_done, (uint64_t)req.bytes_done);
 		free(buf);
 		close(session_fd);
+		return 0;
 	}
 
-	fprintf(stderr, "in-flight exit race did not observe partial/failure\n");
+	fprintf(stderr, "in-flight exit race attempts exhausted\n");
 	return -1;
 }
 
