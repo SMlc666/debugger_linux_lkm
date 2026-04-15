@@ -74,3 +74,63 @@ int get_status(int session_fd, struct lkmdbg_status_reply *reply_out)
 
 	return 0;
 }
+
+int reset_session(int session_fd)
+{
+	if (ioctl(session_fd, LKMDBG_IOC_RESET_SESSION) < 0) {
+		lkmdbg_log_errnof("RESET_SESSION");
+		return -1;
+	}
+
+	return 0;
+}
+
+int get_event_config(int session_fd,
+		     struct lkmdbg_event_config_request *reply_out)
+{
+	struct lkmdbg_event_config_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_GET_EVENT_CONFIG, &req) < 0) {
+		lkmdbg_log_errnof("GET_EVENT_CONFIG");
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+
+	return 0;
+}
+
+int bridge_open_session_fd(void)
+{
+	return open_session_fd();
+}
+
+int bridge_set_target_ex(int session_fd, pid_t pid, pid_t tid)
+{
+	return set_target_ex(session_fd, pid, tid);
+}
+
+int bridge_set_target(int session_fd, pid_t pid)
+{
+	return set_target(session_fd, pid);
+}
+
+int bridge_get_status(int session_fd, struct lkmdbg_status_reply *reply_out)
+{
+	return get_status(session_fd, reply_out);
+}
+
+int bridge_reset_session(int session_fd)
+{
+	return reset_session(session_fd);
+}
+
+int bridge_get_event_config(int session_fd,
+			    struct lkmdbg_event_config_request *reply_out)
+{
+	return get_event_config(session_fd, reply_out);
+}

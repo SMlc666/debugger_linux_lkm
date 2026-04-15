@@ -6,10 +6,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <unistd.h>
 
 #include "../include/lkmdbg_ioctl.h"
+#include "driver/bridge_c.h"
+#include "driver/bridge_control.h"
 #include "driver/common.hpp"
 
 #define fprintf lkmdbg_fprintf
@@ -42,88 +43,27 @@ enum probe_state {
 	PROBE_STATE_UNREADABLE = 2,
 };
 
-static int open_session_fd(void)
+static int tool_open_session_fd(void)
 {
-	struct lkmdbg_open_session_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-	};
-	int proc_fd;
-	int session_fd;
-
-	proc_fd = open(TARGET_PATH, O_RDONLY | O_CLOEXEC);
-	if (proc_fd < 0) {
-		fprintf(stderr, "open(%s) failed: %s\n", TARGET_PATH,
-			strerror(errno));
-		return -1;
-	}
-
-	session_fd = ioctl(proc_fd, LKMDBG_IOC_OPEN_SESSION, &req);
-	if (session_fd < 0) {
-		fprintf(stderr, "OPEN_SESSION failed: %s\n", strerror(errno));
-		close(proc_fd);
-		return -1;
-	}
-
-	close(proc_fd);
-	return session_fd;
+	return bridge_open_session_fd();
 }
 
-static int get_status(int session_fd, struct lkmdbg_status_reply *reply_out)
+static int tool_get_status(int session_fd,
+			   struct lkmdbg_status_reply *reply_out)
 {
-	struct lkmdbg_status_reply reply = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(reply),
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_GET_STATUS, &reply) < 0) {
-		fprintf(stderr, "GET_STATUS failed: %s\n", strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = reply;
-
-	return 0;
+	return bridge_get_status(session_fd, reply_out);
 }
 
-static int get_stealth(int session_fd,
-		       struct lkmdbg_stealth_request *reply_out)
+static int tool_get_stealth(int session_fd,
+			    struct lkmdbg_stealth_request *reply_out)
 {
-	struct lkmdbg_stealth_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_GET_STEALTH, &req) < 0) {
-		fprintf(stderr, "GET_STEALTH failed: %s\n", strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-
-	return 0;
+	return bridge_get_stealth(session_fd, reply_out);
 }
 
-static int set_stealth(int session_fd, uint32_t flags,
-		       struct lkmdbg_stealth_request *reply_out)
+static int tool_set_stealth(int session_fd, uint32_t flags,
+			    struct lkmdbg_stealth_request *reply_out)
 {
-	struct lkmdbg_stealth_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.flags = flags,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_SET_STEALTH, &req) < 0) {
-		fprintf(stderr, "SET_STEALTH failed: %s\n", strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-
-	return 0;
+	return bridge_set_stealth(session_fd, flags, reply_out);
 }
 
 static void append_flag_name(char *buf, size_t buf_size, const char *name)
@@ -598,7 +538,7 @@ int main(int argc, char **argv)
 		flags = 0;
 	}
 
-	session_fd = open_session_fd();
+	session_fd = tool_open_session_fd();
 	if (session_fd < 0)
 		return 1;
 
@@ -608,24 +548,24 @@ int main(int argc, char **argv)
 	memset(&applied_stealth, 0, sizeof(applied_stealth));
 
 	if (strcmp(cmd, "show") == 0) {
-		if (get_stealth(session_fd, &stealth) < 0)
+		if (tool_get_stealth(session_fd, &stealth) < 0)
 			goto out;
-		if (get_status(session_fd, &status) < 0)
+		if (tool_get_status(session_fd, &status) < 0)
 			goto out;
 	} else if (strcmp(cmd, "report") == 0) {
-		if (get_stealth(session_fd, &orig_stealth) < 0)
+		if (tool_get_stealth(session_fd, &orig_stealth) < 0)
 			goto out;
 		report_flags = compute_report_flags(orig_stealth.supported_flags);
-		if (set_stealth(session_fd, report_flags, &applied_stealth) < 0)
+		if (tool_set_stealth(session_fd, report_flags, &applied_stealth) < 0)
 			goto out;
 		need_restore = true;
 		stealth = applied_stealth;
-		if (get_status(session_fd, &status) < 0)
+		if (tool_get_status(session_fd, &status) < 0)
 			goto out;
 	} else {
-		if (set_stealth(session_fd, flags, &stealth) < 0)
+		if (tool_set_stealth(session_fd, flags, &stealth) < 0)
 			goto out;
-		if (get_status(session_fd, &status) < 0)
+		if (tool_get_status(session_fd, &status) < 0)
 			goto out;
 	}
 
@@ -637,7 +577,7 @@ int main(int argc, char **argv)
 
 out:
 	if (need_restore &&
-	    set_stealth(session_fd, orig_stealth.flags, NULL) < 0) {
+	    tool_set_stealth(session_fd, orig_stealth.flags, NULL) < 0) {
 		fprintf(stderr,
 			"warning: failed to restore stealth flags to 0x%x\n",
 			orig_stealth.flags);

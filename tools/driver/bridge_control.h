@@ -97,4 +97,53 @@ int set_stealth(int session_fd, uint32_t flags,
 		struct lkmdbg_stealth_request *reply_out);
 int get_stealth(int session_fd, struct lkmdbg_stealth_request *reply_out);
 
+int bridge_set_syscall_trace_expect_errno(int session_fd, pid_t tid,
+					  int syscall_nr, uint32_t mode,
+					  uint32_t phases, int expected_errno);
+
+int bridge_query_input_devices(
+	int session_fd, uint64_t start_id, struct lkmdbg_input_device_entry *entries,
+	uint32_t max_entries, uint32_t flags,
+	struct lkmdbg_input_query_request *reply_out);
+int bridge_get_input_device_info(
+	int session_fd, uint64_t device_id, uint32_t flags,
+	struct lkmdbg_input_device_info_request *reply_out);
+int bridge_open_input_channel(
+	int session_fd, uint64_t device_id, uint32_t flags,
+	struct lkmdbg_input_channel_request *reply_out);
+
+/* Bridge-prefixed aliases for callers that define local helper names. */
+int bridge_add_hwpoint_ex(int session_fd, pid_t tid, uint64_t addr,
+			  uint32_t type, uint32_t len, uint32_t flags,
+			  uint64_t trigger_hit_count, uint32_t action_flags,
+			  struct lkmdbg_hwpoint_request *reply_out);
+int bridge_add_hwpoint(int session_fd, pid_t tid, uint64_t addr, uint32_t type,
+		       uint32_t len, uint32_t flags,
+		       struct lkmdbg_hwpoint_request *reply_out);
+int bridge_add_hwpoint_expect_errno_ex(
+	int session_fd, pid_t tid, uint64_t addr, uint32_t type, uint32_t len,
+	uint32_t flags, uint64_t trigger_hit_count, uint32_t action_flags,
+	int expected_errno);
+int bridge_add_hwpoint_expect_errno(int session_fd, pid_t tid, uint64_t addr,
+				    uint32_t type, uint32_t len, uint32_t flags,
+				    int expected_errno);
+int bridge_remove_hwpoint(int session_fd, uint64_t id);
+int bridge_rearm_hwpoint(int session_fd, uint64_t id,
+			 struct lkmdbg_hwpoint_request *reply_out);
+int bridge_rearm_hwpoint_expect_errno(int session_fd, uint64_t id,
+				      int expected_errno);
+int bridge_query_hwpoints(int session_fd, uint64_t start_id,
+			  struct lkmdbg_hwpoint_entry *entries,
+			  uint32_t max_entries,
+			  struct lkmdbg_hwpoint_query_request *reply_out);
+int bridge_get_stop_state(int session_fd,
+			  struct lkmdbg_stop_query_request *reply_out);
+int bridge_continue_target(int session_fd, uint64_t stop_cookie,
+			   uint32_t timeout_ms, uint32_t flags,
+			   struct lkmdbg_continue_request *reply_out);
+int bridge_get_stealth(int session_fd,
+		       struct lkmdbg_stealth_request *reply_out);
+int bridge_set_stealth(int session_fd, uint32_t flags,
+		       struct lkmdbg_stealth_request *reply_out);
+
 #endif

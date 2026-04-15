@@ -10,7 +10,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/ptrace.h>
 #include <sys/stat.h>
@@ -22,6 +21,8 @@
 #include <unistd.h>
 
 #include "../include/lkmdbg_ioctl.h"
+#include "driver/bridge_c.h"
+#include "driver/bridge_control.h"
 #include "driver/common.hpp"
 
 #define fprintf lkmdbg_fprintf
@@ -188,42 +189,14 @@ static int wait_for_session_event(int session_fd,
 	return 0;
 }
 
-static int open_session_fd(void)
+static int tool_open_session_fd(void)
 {
-	struct lkmdbg_open_session_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-	};
-	int proc_fd;
-	int session_fd;
-
-	proc_fd = open(TARGET_PATH, O_RDONLY | O_CLOEXEC);
-	if (proc_fd < 0) {
-		fprintf(stderr, "open(%s) failed: %s\n", TARGET_PATH,
-			strerror(errno));
-		return -1;
-	}
-
-	session_fd = ioctl(proc_fd, LKMDBG_IOC_OPEN_SESSION, &req);
-	if (session_fd < 0) {
-		fprintf(stderr, "OPEN_SESSION failed: %s\n", strerror(errno));
-		close(proc_fd);
-		return -1;
-	}
-
-	close(proc_fd);
-	return session_fd;
+	return bridge_open_session_fd();
 }
 
-static int set_target(int session_fd, pid_t pid)
+static int tool_set_target(int session_fd, pid_t pid)
 {
-	struct lkmdbg_target_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.tgid = pid,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_SET_TARGET, &req) < 0) {
+	if (bridge_set_target(session_fd, pid) < 0) {
 		fprintf(stderr, "SET_TARGET failed: %s\n", strerror(errno));
 		return -1;
 	}
@@ -231,114 +204,64 @@ static int set_target(int session_fd, pid_t pid)
 	return 0;
 }
 
-static int add_hwpoint(int session_fd, uint64_t addr, uint32_t type,
+static int tool_add_hwpoint(int session_fd, uint64_t addr, uint32_t type,
 		       uint32_t len, uint32_t flags,
 		       struct lkmdbg_hwpoint_request *reply_out)
 {
-	struct lkmdbg_hwpoint_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.addr = addr,
-		.type = type,
-		.len = len,
-		.flags = flags,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_ADD_HWPOINT, &req) < 0) {
+	if (bridge_add_hwpoint(session_fd, 0, addr, type, len, flags,
+			       reply_out) < 0) {
 		fprintf(stderr,
-			"ADD_HWPOINT failed addr=0x%" PRIx64 " type=0x%x flags=0x%x errno=%d\n",
-			addr, type, flags, errno);
+				"ADD_HWPOINT failed addr=0x%" PRIx64 " type=0x%x flags=0x%x errno=%d\n",
+				addr, type, flags, errno);
 		return -1;
 	}
-
-	if (reply_out)
-		*reply_out = req;
 	return 0;
 }
 
-static int add_hwpoint_expect_errno(int session_fd, uint64_t addr, uint32_t type,
+static int tool_add_hwpoint_expect_errno(int session_fd, uint64_t addr, uint32_t type,
 				    uint32_t len, uint32_t flags,
 				    int expected_errno)
 {
-	struct lkmdbg_hwpoint_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.addr = addr,
-		.type = type,
-		.len = len,
-		.flags = flags,
-	};
-
-	errno = 0;
-	if (ioctl(session_fd, LKMDBG_IOC_ADD_HWPOINT, &req) == 0) {
+	if (bridge_add_hwpoint_expect_errno(session_fd, 0, addr, type, len, flags,
+					    expected_errno) < 0) {
 		fprintf(stderr,
-			"ADD_HWPOINT unexpectedly succeeded addr=0x%" PRIx64 "\n",
-			addr);
-		return -1;
-	}
-	if (errno != expected_errno) {
-		fprintf(stderr,
-			"ADD_HWPOINT errno=%d expected=%d addr=0x%" PRIx64 "\n",
-			errno, expected_errno, addr);
+				"ADD_HWPOINT expected errno=%d addr=0x%" PRIx64 "\n",
+				expected_errno, addr);
 		return -1;
 	}
 
 	return 0;
 }
 
-static int remove_hwpoint(int session_fd, uint64_t id)
+static int tool_remove_hwpoint(int session_fd, uint64_t id)
 {
-	struct lkmdbg_hwpoint_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.id = id,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_HWPOINT, &req) < 0) {
+	if (bridge_remove_hwpoint(session_fd, id) < 0) {
 		fprintf(stderr, "REMOVE_HWPOINT failed id=%" PRIu64 " errno=%d\n",
-			id, errno);
+				id, errno);
 		return -1;
 	}
 
 	return 0;
 }
 
-static int rearm_hwpoint(int session_fd, uint64_t id)
+static int tool_rearm_hwpoint(int session_fd, uint64_t id)
 {
-	struct lkmdbg_hwpoint_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.id = id,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_REARM_HWPOINT, &req) < 0) {
+	if (bridge_rearm_hwpoint(session_fd, id, NULL) < 0) {
 		fprintf(stderr, "REARM_HWPOINT failed id=%" PRIu64 " errno=%d\n",
-			id, errno);
+				id, errno);
 		return -1;
 	}
 
 	return 0;
 }
 
-static int rearm_hwpoint_expect_errno(int session_fd, uint64_t id,
+static int tool_rearm_hwpoint_expect_errno(int session_fd, uint64_t id,
 				      int expected_errno)
 {
-	struct lkmdbg_hwpoint_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.id = id,
-	};
-
-	errno = 0;
-	if (ioctl(session_fd, LKMDBG_IOC_REARM_HWPOINT, &req) == 0) {
-		fprintf(stderr, "REARM_HWPOINT unexpectedly succeeded id=%" PRIu64 "\n",
-			id);
-		return -1;
-	}
-	if (errno != expected_errno) {
+	if (bridge_rearm_hwpoint_expect_errno(session_fd, id, expected_errno) < 0) {
 		fprintf(stderr,
-			"REARM_HWPOINT errno=%d expected=%d id=%" PRIu64 "\n",
-			errno, expected_errno, id);
+				"REARM_HWPOINT expected errno=%d id=%" PRIu64 "\n",
+				expected_errno, id);
 		return -1;
 	}
 
@@ -352,19 +275,20 @@ static int query_hwpoint_entry(int session_fd, uint64_t id,
 	uint64_t cursor = 0;
 
 	for (;;) {
-		struct lkmdbg_hwpoint_query_request req = {
-			.version = LKMDBG_PROTO_VERSION,
-			.size = sizeof(req),
-			.entries_addr = (uintptr_t)entries,
-			.max_entries = QUERY_BATCH,
-			.start_id = cursor,
-		};
-		uint32_t i;
+			struct lkmdbg_hwpoint_query_request req = {
+				.version = LKMDBG_PROTO_VERSION,
+				.size = sizeof(req),
+				.entries_addr = (uintptr_t)entries,
+				.max_entries = QUERY_BATCH,
+				.start_id = cursor,
+			};
+			uint32_t i;
 
-		if (ioctl(session_fd, LKMDBG_IOC_QUERY_HWPOINTS, &req) < 0) {
-			fprintf(stderr, "QUERY_HWPOINTS failed: %s\n",
-				strerror(errno));
-			return -1;
+			if (bridge_query_hwpoints(session_fd, cursor, entries,
+						  QUERY_BATCH, &req) < 0) {
+				fprintf(stderr, "QUERY_HWPOINTS failed: %s\n",
+					strerror(errno));
+				return -1;
 		}
 
 		for (i = 0; i < req.entries_filled; i++) {
@@ -401,34 +325,20 @@ static int expect_hwpoint_state_bits(int session_fd, uint64_t id, uint32_t set_b
 	return 0;
 }
 
-static int get_stop_state(int session_fd,
+static int tool_get_stop_state(int session_fd,
 			  struct lkmdbg_stop_query_request *reply_out)
 {
-	struct lkmdbg_stop_query_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_GET_STOP_STATE, &req) < 0) {
+	if (bridge_get_stop_state(session_fd, reply_out) < 0) {
 		fprintf(stderr, "GET_STOP_STATE failed: %s\n", strerror(errno));
 		return -1;
 	}
-
-	*reply_out = req;
 	return 0;
 }
 
-static int continue_target(int session_fd, uint64_t stop_cookie, uint32_t flags)
+static int tool_continue_target(int session_fd, uint64_t stop_cookie, uint32_t flags)
 {
-	struct lkmdbg_continue_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.flags = flags,
-		.timeout_ms = 2000,
-		.stop_cookie = stop_cookie,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_CONTINUE_TARGET, &req) < 0) {
+	if (bridge_continue_target(session_fd, stop_cookie, 2000, flags, NULL) <
+	    0) {
 		fprintf(stderr, "CONTINUE_TARGET failed: %s\n", strerror(errno));
 		return -1;
 	}
@@ -595,7 +505,7 @@ static int expect_stop_event(int session_fd, uint32_t expected_reason,
 		return -1;
 	}
 
-	if (get_stop_state(session_fd, &stop_req) < 0)
+	if (tool_get_stop_state(session_fd, &stop_req) < 0)
 		return -1;
 	if (stop_req.stop.reason != expected_reason ||
 	    !(stop_req.stop.flags & LKMDBG_STOP_FLAG_FROZEN) ||
@@ -653,7 +563,7 @@ static int expect_command_stop(int session_fd, int cmd_fd, int reply_fd,
 		fprintf(stderr, "%s stop validation failed\n", label);
 		return -1;
 	}
-	if (continue_target(session_fd, stop_req.stop.cookie, 0) < 0)
+	if (tool_continue_target(session_fd, stop_req.stop.cookie, 0) < 0)
 		return -1;
 	if (expect_child_reply_ok(reply_fd, label) < 0)
 		return -1;
@@ -1276,7 +1186,7 @@ static int test_read_filter(int session_fd, int cmd_fd, int reply_fd,
 {
 	struct lkmdbg_hwpoint_request req;
 
-	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+	if (tool_add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (expect_hwpoint_state_bits(session_fd, req.id,
@@ -1314,7 +1224,7 @@ static int test_read_filter(int session_fd, int cmd_fd, int reply_fd,
 				   CHILD_OP_READ_DATA,
 				   "read_filter_oneshot") < 0)
 		goto fail;
-	if (rearm_hwpoint(session_fd, req.id) < 0)
+	if (tool_rearm_hwpoint(session_fd, req.id) < 0)
 		goto fail;
 	if (expect_command_stop(session_fd, cmd_fd, reply_fd, CHILD_OP_READ_DATA,
 				LKMDBG_STOP_REASON_WATCHPOINT,
@@ -1322,14 +1232,14 @@ static int test_read_filter(int session_fd, int cmd_fd, int reply_fd,
 					LKMDBG_HWPOINT_FLAG_MMU,
 				info->data_addr, "read_filter_rearm_stop") < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: read filter ok\n");
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1338,7 +1248,7 @@ static int test_write_filter(int session_fd, int cmd_fd, int reply_fd,
 {
 	struct lkmdbg_hwpoint_request req;
 
-	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_WRITE, 8,
+	if (tool_add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_WRITE, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (expect_command_no_stop(session_fd, cmd_fd, reply_fd,
@@ -1352,14 +1262,14 @@ static int test_write_filter(int session_fd, int cmd_fd, int reply_fd,
 					LKMDBG_HWPOINT_FLAG_MMU,
 				info->data_addr, "write_filter_stop") < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: write filter ok\n");
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1368,7 +1278,7 @@ static int test_combo_rx(int session_fd, int cmd_fd, int reply_fd,
 {
 	struct lkmdbg_hwpoint_request req;
 
-	if (add_hwpoint(session_fd, info->exec_addr,
+	if (tool_add_hwpoint(session_fd, info->exec_addr,
 			LKMDBG_HWPOINT_TYPE_READ | LKMDBG_HWPOINT_TYPE_EXEC, 4,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
@@ -1379,7 +1289,7 @@ static int test_combo_rx(int session_fd, int cmd_fd, int reply_fd,
 					LKMDBG_HWPOINT_FLAG_MMU,
 				info->exec_addr, "combo_rx_read") < 0)
 		goto fail;
-	if (rearm_hwpoint(session_fd, req.id) < 0)
+	if (tool_rearm_hwpoint(session_fd, req.id) < 0)
 		goto fail;
 	if (expect_command_stop(session_fd, cmd_fd, reply_fd, CHILD_OP_EXEC_PAGE,
 				LKMDBG_STOP_REASON_BREAKPOINT,
@@ -1387,14 +1297,14 @@ static int test_combo_rx(int session_fd, int cmd_fd, int reply_fd,
 					LKMDBG_HWPOINT_FLAG_MMU,
 				info->exec_addr, "combo_rx_exec") < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: rx combo ok\n");
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1403,7 +1313,7 @@ static int test_combo_rw(int session_fd, int cmd_fd, int reply_fd,
 {
 	struct lkmdbg_hwpoint_request req;
 
-	if (add_hwpoint(session_fd, info->data_addr,
+	if (tool_add_hwpoint(session_fd, info->data_addr,
 			LKMDBG_HWPOINT_TYPE_READ | LKMDBG_HWPOINT_TYPE_WRITE, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
@@ -1413,7 +1323,7 @@ static int test_combo_rw(int session_fd, int cmd_fd, int reply_fd,
 					LKMDBG_HWPOINT_FLAG_MMU,
 				info->data_addr, "combo_rw_read") < 0)
 		goto fail;
-	if (rearm_hwpoint(session_fd, req.id) < 0)
+	if (tool_rearm_hwpoint(session_fd, req.id) < 0)
 		goto fail;
 	if (expect_command_stop(session_fd, cmd_fd, reply_fd,
 				CHILD_OP_WRITE_DATA,
@@ -1422,14 +1332,14 @@ static int test_combo_rw(int session_fd, int cmd_fd, int reply_fd,
 					LKMDBG_HWPOINT_FLAG_MMU,
 				info->data_addr, "combo_rw_write") < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: rw combo ok\n");
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1438,7 +1348,7 @@ static int test_combo_wx(int session_fd, int cmd_fd, int reply_fd,
 {
 	struct lkmdbg_hwpoint_request req;
 
-	if (add_hwpoint(session_fd, info->combo_page_addr,
+	if (tool_add_hwpoint(session_fd, info->combo_page_addr,
 			LKMDBG_HWPOINT_TYPE_WRITE | LKMDBG_HWPOINT_TYPE_EXEC, 4,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
@@ -1453,7 +1363,7 @@ static int test_combo_wx(int session_fd, int cmd_fd, int reply_fd,
 					LKMDBG_HWPOINT_FLAG_MMU,
 				info->combo_page_addr, "combo_wx_write") < 0)
 		goto fail;
-	if (rearm_hwpoint(session_fd, req.id) < 0)
+	if (tool_rearm_hwpoint(session_fd, req.id) < 0)
 		goto fail;
 	if (expect_command_stop(session_fd, cmd_fd, reply_fd,
 				CHILD_OP_EXEC_COMBO,
@@ -1462,14 +1372,14 @@ static int test_combo_wx(int session_fd, int cmd_fd, int reply_fd,
 					LKMDBG_HWPOINT_FLAG_MMU,
 				info->combo_page_addr, "combo_wx_exec") < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: wx combo ok\n");
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1478,12 +1388,12 @@ static int test_combo_rwx(int session_fd, int cmd_fd, int reply_fd,
 {
 	struct lkmdbg_hwpoint_request req;
 
-	if (add_hwpoint(session_fd, info->combo_page_addr,
+	if (tool_add_hwpoint(session_fd, info->combo_page_addr,
 			LKMDBG_HWPOINT_TYPE_READ | LKMDBG_HWPOINT_TYPE_WRITE |
 				LKMDBG_HWPOINT_TYPE_EXEC,
 			4, LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
-	if (add_hwpoint_expect_errno(session_fd, info->combo_data_addr,
+	if (tool_add_hwpoint_expect_errno(session_fd, info->combo_data_addr,
 				     LKMDBG_HWPOINT_TYPE_WRITE, 8,
 				     LKMDBG_HWPOINT_FLAG_MMU, EEXIST) < 0)
 		goto fail;
@@ -1494,7 +1404,7 @@ static int test_combo_rwx(int session_fd, int cmd_fd, int reply_fd,
 					LKMDBG_HWPOINT_FLAG_MMU,
 				info->combo_page_addr, "combo_rwx_write") < 0)
 		goto fail;
-	if (rearm_hwpoint(session_fd, req.id) < 0)
+	if (tool_rearm_hwpoint(session_fd, req.id) < 0)
 		goto fail;
 	if (expect_command_stop(session_fd, cmd_fd, reply_fd,
 				CHILD_OP_READ_COMBO,
@@ -1503,7 +1413,7 @@ static int test_combo_rwx(int session_fd, int cmd_fd, int reply_fd,
 					LKMDBG_HWPOINT_FLAG_MMU,
 				info->combo_page_addr, "combo_rwx_read") < 0)
 		goto fail;
-	if (rearm_hwpoint(session_fd, req.id) < 0)
+	if (tool_rearm_hwpoint(session_fd, req.id) < 0)
 		goto fail;
 	if (expect_command_stop(session_fd, cmd_fd, reply_fd,
 				CHILD_OP_EXEC_COMBO,
@@ -1512,14 +1422,14 @@ static int test_combo_rwx(int session_fd, int cmd_fd, int reply_fd,
 					LKMDBG_HWPOINT_FLAG_MMU,
 				info->combo_page_addr, "combo_rwx_exec") < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: rwx combo ok\n");
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1539,7 +1449,7 @@ static int test_external_ops(int session_fd, int cmd_fd, int reply_fd, pid_t pid
 	if (read_maps_perms(pid, info->data_addr, perms_before) < 0)
 		return -1;
 
-	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+	if (tool_add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (check_process_vm_read(pid, info->data_addr) < 0)
@@ -1590,7 +1500,7 @@ static int test_external_ops(int session_fd, int cmd_fd, int reply_fd, pid_t pid
 			entry.state);
 		goto fail;
 	}
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: external ops ok resident=%d perms=%s state=0x%x pagemap_before=0x%016" PRIx64 " pagemap_after=0x%016" PRIx64 "\n",
@@ -1599,7 +1509,7 @@ static int test_external_ops(int session_fd, int cmd_fd, int reply_fd, pid_t pid
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1610,7 +1520,7 @@ static int test_external_op_process_vm_read(int session_fd, int cmd_fd,
 	struct lkmdbg_hwpoint_request req;
 	uint32_t state = 0;
 
-	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+	if (tool_add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
@@ -1621,14 +1531,14 @@ static int test_external_op_process_vm_read(int session_fd, int cmd_fd,
 					    "process_vm_read_state",
 					    &state) < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: external process_vm_read ok state=0x%x\n", state);
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1639,7 +1549,7 @@ static int test_external_op_process_vm_write(int session_fd, int cmd_fd,
 	struct lkmdbg_hwpoint_request req;
 	uint32_t state = 0;
 
-	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+	if (tool_add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
@@ -1650,14 +1560,14 @@ static int test_external_op_process_vm_write(int session_fd, int cmd_fd,
 					    "process_vm_write_state",
 					    &state) < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: external process_vm_write ok state=0x%x\n", state);
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1668,7 +1578,7 @@ static int test_external_op_proc_mem_read(int session_fd, int cmd_fd,
 	struct lkmdbg_hwpoint_request req;
 	uint32_t state = 0;
 
-	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+	if (tool_add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
@@ -1677,14 +1587,14 @@ static int test_external_op_proc_mem_read(int session_fd, int cmd_fd,
 	if (validate_external_hwpoint_state(session_fd, req.id,
 					    "proc_mem_read_state", &state) < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: external proc_mem_read ok state=0x%x\n", state);
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1695,7 +1605,7 @@ static int test_external_op_proc_mem_write(int session_fd, int cmd_fd,
 	struct lkmdbg_hwpoint_request req;
 	uint32_t state = 0;
 
-	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+	if (tool_add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
@@ -1704,14 +1614,14 @@ static int test_external_op_proc_mem_write(int session_fd, int cmd_fd,
 	if (validate_external_hwpoint_state(session_fd, req.id,
 					    "proc_mem_write_state", &state) < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: external proc_mem_write ok state=0x%x\n", state);
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1725,7 +1635,7 @@ static int test_external_op_ptrace_read(int session_fd, int cmd_fd,
 	(void)cmd_fd;
 	(void)reply_fd;
 
-	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+	if (tool_add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
@@ -1734,14 +1644,14 @@ static int test_external_op_ptrace_read(int session_fd, int cmd_fd,
 	if (validate_external_hwpoint_state(session_fd, req.id,
 					    "ptrace_read_state", &state) < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: external ptrace_read ok state=0x%x\n", state);
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1755,7 +1665,7 @@ static int test_external_op_ptrace_write(int session_fd, int cmd_fd,
 	(void)cmd_fd;
 	(void)reply_fd;
 
-	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+	if (tool_add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
@@ -1764,14 +1674,14 @@ static int test_external_op_ptrace_write(int session_fd, int cmd_fd,
 	if (validate_external_hwpoint_state(session_fd, req.id,
 					    "ptrace_write_state", &state) < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: external ptrace_write ok state=0x%x\n", state);
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1782,7 +1692,7 @@ static int test_external_op_mincore(int session_fd, int cmd_fd, int reply_fd,
 	uint32_t state = 0;
 	int resident = 0;
 
-	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+	if (tool_add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
@@ -1791,7 +1701,7 @@ static int test_external_op_mincore(int session_fd, int cmd_fd, int reply_fd,
 	if (validate_external_hwpoint_state(session_fd, req.id,
 					    "mincore_state", &state) < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: external mincore ok resident=%d state=0x%x\n",
@@ -1799,7 +1709,7 @@ static int test_external_op_mincore(int session_fd, int cmd_fd, int reply_fd,
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1816,7 +1726,7 @@ static int test_external_op_maps(int session_fd, int cmd_fd, int reply_fd,
 
 	if (read_maps_perms(pid, info->data_addr, perms_before) < 0)
 		return -1;
-	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+	if (tool_add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
@@ -1830,7 +1740,7 @@ static int test_external_op_maps(int session_fd, int cmd_fd, int reply_fd,
 	if (validate_external_hwpoint_state(session_fd, req.id, "maps_state",
 					    &state) < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: external maps ok perms=%s state=0x%x\n",
@@ -1838,7 +1748,7 @@ static int test_external_op_maps(int session_fd, int cmd_fd, int reply_fd,
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1856,7 +1766,7 @@ static int test_external_op_pagemap(int session_fd, int cmd_fd, int reply_fd,
 
 	if (read_pagemap_entry(pid, info->data_addr, &pagemap_before) < 0)
 		return -1;
-	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+	if (tool_add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (run_external_op(session_fd, cmd_fd, reply_fd, pid, info,
@@ -1872,7 +1782,7 @@ static int test_external_op_pagemap(int session_fd, int cmd_fd, int reply_fd,
 	if (validate_external_hwpoint_state(session_fd, req.id, "pagemap_state",
 					    &state) < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: external pagemap ok value=0x%016" PRIx64 " state=0x%x\n",
@@ -1880,7 +1790,7 @@ static int test_external_op_pagemap(int session_fd, int cmd_fd, int reply_fd,
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1910,7 +1820,7 @@ static int test_external_ops_repeat(int session_fd, int cmd_fd, int reply_fd,
 	const char *first_idle_op = NULL;
 	uint32_t state = 0;
 
-	if (add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+	if (tool_add_hwpoint(session_fd, info->data_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 
@@ -1955,7 +1865,7 @@ static int test_external_ops_repeat(int session_fd, int cmd_fd, int reply_fd,
 		}
 	}
 
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: external repeat ok rounds=%u active_checks=%u mutated_checks=%u idle_checks=%u first_mutated_round=%d first_mutated_op=%s first_idle_round=%d first_idle_op=%s final_state=0x%x\n",
@@ -1967,7 +1877,7 @@ static int test_external_ops_repeat(int session_fd, int cmd_fd, int reply_fd,
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -1976,7 +1886,7 @@ static int test_mutated_mapping(int session_fd, int cmd_fd, int reply_fd,
 {
 	struct lkmdbg_hwpoint_request req;
 
-	if (add_hwpoint(session_fd, info->mutate_addr, LKMDBG_HWPOINT_TYPE_WRITE,
+	if (tool_add_hwpoint(session_fd, info->mutate_addr, LKMDBG_HWPOINT_TYPE_WRITE,
 			8, LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (expect_command_no_stop_filtered(session_fd, cmd_fd, reply_fd,
@@ -1990,16 +1900,16 @@ static int test_mutated_mapping(int session_fd, int cmd_fd, int reply_fd,
 					      LKMDBG_HWPOINT_STATE_LOST,
 				      "mutate_state") < 0)
 		goto fail;
-	if (rearm_hwpoint_expect_errno(session_fd, req.id, ESTALE) < 0)
+	if (tool_rearm_hwpoint_expect_errno(session_fd, req.id, ESTALE) < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: mprotect mutation ok\n");
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -2008,7 +1918,7 @@ static int test_lost_mapping(int session_fd, int cmd_fd, int reply_fd,
 {
 	struct lkmdbg_hwpoint_request req;
 
-	if (add_hwpoint(session_fd, info->lost_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
+	if (tool_add_hwpoint(session_fd, info->lost_addr, LKMDBG_HWPOINT_TYPE_READ, 8,
 			LKMDBG_HWPOINT_FLAG_MMU, &req) < 0)
 		return -1;
 	if (expect_command_no_stop_filtered(session_fd, cmd_fd, reply_fd,
@@ -2022,16 +1932,16 @@ static int test_lost_mapping(int session_fd, int cmd_fd, int reply_fd,
 					      LKMDBG_HWPOINT_STATE_MUTATED,
 				      "lost_state") < 0)
 		goto fail;
-	if (rearm_hwpoint_expect_errno(session_fd, req.id, ENOENT) < 0)
+	if (tool_rearm_hwpoint_expect_errno(session_fd, req.id, ENOENT) < 0)
 		goto fail;
-	if (remove_hwpoint(session_fd, req.id) < 0)
+	if (tool_remove_hwpoint(session_fd, req.id) < 0)
 		return -1;
 
 	printf("mmu test: munmap loss ok\n");
 	return 0;
 
 fail:
-	remove_hwpoint(session_fd, req.id);
+	tool_remove_hwpoint(session_fd, req.id);
 	return -1;
 }
 
@@ -2072,10 +1982,10 @@ static int run_selftest(void)
 		goto out;
 	}
 
-	session_fd = open_session_fd();
+	session_fd = tool_open_session_fd();
 	if (session_fd < 0)
 		goto out;
-	if (set_target(session_fd, child) < 0)
+	if (tool_set_target(session_fd, child) < 0)
 		goto out;
 	if (drain_session_events(session_fd) < 0)
 		goto out;

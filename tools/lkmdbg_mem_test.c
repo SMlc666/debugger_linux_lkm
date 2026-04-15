@@ -333,7 +333,7 @@ static int verify_batch_event_read(int session_fd)
 	struct lkmdbg_event_record events[2];
 	size_t events_read = 0;
 
-	if (ioctl(session_fd, LKMDBG_IOC_RESET_SESSION) < 0) {
+	if (bridge_reset_session(session_fd) < 0) {
 		fprintf(stderr, "RESET_SESSION failed: %s\n", strerror(errno));
 		return -1;
 	}
@@ -402,68 +402,23 @@ static int query_target_pages_ex(int session_fd, uint64_t start_addr,
 				 struct page_query_buffer *buf,
 				 struct lkmdbg_page_query_request *reply_out)
 {
-	struct lkmdbg_page_query_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.start_addr = start_addr,
-		.length = length,
-		.entries_addr = (uintptr_t)buf->entries,
-		.max_entries = PAGE_QUERY_BATCH,
-		.flags = flags,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_QUERY_PAGES, &req) < 0) {
-		fprintf(stderr, "QUERY_PAGES failed: %s\n", strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-	return 0;
+	return bridge_query_target_pages_ex(session_fd, start_addr, length, flags,
+					    buf->entries, PAGE_QUERY_BATCH,
+					    reply_out);
 }
 
 static int apply_pte_patch(int session_fd, uint64_t addr, uint32_t mode,
 			   uint32_t flags, uint64_t raw_pte,
 			   struct lkmdbg_pte_patch_request *reply_out)
 {
-	struct lkmdbg_pte_patch_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.addr = addr,
-		.raw_pte = raw_pte,
-		.mode = mode,
-		.flags = flags,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_APPLY_PTE_PATCH, &req) < 0) {
-		fprintf(stderr, "APPLY_PTE_PATCH failed: %s\n",
-			strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-	return 0;
+	return bridge_apply_pte_patch(session_fd, addr, mode, flags, raw_pte,
+				      reply_out);
 }
 
 static int remove_pte_patch(int session_fd, uint64_t id,
 			    struct lkmdbg_pte_patch_request *reply_out)
 {
-	struct lkmdbg_pte_patch_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.id = id,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_PTE_PATCH, &req) < 0) {
-		fprintf(stderr, "REMOVE_PTE_PATCH failed: %s\n",
-			strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-	return 0;
+	return bridge_remove_pte_patch(session_fd, id, reply_out);
 }
 
 static int query_pte_patches(int session_fd, uint64_t start_id,
@@ -471,23 +426,8 @@ static int query_pte_patches(int session_fd, uint64_t start_id,
 			     uint32_t max_entries,
 			     struct lkmdbg_pte_patch_query_request *reply_out)
 {
-	struct lkmdbg_pte_patch_query_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.entries_addr = (uintptr_t)entries,
-		.max_entries = max_entries,
-		.start_id = start_id,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_QUERY_PTE_PATCHES, &req) < 0) {
-		fprintf(stderr, "QUERY_PTE_PATCHES failed: %s\n",
-			strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-	return 0;
+	return bridge_query_pte_patches(session_fd, start_id, entries, max_entries,
+					reply_out);
 }
 
 static int create_remote_map(int session_fd, uintptr_t remote_addr,
@@ -495,135 +435,45 @@ static int create_remote_map(int session_fd, uintptr_t remote_addr,
 			     uint32_t flags,
 			     struct lkmdbg_remote_map_request *reply_out)
 {
-	struct lkmdbg_remote_map_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.remote_addr = remote_addr,
-		.local_addr = local_addr,
-		.length = len,
-		.prot = prot,
-		.flags = flags,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_MAP, &req) < 0) {
-		fprintf(stderr, "CREATE_REMOTE_MAP failed: %s\n",
-			strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-	return 0;
+	return bridge_create_remote_map(session_fd, remote_addr, local_addr, len,
+					prot, flags, 0, reply_out);
 }
 
 static int remove_remote_map(int session_fd, uint64_t map_id,
 			     struct lkmdbg_remote_map_handle_request *reply_out)
 {
-	struct lkmdbg_remote_map_handle_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.map_id = map_id,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_REMOTE_MAP, &req) < 0) {
-		fprintf(stderr, "REMOVE_REMOTE_MAP failed: %s\n",
-			strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-	return 0;
+	return bridge_remove_remote_map(session_fd, map_id, reply_out);
 }
 
 static int query_remote_maps(int session_fd, uint64_t start_id,
 			     struct remote_map_query_buffer *buf,
 			     struct lkmdbg_remote_map_query_request *reply_out)
 {
-	struct lkmdbg_remote_map_query_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.entries_addr = (uintptr_t)buf->entries,
-		.max_entries = REMOTE_MAP_QUERY_BATCH,
-		.start_id = start_id,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_QUERY_REMOTE_MAPS, &req) < 0) {
-		fprintf(stderr, "QUERY_REMOTE_MAPS failed: %s\n",
-			strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-	return 0;
+	return bridge_query_remote_maps(session_fd, start_id, buf->entries,
+					REMOTE_MAP_QUERY_BATCH, reply_out);
 }
 
 static int create_remote_alloc(int session_fd, uintptr_t remote_addr, size_t len,
 			       uint32_t prot,
 			       struct lkmdbg_remote_alloc_request *reply_out)
 {
-	struct lkmdbg_remote_alloc_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.remote_addr = remote_addr,
-		.length = len,
-		.prot = prot,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_ALLOC, &req) < 0) {
-		fprintf(stderr, "CREATE_REMOTE_ALLOC failed: %s\n",
-			strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-	return 0;
+	return bridge_create_remote_alloc(session_fd, remote_addr, len, prot, 0,
+					  reply_out);
 }
 
 static int remove_remote_alloc(
 	int session_fd, uint64_t alloc_id,
 	struct lkmdbg_remote_alloc_handle_request *reply_out)
 {
-	struct lkmdbg_remote_alloc_handle_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.alloc_id = alloc_id,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_REMOTE_ALLOC, &req) < 0) {
-		fprintf(stderr, "REMOVE_REMOTE_ALLOC failed: %s\n",
-			strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-	return 0;
+	return bridge_remove_remote_alloc(session_fd, alloc_id, reply_out);
 }
 
 static int query_remote_allocs(
 	int session_fd, uint64_t start_id, struct remote_alloc_query_buffer *buf,
 	struct lkmdbg_remote_alloc_query_request *reply_out)
 {
-	struct lkmdbg_remote_alloc_query_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.entries_addr = (uintptr_t)buf->entries,
-		.max_entries = REMOTE_ALLOC_QUERY_BATCH,
-		.start_id = start_id,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_QUERY_REMOTE_ALLOCS, &req) < 0) {
-		fprintf(stderr, "QUERY_REMOTE_ALLOCS failed: %s\n",
-			strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-	return 0;
+	return bridge_query_remote_allocs(session_fd, start_id, buf->entries,
+					  REMOTE_ALLOC_QUERY_BATCH, reply_out);
 }
 
 static void *remote_map_wake_thread_main(void *arg)
@@ -688,31 +538,9 @@ static int expect_set_syscall_trace_errno(int session_fd, pid_t tid,
 					  int syscall_nr, uint32_t mode,
 					  uint32_t phases, int expected_errno)
 {
-	struct lkmdbg_syscall_trace_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.tid = tid,
-		.syscall_nr = syscall_nr,
-		.mode = mode,
-		.phases = phases,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_SET_SYSCALL_TRACE, &req) == 0) {
-		fprintf(stderr,
-			"SET_SYSCALL_TRACE unexpectedly succeeded tid=%d nr=%d mode=0x%x phases=0x%x\n",
-			tid, syscall_nr, mode, phases);
-		return -1;
-	}
-
-	if (errno != expected_errno) {
-		fprintf(stderr,
-			"SET_SYSCALL_TRACE failed with %s instead of %s tid=%d nr=%d mode=0x%x phases=0x%x\n",
-			strerror(errno), strerror(expected_errno), tid, syscall_nr,
-			mode, phases);
-		return -1;
-	}
-
-	return 0;
+	return bridge_set_syscall_trace_expect_errno(session_fd, tid, syscall_nr,
+						     mode, phases,
+						     expected_errno);
 }
 
 static int verify_pattern(const unsigned char *buf, size_t len, unsigned int seed)
@@ -815,53 +643,19 @@ static int query_target_vmas_ex(int session_fd, uint64_t start_addr,
 				struct vma_query_buffer *buf,
 				struct lkmdbg_vma_query_request *reply_out)
 {
-	struct lkmdbg_vma_query_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.start_addr = start_addr,
-		.entries_addr = (uintptr_t)buf->entries,
-		.max_entries = VMA_QUERY_BATCH,
-		.flags = flags,
-		.match_flags_mask = match_flags_mask,
-		.match_flags_value = match_flags_value,
-		.match_prot_mask = match_prot_mask,
-		.match_prot_value = match_prot_value,
-		.names_addr = (uintptr_t)buf->names,
-		.names_size = VMA_QUERY_NAMES_SIZE,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_QUERY_VMAS, &req) < 0) {
-		fprintf(stderr, "QUERY_VMAS failed: %s\n", strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-	return 0;
+	return bridge_query_target_vmas_ex(
+		session_fd, start_addr, flags, match_flags_mask,
+		match_flags_value, match_prot_mask, match_prot_value, buf->entries,
+		VMA_QUERY_BATCH, buf->names, VMA_QUERY_NAMES_SIZE, reply_out);
 }
 
 static int query_target_images(int session_fd, uint64_t start_addr,
 			       struct image_query_buffer *buf,
 			       struct lkmdbg_image_query_request *reply_out)
 {
-	struct lkmdbg_image_query_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.start_addr = start_addr,
-		.entries_addr = (uintptr_t)buf->entries,
-		.max_entries = IMAGE_QUERY_BATCH,
-		.names_addr = (uintptr_t)buf->names,
-		.names_size = IMAGE_QUERY_NAMES_SIZE,
-	};
-
-	if (ioctl(session_fd, LKMDBG_IOC_QUERY_IMAGES, &req) < 0) {
-		fprintf(stderr, "QUERY_IMAGES failed: %s\n", strerror(errno));
-		return -1;
-	}
-
-	if (reply_out)
-		*reply_out = req;
-	return 0;
+	return bridge_query_target_images(
+		session_fd, start_addr, 0, buf->entries, IMAGE_QUERY_BATCH,
+		buf->names, IMAGE_QUERY_NAMES_SIZE, reply_out);
 }
 
 static const char *vma_name_ptr(const struct lkmdbg_vma_query_request *reply,
@@ -3242,12 +3036,12 @@ static int expect_partial_write_progress(int session_fd, uintptr_t remote_addr,
 	req.ops_addr = (uintptr_t)ops;
 	req.op_count = 2;
 
-	for (attempt = 0; attempt < 8; attempt++) {
-		errno = 0;
-		if (ioctl(session_fd, LKMDBG_IOC_WRITE_MEM, &req) == 0) {
-			printf("partial WRITE_MEM ioctl success ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
-			       req.ops_done, (uint64_t)req.bytes_done,
-			       ops[0].bytes_done, ops[1].bytes_done);
+		for (attempt = 0; attempt < 8; attempt++) {
+			errno = 0;
+			if (xfer_target_memory(session_fd, ops, 2, 1, &req, 0) == 0) {
+				printf("partial WRITE_MEM ioctl success ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
+				       req.ops_done, (uint64_t)req.bytes_done,
+				       ops[0].bytes_done, ops[1].bytes_done);
 		} else {
 			if (errno != EFAULT) {
 				fprintf(stderr,

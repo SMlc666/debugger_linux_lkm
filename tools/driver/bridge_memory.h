@@ -76,4 +76,60 @@ int query_view_regions(int session_fd, uint64_t start_id,
 		       uint32_t max_entries,
 		       struct lkmdbg_view_region_query_request *reply_out);
 
+int bridge_query_target_vmas_ex(
+	int session_fd, uint64_t start_addr, uint32_t flags,
+	uint32_t match_flags_mask, uint32_t match_flags_value,
+	uint32_t match_prot_mask, uint32_t match_prot_value,
+	struct lkmdbg_vma_entry *entries, uint32_t max_entries, char *names,
+	uint32_t names_size, struct lkmdbg_vma_query_request *reply_out);
+int bridge_query_target_vmas(
+	int session_fd, uint64_t start_addr, struct lkmdbg_vma_entry *entries,
+	uint32_t max_entries, char *names, uint32_t names_size,
+	struct lkmdbg_vma_query_request *reply_out);
+int bridge_query_target_images(
+	int session_fd, uint64_t start_addr, uint32_t flags,
+	struct lkmdbg_image_entry *entries, uint32_t max_entries, char *names,
+	uint32_t names_size, struct lkmdbg_image_query_request *reply_out);
+int bridge_query_target_pages_ex(
+	int session_fd, uint64_t start_addr, uint64_t length, uint32_t flags,
+	struct lkmdbg_page_entry *entries, uint32_t max_entries,
+	struct lkmdbg_page_query_request *reply_out);
+int bridge_query_target_pages(
+	int session_fd, uint64_t start_addr, uint64_t length,
+	struct lkmdbg_page_entry *entries, uint32_t max_entries,
+	struct lkmdbg_page_query_request *reply_out);
+
+int bridge_apply_pte_patch(int session_fd, uint64_t addr, uint32_t mode,
+			   uint32_t flags, uint64_t raw_pte,
+			   struct lkmdbg_pte_patch_request *reply_out);
+int bridge_remove_pte_patch(int session_fd, uint64_t id,
+			    struct lkmdbg_pte_patch_request *reply_out);
+int bridge_query_pte_patches(
+	int session_fd, uint64_t start_id, struct lkmdbg_pte_patch_entry *entries,
+	uint32_t max_entries,
+	struct lkmdbg_pte_patch_query_request *reply_out);
+
+int bridge_create_remote_map(
+	int session_fd, uintptr_t remote_addr, uintptr_t local_addr,
+	uint64_t length, uint32_t prot, uint32_t flags, uint32_t timeout_ms,
+	struct lkmdbg_remote_map_request *reply_out);
+int bridge_remove_remote_map(
+	int session_fd, uint64_t map_id,
+	struct lkmdbg_remote_map_handle_request *reply_out);
+int bridge_query_remote_maps(
+	int session_fd, uint64_t start_id, struct lkmdbg_remote_map_entry *entries,
+	uint32_t max_entries,
+	struct lkmdbg_remote_map_query_request *reply_out);
+
+int bridge_create_remote_alloc(
+	int session_fd, uintptr_t remote_addr, uint64_t length, uint32_t prot,
+	uint32_t flags, struct lkmdbg_remote_alloc_request *reply_out);
+int bridge_remove_remote_alloc(
+	int session_fd, uint64_t alloc_id,
+	struct lkmdbg_remote_alloc_handle_request *reply_out);
+int bridge_query_remote_allocs(
+	int session_fd, uint64_t start_id,
+	struct lkmdbg_remote_alloc_entry *entries, uint32_t max_entries,
+	struct lkmdbg_remote_alloc_query_request *reply_out);
+
 #endif

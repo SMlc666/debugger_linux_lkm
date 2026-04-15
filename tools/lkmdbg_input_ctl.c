@@ -7,43 +7,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <sys/types.h>
 #include <unistd.h>
 
 #include "../include/lkmdbg_ioctl.h"
+#include "driver/bridge_c.h"
+#include "driver/bridge_control.h"
 #include "driver/common.hpp"
 
 #define fprintf lkmdbg_fprintf
 
-#define TARGET_PATH "/proc/version"
 #define INPUT_QUERY_BATCH 32U
 
-static int open_session_fd(void)
+static int tool_open_session_fd(void)
 {
-	struct lkmdbg_open_session_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-	};
-	int proc_fd;
-	int session_fd;
-
-	proc_fd = open(TARGET_PATH, O_RDONLY | O_CLOEXEC);
-	if (proc_fd < 0) {
-		fprintf(stderr, "open(%s) failed: %s\n", TARGET_PATH,
-			strerror(errno));
-		return -1;
-	}
-
-	session_fd = ioctl(proc_fd, LKMDBG_IOC_OPEN_SESSION, &req);
-	if (session_fd < 0) {
-		fprintf(stderr, "OPEN_SESSION failed: %s\n", strerror(errno));
-		close(proc_fd);
-		return -1;
-	}
-
-	close(proc_fd);
-	return session_fd;
+	return bridge_open_session_fd();
 }
 
 static void print_device_entry(const struct lkmdbg_input_device_entry *entry)
@@ -68,7 +46,9 @@ static int list_devices(int session_fd)
 
 	for (;;) {
 		memset(entries, 0, sizeof(entries));
-		if (ioctl(session_fd, LKMDBG_IOC_QUERY_INPUT_DEVICES, &req) < 0) {
+		if (bridge_query_input_devices(session_fd, req.start_id, entries,
+					       INPUT_QUERY_BATCH, req.flags,
+					       &req) < 0) {
 			fprintf(stderr, "QUERY_INPUT_DEVICES failed: %s\n",
 				strerror(errno));
 			return -1;
@@ -108,7 +88,8 @@ static int info_device(int session_fd, uint64_t device_id)
 		.device_id = device_id,
 	};
 
-	if (ioctl(session_fd, LKMDBG_IOC_GET_INPUT_DEVICE_INFO, &req) < 0) {
+	if (bridge_get_input_device_info(session_fd, device_id, req.flags,
+					 &req) < 0) {
 		fprintf(stderr, "GET_INPUT_DEVICE_INFO failed: %s\n",
 			strerror(errno));
 		return -1;
@@ -160,7 +141,7 @@ static int open_input_channel(int session_fd, uint64_t device_id, uint32_t flags
 		.channel_fd = -1,
 	};
 
-	if (ioctl(session_fd, LKMDBG_IOC_OPEN_INPUT_CHANNEL, &req) < 0) {
+	if (bridge_open_input_channel(session_fd, device_id, flags, &req) < 0) {
 		fprintf(stderr, "OPEN_INPUT_CHANNEL failed: %s\n",
 			strerror(errno));
 		return -1;
@@ -310,7 +291,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	session_fd = open_session_fd();
+	session_fd = tool_open_session_fd();
 	if (session_fd < 0)
 		return 1;
 

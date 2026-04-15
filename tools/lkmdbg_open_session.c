@@ -2,7 +2,6 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <sys/poll.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -153,7 +152,7 @@ int main(void)
 
 	print_status(&reply);
 
-	if (ioctl(session_fd, LKMDBG_IOC_GET_EVENT_CONFIG, &event_cfg) < 0) {
+	if (bridge_get_event_config(session_fd, &event_cfg) < 0) {
 		fprintf(stderr, "GET_EVENT_CONFIG failed: %s\n",
 			strerror(errno));
 		close(session_fd);

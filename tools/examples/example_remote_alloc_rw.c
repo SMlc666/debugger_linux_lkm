@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -35,14 +34,17 @@ static int query_alloc_exists(int session_fd, uint64_t alloc_id, int *exists_out
 	uint64_t cursor = 0;
 
 	*exists_out = 0;
-	for (;;) {
-		uint32_t i;
+		for (;;) {
+			uint32_t i;
 
-		memset(entries, 0, sizeof(entries));
-		req.start_id = cursor;
-		if (ioctl(session_fd, LKMDBG_IOC_QUERY_REMOTE_ALLOCS, &req) < 0)
-			return -1;
-		for (i = 0; i < req.entries_filled; i++) {
+			memset(entries, 0, sizeof(entries));
+			if (bridge_query_remote_allocs(
+				    session_fd, cursor, entries,
+				    (uint32_t)(sizeof(entries) /
+					       sizeof(entries[0])),
+				    &req) < 0)
+				return -1;
+			for (i = 0; i < req.entries_filled; i++) {
 			if (entries[i].alloc_id == alloc_id) {
 				*exists_out = 1;
 				return 0;
@@ -200,7 +202,11 @@ int main(void)
 	if (set_target(session_fd, child) < 0)
 		goto out;
 
-	if (ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_ALLOC, &alloc_req) < 0) {
+	if (bridge_create_remote_alloc(session_fd, shell_addr,
+				       info.page_size * 2U,
+				       LKMDBG_REMOTE_ALLOC_PROT_READ |
+					       LKMDBG_REMOTE_ALLOC_PROT_WRITE,
+				       0, &alloc_req) < 0) {
 		fprintf(stderr,
 			"example_remote_alloc_rw: CREATE_REMOTE_ALLOC failed errno=%d\n",
 			errno);
@@ -248,7 +254,8 @@ int main(void)
 	}
 
 	remove_req.alloc_id = alloc_req.alloc_id;
-	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_REMOTE_ALLOC, &remove_req) < 0) {
+	if (bridge_remove_remote_alloc(session_fd, remove_req.alloc_id,
+				       &remove_req) < 0) {
 		fprintf(stderr,
 			"example_remote_alloc_rw: REMOVE_REMOTE_ALLOC failed errno=%d\n",
 			errno);

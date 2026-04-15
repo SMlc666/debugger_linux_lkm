@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -243,11 +242,14 @@ int main(void)
 		int alloc_ret;
 		int alloc_errno = 0;
 
-		errno = 0;
-		alloc_ret = ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_ALLOC,
-				  &rw_alloc_req);
-		if (alloc_ret < 0)
-			alloc_errno = errno;
+			errno = 0;
+			alloc_ret = bridge_create_remote_alloc(
+				session_fd, shell_addr, rw_alloc_len,
+				LKMDBG_REMOTE_ALLOC_PROT_READ |
+					LKMDBG_REMOTE_ALLOC_PROT_WRITE,
+				0, &rw_alloc_req);
+			if (alloc_ret < 0)
+				alloc_errno = errno;
 		if (alloc_ret < 0 || !rw_alloc_req.alloc_id ||
 		    rw_alloc_req.mapped_length < rw_alloc_len) {
 			fprintf(stderr,
@@ -327,11 +329,11 @@ int main(void)
 			.alloc_id = rw_alloc_id,
 		};
 
-		if (ioctl(session_fd, LKMDBG_IOC_REMOVE_REMOTE_ALLOC,
-			  &rw_free_req) < 0) {
-			fprintf(stderr,
-				"example_perf_baseline: REMOVE_REMOTE_ALLOC(rw) failed errno=%d\n",
-				errno);
+			if (bridge_remove_remote_alloc(session_fd, rw_alloc_id,
+						       &rw_free_req) < 0) {
+				fprintf(stderr,
+					"example_perf_baseline: REMOVE_REMOTE_ALLOC(rw) failed errno=%d\n",
+					errno);
 			goto out;
 		}
 		rw_alloc_id = 0;
@@ -352,11 +354,14 @@ int main(void)
 			.size = sizeof(free_req),
 		};
 
-		if (ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_ALLOC, &alloc_req) <
-			    0 ||
-		    !alloc_req.alloc_id) {
-			fprintf(stderr,
-				"example_perf_baseline: CREATE_REMOTE_ALLOC failed loop=%d errno=%d id=%" PRIu64
+			if (bridge_create_remote_alloc(
+				    session_fd, shell_addr, info.page_size * 2U,
+				    LKMDBG_REMOTE_ALLOC_PROT_READ |
+					    LKMDBG_REMOTE_ALLOC_PROT_WRITE,
+				    0, &alloc_req) < 0 ||
+			    !alloc_req.alloc_id) {
+				fprintf(stderr,
+					"example_perf_baseline: CREATE_REMOTE_ALLOC failed loop=%d errno=%d id=%" PRIu64
 				" len=%" PRIu64 " shell=0x%" PRIxPTR "\n",
 				i, errno, (uint64_t)alloc_req.alloc_id,
 				(uint64_t)alloc_req.mapped_length, shell_addr);
@@ -364,11 +369,12 @@ int main(void)
 		}
 
 		free_req.alloc_id = alloc_req.alloc_id;
-		if (ioctl(session_fd, LKMDBG_IOC_REMOVE_REMOTE_ALLOC, &free_req) <
-		    0) {
-			fprintf(stderr,
-				"example_perf_baseline: REMOVE_REMOTE_ALLOC failed loop=%d errno=%d\n",
-				i, errno);
+			if (bridge_remove_remote_alloc(session_fd,
+						       free_req.alloc_id,
+						       &free_req) < 0) {
+				fprintf(stderr,
+					"example_perf_baseline: REMOVE_REMOTE_ALLOC failed loop=%d errno=%d\n",
+					i, errno);
 			goto out;
 		}
 	}
@@ -394,7 +400,8 @@ out:
 			.size = sizeof(rw_free_req),
 			.alloc_id = rw_alloc_id,
 		};
-		(void)ioctl(session_fd, LKMDBG_IOC_REMOVE_REMOTE_ALLOC, &rw_free_req);
+		(void)bridge_remove_remote_alloc(session_fd, rw_alloc_id,
+						 &rw_free_req);
 	}
 	(void)write_full(cmd_pipe[1], &cmd, sizeof(cmd));
 	free(buf);

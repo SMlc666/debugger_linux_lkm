@@ -4,13 +4,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include "../../include/lkmdbg_ioctl.h"
 #include "../driver/bridge_c.h"
+#include "../driver/bridge_memory.h"
 
 struct example_child_info {
 	uintptr_t addr;
@@ -99,8 +99,12 @@ static int query_vma_for_addr(int session_fd, uintptr_t addr,
 
 		memset(entries, 0, sizeof(entries));
 		memset(names, 0, names_size);
-		if (ioctl(session_fd, LKMDBG_IOC_QUERY_VMAS, &req) < 0)
-			return -1;
+			if (bridge_query_target_vmas(session_fd, cursor, entries,
+						     (uint32_t)(sizeof(entries) /
+								sizeof(entries[0])),
+						     names, (uint32_t)names_size,
+						     &req) < 0)
+				return -1;
 		for (i = 0; i < req.entries_filled; i++) {
 			const struct lkmdbg_vma_entry *e = &entries[i];
 
@@ -198,13 +202,9 @@ int main(void)
 	}
 
 	page_addr = info.addr & ~(uint64_t)(getpagesize() - 1);
-	page_req.version = LKMDBG_PROTO_VERSION;
-	page_req.size = sizeof(page_req);
-	page_req.start_addr = page_addr;
-	page_req.length = (uint64_t)getpagesize();
-	page_req.entries_addr = (uintptr_t)pages;
-	page_req.max_entries = (uint32_t)(sizeof(pages) / sizeof(pages[0]));
-	if (ioctl(session_fd, LKMDBG_IOC_QUERY_PAGES, &page_req) < 0) {
+	if (bridge_query_target_pages(
+		    session_fd, page_addr, (uint64_t)getpagesize(), pages,
+		    (uint32_t)(sizeof(pages) / sizeof(pages[0])), &page_req) < 0) {
 		fprintf(stderr, "example_vma_page_query: QUERY_PAGES failed errno=%d\n",
 			errno);
 		goto out;

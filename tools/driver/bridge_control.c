@@ -658,3 +658,208 @@ int get_stealth(int session_fd, struct lkmdbg_stealth_request *reply_out)
 
 	return 0;
 }
+
+int bridge_set_syscall_trace_expect_errno(int session_fd, pid_t tid,
+					  int syscall_nr, uint32_t mode,
+					  uint32_t phases, int expected_errno)
+{
+	struct lkmdbg_syscall_trace_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.tid = tid,
+		.syscall_nr = syscall_nr,
+		.mode = mode,
+		.phases = phases,
+	};
+
+	errno = 0;
+	if (ioctl(session_fd, LKMDBG_IOC_SET_SYSCALL_TRACE, &req) == 0) {
+		lkmdbg_log_errorf(
+			"SET_SYSCALL_TRACE unexpectedly succeeded tid=%d nr=%d mode=0x%x phases=0x%x",
+			tid, syscall_nr, mode, phases);
+		return -1;
+	}
+
+	if (errno != expected_errno) {
+		lkmdbg_log_errorf(
+			"SET_SYSCALL_TRACE errno=%d expected=%d tid=%d nr=%d mode=0x%x phases=0x%x",
+			errno, expected_errno, tid, syscall_nr, mode, phases);
+		return -1;
+	}
+
+	return 0;
+}
+
+int bridge_query_input_devices(
+	int session_fd, uint64_t start_id, struct lkmdbg_input_device_entry *entries,
+	uint32_t max_entries, uint32_t flags,
+	struct lkmdbg_input_query_request *reply_out)
+{
+	struct lkmdbg_input_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = max_entries,
+		.flags = flags,
+		.start_id = start_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_INPUT_DEVICES, &req) < 0) {
+		lkmdbg_log_errorf("QUERY_INPUT_DEVICES failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_get_input_device_info(
+	int session_fd, uint64_t device_id, uint32_t flags,
+	struct lkmdbg_input_device_info_request *reply_out)
+{
+	struct lkmdbg_input_device_info_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.device_id = device_id,
+		.flags = flags,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_GET_INPUT_DEVICE_INFO, &req) < 0) {
+		lkmdbg_log_errorf("GET_INPUT_DEVICE_INFO failed: %s",
+				  strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_open_input_channel(
+	int session_fd, uint64_t device_id, uint32_t flags,
+	struct lkmdbg_input_channel_request *reply_out)
+{
+	struct lkmdbg_input_channel_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.device_id = device_id,
+		.flags = flags,
+		.channel_fd = -1,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_OPEN_INPUT_CHANNEL, &req) < 0) {
+		lkmdbg_log_errorf("OPEN_INPUT_CHANNEL failed: %s",
+				  strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_add_hwpoint_ex(int session_fd, pid_t tid, uint64_t addr,
+			  uint32_t type, uint32_t len, uint32_t flags,
+			  uint64_t trigger_hit_count, uint32_t action_flags,
+			  struct lkmdbg_hwpoint_request *reply_out)
+{
+	return add_hwpoint_ex(session_fd, tid, addr, type, len, flags,
+			      trigger_hit_count, action_flags, reply_out);
+}
+
+int bridge_add_hwpoint(int session_fd, pid_t tid, uint64_t addr, uint32_t type,
+		       uint32_t len, uint32_t flags,
+		       struct lkmdbg_hwpoint_request *reply_out)
+{
+	return add_hwpoint(session_fd, tid, addr, type, len, flags, reply_out);
+}
+
+int bridge_add_hwpoint_expect_errno_ex(
+	int session_fd, pid_t tid, uint64_t addr, uint32_t type, uint32_t len,
+	uint32_t flags, uint64_t trigger_hit_count, uint32_t action_flags,
+	int expected_errno)
+{
+	return add_hwpoint_expect_errno_ex(session_fd, tid, addr, type, len, flags,
+					   trigger_hit_count, action_flags,
+					   expected_errno);
+}
+
+int bridge_add_hwpoint_expect_errno(int session_fd, pid_t tid, uint64_t addr,
+				    uint32_t type, uint32_t len, uint32_t flags,
+				    int expected_errno)
+{
+	return add_hwpoint_expect_errno(session_fd, tid, addr, type, len, flags,
+					expected_errno);
+}
+
+int bridge_remove_hwpoint(int session_fd, uint64_t id)
+{
+	return remove_hwpoint(session_fd, id);
+}
+
+int bridge_rearm_hwpoint(int session_fd, uint64_t id,
+			 struct lkmdbg_hwpoint_request *reply_out)
+{
+	return rearm_hwpoint(session_fd, id, reply_out);
+}
+
+int bridge_rearm_hwpoint_expect_errno(int session_fd, uint64_t id,
+				      int expected_errno)
+{
+	struct lkmdbg_hwpoint_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.id = id,
+	};
+
+	errno = 0;
+	if (ioctl(session_fd, LKMDBG_IOC_REARM_HWPOINT, &req) == 0) {
+		lkmdbg_log_errorf("REARM_HWPOINT unexpectedly succeeded id=%" PRIu64,
+				  (uint64_t)id);
+		return -1;
+	}
+
+	if (errno != expected_errno) {
+		lkmdbg_log_errorf("REARM_HWPOINT errno=%d expected=%d id=%" PRIu64,
+				  errno, expected_errno, (uint64_t)id);
+		return -1;
+	}
+
+	return 0;
+}
+
+int bridge_query_hwpoints(int session_fd, uint64_t start_id,
+			  struct lkmdbg_hwpoint_entry *entries,
+			  uint32_t max_entries,
+			  struct lkmdbg_hwpoint_query_request *reply_out)
+{
+	return query_hwpoints(session_fd, start_id, entries, max_entries,
+			      reply_out);
+}
+
+int bridge_get_stop_state(int session_fd,
+			  struct lkmdbg_stop_query_request *reply_out)
+{
+	return get_stop_state(session_fd, reply_out);
+}
+
+int bridge_continue_target(int session_fd, uint64_t stop_cookie,
+			   uint32_t timeout_ms, uint32_t flags,
+			   struct lkmdbg_continue_request *reply_out)
+{
+	return continue_target(session_fd, stop_cookie, timeout_ms, flags,
+			       reply_out);
+}
+
+int bridge_get_stealth(int session_fd,
+		       struct lkmdbg_stealth_request *reply_out)
+{
+	return get_stealth(session_fd, reply_out);
+}
+
+int bridge_set_stealth(int session_fd, uint32_t flags,
+		       struct lkmdbg_stealth_request *reply_out)
+{
+	return set_stealth(session_fd, flags, reply_out);
+}

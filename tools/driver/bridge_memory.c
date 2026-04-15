@@ -17,6 +17,8 @@ int xfer_target_memory(int session_fd, struct lkmdbg_mem_op *ops,
 	unsigned long cmd = write ? LKMDBG_IOC_WRITE_MEM : LKMDBG_IOC_READ_MEM;
 
 	if (ioctl(session_fd, cmd, &req) < 0) {
+		if (reply_out)
+			*reply_out = req;
 		lkmdbg_log_errorf("%s failed: %s",
 				  write ? "WRITE_MEM" : "READ_MEM",
 				  strerror(errno));
@@ -47,6 +49,8 @@ int xfer_physical_memory(int session_fd, struct lkmdbg_phys_op *ops,
 	unsigned long cmd = write ? LKMDBG_IOC_WRITE_PHYS : LKMDBG_IOC_READ_PHYS;
 
 	if (ioctl(session_fd, cmd, &req) < 0) {
+		if (reply_out)
+			*reply_out = req;
 		lkmdbg_log_errorf("%s failed: %s",
 				  write ? "WRITE_PHYS" : "READ_PHYS",
 				  strerror(errno));
@@ -352,6 +356,310 @@ int query_view_regions(int session_fd, uint64_t start_id,
 
 	if (ioctl(session_fd, LKMDBG_IOC_QUERY_VIEW_REGIONS, &req) < 0) {
 		lkmdbg_log_errorf("QUERY_VIEW_REGIONS failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_query_target_vmas_ex(
+	int session_fd, uint64_t start_addr, uint32_t flags,
+	uint32_t match_flags_mask, uint32_t match_flags_value,
+	uint32_t match_prot_mask, uint32_t match_prot_value,
+	struct lkmdbg_vma_entry *entries, uint32_t max_entries, char *names,
+	uint32_t names_size, struct lkmdbg_vma_query_request *reply_out)
+{
+	struct lkmdbg_vma_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.start_addr = start_addr,
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = max_entries,
+		.flags = flags,
+		.match_flags_mask = match_flags_mask,
+		.match_flags_value = match_flags_value,
+		.match_prot_mask = match_prot_mask,
+		.match_prot_value = match_prot_value,
+		.names_addr = (uintptr_t)names,
+		.names_size = names_size,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_VMAS, &req) < 0) {
+		lkmdbg_log_errorf("QUERY_VMAS failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_query_target_vmas(
+	int session_fd, uint64_t start_addr, struct lkmdbg_vma_entry *entries,
+	uint32_t max_entries, char *names, uint32_t names_size,
+	struct lkmdbg_vma_query_request *reply_out)
+{
+	return bridge_query_target_vmas_ex(
+		session_fd, start_addr, 0, 0, 0, 0, 0, entries, max_entries,
+		names, names_size, reply_out);
+}
+
+int bridge_query_target_images(
+	int session_fd, uint64_t start_addr, uint32_t flags,
+	struct lkmdbg_image_entry *entries, uint32_t max_entries, char *names,
+	uint32_t names_size, struct lkmdbg_image_query_request *reply_out)
+{
+	struct lkmdbg_image_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.start_addr = start_addr,
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = max_entries,
+		.flags = flags,
+		.names_addr = (uintptr_t)names,
+		.names_size = names_size,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_IMAGES, &req) < 0) {
+		lkmdbg_log_errorf("QUERY_IMAGES failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_query_target_pages_ex(
+	int session_fd, uint64_t start_addr, uint64_t length, uint32_t flags,
+	struct lkmdbg_page_entry *entries, uint32_t max_entries,
+	struct lkmdbg_page_query_request *reply_out)
+{
+	struct lkmdbg_page_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.start_addr = start_addr,
+		.length = length,
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = max_entries,
+		.flags = flags,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_PAGES, &req) < 0) {
+		lkmdbg_log_errorf("QUERY_PAGES failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_query_target_pages(
+	int session_fd, uint64_t start_addr, uint64_t length,
+	struct lkmdbg_page_entry *entries, uint32_t max_entries,
+	struct lkmdbg_page_query_request *reply_out)
+{
+	return bridge_query_target_pages_ex(session_fd, start_addr, length, 0,
+					    entries, max_entries, reply_out);
+}
+
+int bridge_apply_pte_patch(int session_fd, uint64_t addr, uint32_t mode,
+			   uint32_t flags, uint64_t raw_pte,
+			   struct lkmdbg_pte_patch_request *reply_out)
+{
+	struct lkmdbg_pte_patch_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.addr = addr,
+		.raw_pte = raw_pte,
+		.mode = mode,
+		.flags = flags,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_APPLY_PTE_PATCH, &req) < 0) {
+		lkmdbg_log_errorf("APPLY_PTE_PATCH failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_remove_pte_patch(int session_fd, uint64_t id,
+			    struct lkmdbg_pte_patch_request *reply_out)
+{
+	struct lkmdbg_pte_patch_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.id = id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_PTE_PATCH, &req) < 0) {
+		lkmdbg_log_errorf("REMOVE_PTE_PATCH failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_query_pte_patches(
+	int session_fd, uint64_t start_id, struct lkmdbg_pte_patch_entry *entries,
+	uint32_t max_entries,
+	struct lkmdbg_pte_patch_query_request *reply_out)
+{
+	struct lkmdbg_pte_patch_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = max_entries,
+		.start_id = start_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_PTE_PATCHES, &req) < 0) {
+		lkmdbg_log_errorf("QUERY_PTE_PATCHES failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_create_remote_map(
+	int session_fd, uintptr_t remote_addr, uintptr_t local_addr,
+	uint64_t length, uint32_t prot, uint32_t flags, uint32_t timeout_ms,
+	struct lkmdbg_remote_map_request *reply_out)
+{
+	struct lkmdbg_remote_map_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.remote_addr = remote_addr,
+		.local_addr = local_addr,
+		.length = length,
+		.prot = prot,
+		.flags = flags,
+		.timeout_ms = timeout_ms,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_MAP, &req) < 0) {
+		lkmdbg_log_errorf("CREATE_REMOTE_MAP failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_remove_remote_map(
+	int session_fd, uint64_t map_id,
+	struct lkmdbg_remote_map_handle_request *reply_out)
+{
+	struct lkmdbg_remote_map_handle_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.map_id = map_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_REMOTE_MAP, &req) < 0) {
+		lkmdbg_log_errorf("REMOVE_REMOTE_MAP failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_query_remote_maps(
+	int session_fd, uint64_t start_id, struct lkmdbg_remote_map_entry *entries,
+	uint32_t max_entries,
+	struct lkmdbg_remote_map_query_request *reply_out)
+{
+	struct lkmdbg_remote_map_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = max_entries,
+		.start_id = start_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_REMOTE_MAPS, &req) < 0) {
+		lkmdbg_log_errorf("QUERY_REMOTE_MAPS failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_create_remote_alloc(
+	int session_fd, uintptr_t remote_addr, uint64_t length, uint32_t prot,
+	uint32_t flags, struct lkmdbg_remote_alloc_request *reply_out)
+{
+	struct lkmdbg_remote_alloc_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.remote_addr = remote_addr,
+		.length = length,
+		.prot = prot,
+		.flags = flags,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_ALLOC, &req) < 0) {
+		lkmdbg_log_errorf("CREATE_REMOTE_ALLOC failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_remove_remote_alloc(
+	int session_fd, uint64_t alloc_id,
+	struct lkmdbg_remote_alloc_handle_request *reply_out)
+{
+	struct lkmdbg_remote_alloc_handle_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.alloc_id = alloc_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_REMOVE_REMOTE_ALLOC, &req) < 0) {
+		lkmdbg_log_errorf("REMOVE_REMOTE_ALLOC failed: %s",
+				  strerror(errno));
+		return -1;
+	}
+
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_query_remote_allocs(
+	int session_fd, uint64_t start_id,
+	struct lkmdbg_remote_alloc_entry *entries, uint32_t max_entries,
+	struct lkmdbg_remote_alloc_query_request *reply_out)
+{
+	struct lkmdbg_remote_alloc_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = max_entries,
+		.start_id = start_id,
+	};
+
+	if (ioctl(session_fd, LKMDBG_IOC_QUERY_REMOTE_ALLOCS, &req) < 0) {
+		lkmdbg_log_errorf("QUERY_REMOTE_ALLOCS failed: %s",
+				  strerror(errno));
 		return -1;
 	}
 
