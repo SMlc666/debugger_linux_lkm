@@ -1713,7 +1713,7 @@ private fun ActionRow(
 private fun <T> FilterRow(
     filters: List<T>,
     selectedFilter: T,
-    labelFor: (T) -> String,
+    labelFor: @Composable (T) -> String,
     onSelected: (T) -> Unit,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1735,7 +1735,7 @@ private fun <T> FilterRow(
 private fun <T> CompactFilterRow(
     filters: List<T>,
     selectedFilter: T,
-    labelFor: (T) -> String,
+    labelFor: @Composable (T) -> String,
     onSelected: (T) -> Unit,
 ) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
