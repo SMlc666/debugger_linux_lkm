@@ -7625,8 +7625,7 @@ static int verify_inflight_exit_race(void)
 		struct lkmdbg_mem_request req;
 		unsigned char *buf = NULL;
 		pthread_t killer_thread;
-		size_t total_len = 0;
-		size_t chunk_len;
+		size_t total_len;
 		pid_t child;
 		int info_fd = -1;
 		int cmd_fd = -1;
@@ -7650,7 +7649,8 @@ static int verify_inflight_exit_race(void)
 			return -1;
 		}
 
-		buf = malloc(info.large_len);
+		total_len = (size_t)info.large_len * SELFTEST_RACE_OPS;
+		buf = malloc(total_len);
 		if (!buf) {
 			fprintf(stderr, "race buffer allocation failed\n");
 			close(session_fd);
@@ -7658,20 +7658,13 @@ static int verify_inflight_exit_race(void)
 			stop_selftest_child(child, cmd_fd, resp_fd, 1);
 			return -1;
 		}
-		fill_pattern(buf, info.large_len, attempt + 41U);
-		chunk_len = info.large_len / SELFTEST_RACE_OPS;
-		if (!chunk_len)
-			chunk_len = info.page_size;
+		fill_pattern(buf, total_len, attempt + 41U);
 		for (i = 0; i < SELFTEST_RACE_OPS; i++) {
-			size_t this_len = chunk_len;
+			size_t segment_off = (size_t)i * info.large_len;
 
-			if (i == SELFTEST_RACE_OPS - 1 ||
-			    total_len + this_len > info.large_len)
-				this_len = info.large_len - total_len;
-			ops[i].remote_addr = info.large_addr + total_len;
-			ops[i].local_addr = (uintptr_t)(buf + total_len);
-			ops[i].length = (uint32_t)this_len;
-			total_len += this_len;
+			ops[i].remote_addr = info.large_addr;
+			ops[i].local_addr = (uintptr_t)(buf + segment_off);
+			ops[i].length = info.large_len;
 		}
 
 		kill_ctx.pid = child;
@@ -7733,7 +7726,7 @@ static int verify_inflight_exit_race(void)
 
 		if ((xfer_ret < 0 && errno == ESRCH) ||
 		    req.ops_done < SELFTEST_RACE_OPS ||
-		    req.bytes_done < info.large_len) {
+		    req.bytes_done < total_len) {
 			if (expect_dead_mem_accesses_fail(session_fd, &info) < 0) {
 				free(buf);
 				close(session_fd);
