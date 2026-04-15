@@ -103,6 +103,4 @@ data class SessionBridgeState(
     val memoryWriteAsmInput: String = "",
     val memoryPage: MemoryPage? = null,
     val memorySearch: MemorySearchUiState = MemorySearchUiState(),
-    val memoryToolsOpen: Boolean = false,
-    val memoryViewMode: Int = 0,
 )

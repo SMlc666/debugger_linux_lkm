@@ -22,8 +22,6 @@ class OverlayHostController internal constructor(
 
         fun updateWorkspaceSection(section: WorkspaceSection)
         fun updateEventsAutoPollEnabled(enabled: Boolean)
-        fun updateMemoryToolsOpen(open: Boolean)
-        fun updateMemoryViewMode(mode: Int)
         suspend fun refreshEventsBackground(timeoutMs: Int, maxEvents: Int)
     }
 
@@ -50,14 +48,6 @@ class OverlayHostController internal constructor(
 
         override fun updateEventsAutoPollEnabled(enabled: Boolean) {
             delegate.updateEventsAutoPollEnabled(enabled)
-        }
-
-        override fun updateMemoryToolsOpen(open: Boolean) {
-            delegate.updateMemoryToolsOpen(open)
-        }
-
-        override fun updateMemoryViewMode(mode: Int) {
-            delegate.updateMemoryViewMode(mode)
         }
 
         override suspend fun refreshEventsBackground(timeoutMs: Int, maxEvents: Int) {
@@ -129,43 +119,16 @@ class OverlayHostController internal constructor(
     }
 
     fun toggleProcessPicker() {
-        repository.updateWorkspaceSection(WorkspaceSection.Processes)
-        handleSectionSelection(WorkspaceSection.Processes)
         processPickerController.toggle(repository.state.value)
+        renderOverlayState(repository.state.value)
     }
 
     fun afterProcessPickerAction() {
-        if (repository.state.value.workspaceSection == WorkspaceSection.Memory) {
-            setMemoryViewModePage()
-            repository.updateMemoryToolsOpen(false)
-        }
         renderOverlayState(repository.state.value)
-    }
-
-    fun toggleMemoryTools() {
-        if (repository.state.value.workspaceSection != WorkspaceSection.Memory)
-            return
-        repository.updateMemoryToolsOpen(!repository.state.value.memoryToolsOpen)
-        renderOverlayState(repository.state.value)
-    }
-
-    fun setMemoryViewModePage() {
-        setMemoryViewMode(0)
-    }
-
-    fun setMemoryViewModeResults() {
-        setMemoryViewMode(1)
     }
 
     fun toggleEventsAutoPollEnabled() {
         repository.updateEventsAutoPollEnabled(!repository.state.value.eventsAutoPollEnabled)
-        renderOverlayState(repository.state.value)
-    }
-
-    private fun setMemoryViewMode(mode: Int) {
-        if (repository.state.value.memoryViewMode == mode)
-            return
-        repository.updateMemoryViewMode(mode)
         renderOverlayState(repository.state.value)
     }
 
@@ -175,8 +138,7 @@ class OverlayHostController internal constructor(
         } else {
             repository.updateEventsAutoPollEnabled(false)
         }
-        if (section != WorkspaceSection.Processes)
-            processPickerController.hide()
+        processPickerController.hide()
         renderOverlayState(repository.state.value)
     }
 
@@ -185,8 +147,6 @@ class OverlayHostController internal constructor(
             stopEventAutoPoll()
             return
         }
-        if (state.workspaceSection != WorkspaceSection.Processes)
-            processPickerController.hide()
 
         // Rendering the process picker is expensive (rebuilds the whole list).
         // Only do it when the picker is actually visible; otherwise frequent state

@@ -158,15 +158,12 @@ class LkmdbgOverlayService : LifecycleService() {
                     if (expanded) {
                         MainWorkspaceScreen(
                             state = state,
-                            memoryViewMode = state.memoryViewMode,
-                            memoryToolsOpen = state.memoryToolsOpen,
                             onSectionSelected = { section ->
                                 dispatchWorkspaceIntent(WorkspaceIntent.SelectSection(section))
                             },
                             onToggleProcessPicker = {
                                 hostController.toggleProcessPicker()
                             },
-                            onToggleMemoryTools = hostController::toggleMemoryTools,
                             onTargetPidInputChanged = repository::updateTargetPidInput,
                             onTargetTidInputChanged = repository::updateTargetTidInput,
                             onConnect = { lifecycleScope.launch { repository.connect() } },
@@ -190,7 +187,6 @@ class LkmdbgOverlayService : LifecycleService() {
                                 lifecycleScope.launch {
                                     if (repository.attachProcess(pid)) {
                                         hostController.selectSection(WorkspaceSection.Memory)
-                                        hostController.setMemoryViewModePage()
                                     }
                                 }
                             },
@@ -227,21 +223,17 @@ class LkmdbgOverlayService : LifecycleService() {
                             },
                             onOpenEventValue = { value ->
                                 lifecycleScope.launch {
-                                    hostController.selectSection(WorkspaceSection.Memory)
                                     repository.selectMemoryAddress(value)
-                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onStepMemoryPage = { direction ->
                                 lifecycleScope.launch {
                                     repository.stepMemoryPage(direction)
-                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onSelectMemoryAddress = { address ->
                                 lifecycleScope.launch {
                                     repository.selectMemoryAddress(address)
-                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onMemorySearchQueryChanged = repository::updateMemorySearchQuery,
@@ -256,7 +248,6 @@ class LkmdbgOverlayService : LifecycleService() {
                             onJumpMemoryAddress = {
                                 lifecycleScope.launch {
                                     repository.jumpToMemoryAddress()
-                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onLoadSelectionIntoHexSearch = {
@@ -277,13 +268,11 @@ class LkmdbgOverlayService : LifecycleService() {
                             onWriteHexAtFocus = {
                                 lifecycleScope.launch {
                                     repository.writeHexAtFocus()
-                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onWriteAsciiAtFocus = {
                                 lifecycleScope.launch {
                                     repository.writeAsciiAtFocus()
-                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onAssembleToEditors = {
@@ -294,29 +283,23 @@ class LkmdbgOverlayService : LifecycleService() {
                             onAssembleAndWrite = {
                                 lifecycleScope.launch {
                                     repository.assembleArm64AndWrite()
-                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onRunMemorySearch = {
                                 lifecycleScope.launch {
                                     repository.runMemorySearch()
-                                    hostController.setMemoryViewModeResults()
                                 }
                             },
                             onRefineMemorySearch = {
                                 lifecycleScope.launch {
                                     repository.refineMemorySearch()
-                                    hostController.setMemoryViewModeResults()
                                 }
                             },
                             onRefreshVmas = { lifecycleScope.launch { repository.refreshVmas() } },
                             onRefreshImages = { lifecycleScope.launch { repository.refreshImages() } },
-                            onShowMemoryResults = hostController::setMemoryViewModeResults,
-                            onShowMemoryPage = hostController::setMemoryViewModePage,
                             onPreviewSelectedPc = {
                                 lifecycleScope.launch {
                                     repository.previewSelectedPc()
-                                    hostController.setMemoryViewModePage()
                                 }
                             },
                             onClose = { stopSelf() },
