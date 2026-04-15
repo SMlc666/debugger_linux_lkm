@@ -370,7 +370,9 @@ jobs:
             "$GITHUB_WORKSPACE/tools/driver/bridge_control.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
             -o "$RUNNER_TEMP/lkmdbg_mmu_test" \
-            "$GITHUB_WORKSPACE/tools/lkmdbg_mmu_test.c"
+            "$GITHUB_WORKSPACE/tools/lkmdbg_mmu_test.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_control.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/lkmdbg_example_session_status" \
             "$GITHUB_WORKSPACE/tools/examples/example_session_status.c" \
