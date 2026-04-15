@@ -358,7 +358,9 @@ jobs:
             "$GITHUB_WORKSPACE/tools/driver/bridge_c.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/lkmdbg_stealth_ctl" \
-            "$GITHUB_WORKSPACE/tools/lkmdbg_stealth_ctl.c"
+            "$GITHUB_WORKSPACE/tools/lkmdbg_stealth_ctl.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_control.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
             -o "$RUNNER_TEMP/lkmdbg_mem_test" \
             "$GITHUB_WORKSPACE/tools/lkmdbg_mem_test.c" \
