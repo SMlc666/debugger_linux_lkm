@@ -1503,6 +1503,8 @@ static void qemu_behavior_spawn_worker(struct qemu_behavior_shared **shared_out,
 		__u64 iters = 0;
 
 		prctl(PR_SET_NAME, "lkmdbg-behavior", 0, 0, 0);
+		/* Disturbance debug ops may transiently surface SIGTRAP in the worker. */
+		(void)signal(SIGTRAP, SIG_IGN);
 		shared->ready = 1;
 		while (!shared->stop) {
 			__u64 t0 = qemu_now_ns();
