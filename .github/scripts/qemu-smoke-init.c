@@ -47,6 +47,7 @@
 #define EXAMPLE_REMOTE_ALLOC_RW_TOOL "/lkmdbg_example_remote_alloc_rw"
 #define EXAMPLE_PHYS_TRANSLATE_READ_TOOL "/lkmdbg_example_phys_translate_read"
 #define EXAMPLE_PERF_BASELINE_TOOL "/lkmdbg_example_perf_baseline"
+#define EXAMPLE_THROUGHPUT_COMPARE_TOOL "/lkmdbg_example_throughput_compare"
 #define EXAMPLE_VIEW_EXTERNAL_READ_TOOL "/lkmdbg_example_view_external_read"
 #define EXAMPLE_VIEW_WXSHADOW_EXEC_TOOL "/lkmdbg_example_view_wxshadow_exec"
 #define INPUT_QUERY_BATCH 16U
@@ -1278,6 +1279,10 @@ static void qemu_run_transport_extended_tools(void)
 		NULL,
 	};
 	char *const ex_perf_baseline_argv[] = { EXAMPLE_PERF_BASELINE_TOOL, NULL };
+	char *const ex_throughput_compare_argv[] = {
+		EXAMPLE_THROUGHPUT_COMPARE_TOOL,
+		NULL,
+	};
 	char *const ex_view_external_read_argv[] = {
 		EXAMPLE_VIEW_EXTERNAL_READ_TOOL,
 		NULL,
@@ -1293,6 +1298,7 @@ static void qemu_run_transport_extended_tools(void)
 	qemu_run_tool(ex_remote_alloc_rw_argv);
 	qemu_run_tool(ex_phys_translate_read_argv);
 	qemu_run_tool(ex_perf_baseline_argv);
+	qemu_run_tool(ex_throughput_compare_argv);
 	qemu_run_tool(ex_view_external_read_argv);
 	qemu_run_tool(ex_view_wxshadow_exec_argv);
 	if (qemu_status_debugfs_available) {

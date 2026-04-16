@@ -424,6 +424,11 @@ jobs:
             "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
             "$GITHUB_WORKSPACE/tools/driver/bridge_memory.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -o "$RUNNER_TEMP/lkmdbg_example_throughput_compare" \
+            "$GITHUB_WORKSPACE/tools/examples/example_throughput_compare.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
+            "$GITHUB_WORKSPACE/tools/driver/bridge_memory.c"
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/lkmdbg_example_view_external_read" \
             "$GITHUB_WORKSPACE/tools/examples/example_view_external_read.c" \
             "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
@@ -468,6 +473,8 @@ jobs:
             "$INITRAMFS_DIR/lkmdbg_example_phys_translate_read"
           install -m 0755 "$RUNNER_TEMP/lkmdbg_example_perf_baseline" \
             "$INITRAMFS_DIR/lkmdbg_example_perf_baseline"
+          install -m 0755 "$RUNNER_TEMP/lkmdbg_example_throughput_compare" \
+            "$INITRAMFS_DIR/lkmdbg_example_throughput_compare"
           install -m 0755 "$RUNNER_TEMP/lkmdbg_example_view_external_read" \
             "$INITRAMFS_DIR/lkmdbg_example_view_external_read"
           install -m 0755 "$RUNNER_TEMP/lkmdbg_example_view_wxshadow_exec" \
