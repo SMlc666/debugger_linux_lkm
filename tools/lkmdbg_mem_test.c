@@ -3978,15 +3978,39 @@ static int wait_for_child_exit(pid_t child, int *status_out)
 
 static void kill_and_reap_child(pid_t child)
 {
-	int status;
-	int reaped = 0;
+	struct timespec ts;
+	int64_t deadline_ms;
 
 	if (child <= 0)
 		return;
-	if (reap_child_nonblock(child, &status, &reaped) < 0 || reaped)
-		return;
 	(void)kill(child, SIGKILL);
-	(void)waitpid(child, NULL, 0);
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
+		fprintf(stderr, "clock_gettime failed during child reap: %s\n",
+			strerror(errno));
+		return;
+	}
+	deadline_ms = ((int64_t)ts.tv_sec * 1000) + (ts.tv_nsec / 1000000) + 2000;
+	for (;;) {
+		int status;
+		int reaped = 0;
+		int64_t now_ms;
+
+		if (reap_child_nonblock(child, &status, &reaped) < 0)
+			return;
+		if (reaped)
+			return;
+		if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
+			fprintf(stderr,
+				"clock_gettime failed during child reap poll: %s\n",
+				strerror(errno));
+			return;
+		}
+		now_ms = ((int64_t)ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
+		if (now_ms >= deadline_ms)
+			break;
+		usleep(1000);
+	}
+	fprintf(stderr, "child reap timed out pid=%d after SIGKILL\n", child);
 }
 
 static int stop_selftest_child(pid_t child, int cmd_fd, int resp_fd,
@@ -8159,6 +8183,9 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 	ret = 0;
 
 out:
+	printf("selftest target exit cleanup stage=out ret=%d replacement_pid=%d\n",
+	       ret, replacement_child);
+	fflush(stdout);
 	if (replacement_info_fd >= 0)
 		close(replacement_info_fd);
 	if (replacement_cmd_fd >= 0 && replacement_resp_fd >= 0)
@@ -8972,8 +8999,18 @@ static int run_selftest(const char *prog)
 	if (verify_target_exit_cleanup_and_rebind(session_fd, child, &info,
 						  cmd_pipe[1], resp_pipe[0]) <
 	    0) {
+		printf("selftest target exit cleanup stage=failure cleanup begin pid=%d\n",
+		       child);
+		fflush(stdout);
 		kill_and_reap_child(child);
+		printf("selftest target exit cleanup stage=failure cleanup after reap pid=%d\n",
+		       child);
+		fflush(stdout);
+		printf("selftest target exit cleanup stage=failure cleanup before close session\n");
+		fflush(stdout);
 		close(session_fd);
+		printf("selftest target exit cleanup stage=failure cleanup after close session\n");
+		fflush(stdout);
 		close(info_pipe[0]);
 		close(cmd_pipe[1]);
 		close(resp_pipe[0]);
