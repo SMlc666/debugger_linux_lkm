@@ -4230,7 +4230,6 @@ static int verify_cross_page_permission_flip(int session_fd,
 	unsigned char readback[SELFTEST_PERMISSION_SPAN];
 	unsigned char *original_pages = NULL;
 	struct lkmdbg_mem_op op;
-	struct lkmdbg_mem_op restore_ops[2];
 	struct lkmdbg_mem_request req;
 	uintptr_t page1;
 	uintptr_t page2;
@@ -4343,22 +4342,22 @@ static int verify_cross_page_permission_flip(int session_fd,
 	if (child_mprotect_range(cmd_fd, resp_fd, page2, info->page_size,
 				 PROT_READ | PROT_WRITE) < 0)
 		goto out;
-	memset(restore_ops, 0, sizeof(restore_ops));
-	memset(&req, 0, sizeof(req));
-	restore_ops[0].remote_addr = page2 - prefix;
-	restore_ops[0].local_addr = (uintptr_t)payload;
-	restore_ops[0].length = prefix;
-	restore_ops[1].remote_addr = page2;
-	restore_ops[1].local_addr = (uintptr_t)(payload + prefix);
-	restore_ops[1].length = sizeof(payload) - prefix;
-	if (xfer_target_memory(session_fd, restore_ops, 2, 1, &req, 0) < 0 ||
-	    req.ops_done != 2 || req.bytes_done != sizeof(payload) ||
-	    restore_ops[0].bytes_done != prefix ||
-	    restore_ops[1].bytes_done != sizeof(payload) - prefix) {
+	bytes_done = 0;
+	if (write_target_memory(session_fd, page2 - prefix, payload, prefix,
+				&bytes_done, 0) < 0 ||
+	    bytes_done != prefix) {
 		fprintf(stderr,
-			"perm flip restore write mismatch ops_done=%u bytes_done=%" PRIu64 " op0=%u op1=%u\n",
-			req.ops_done, (uint64_t)req.bytes_done,
-			restore_ops[0].bytes_done, restore_ops[1].bytes_done);
+			"perm flip restore first-half mismatch bytes_done=%u expected=%zu\n",
+			bytes_done, prefix);
+		goto out;
+	}
+	bytes_done = 0;
+	if (write_target_memory(session_fd, page2, payload + prefix,
+				sizeof(payload) - prefix, &bytes_done, 0) < 0 ||
+	    bytes_done != sizeof(payload) - prefix) {
+		fprintf(stderr,
+			"perm flip restore second-half mismatch bytes_done=%u expected=%zu\n",
+			bytes_done, sizeof(payload) - prefix);
 		goto out;
 	}
 	memset(readback, 0, sizeof(readback));
@@ -7840,14 +7839,21 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 			    &pte_apply_reply) < 0)
 		goto out;
 	printf("selftest target exit cleanup stage=armed resources\n");
+	fflush(stdout);
 
 	if (request_child_exit(cmd_fd) < 0)
 		goto out;
 	printf("selftest target exit cleanup stage=exit requested\n");
+	fflush(stdout);
 	if (wait_for_target_exit_event(session_fd, child, &exit_event) < 0)
 		goto out;
+	printf("selftest target exit cleanup stage=exit event received tid=%d code=%" PRIu64 "\n",
+	       exit_event.tid, (uint64_t)exit_event.value0);
+	fflush(stdout);
 	if (wait_for_child_exit(child, &status) < 0)
 		goto out;
+	printf("selftest target exit cleanup stage=child reaped status=%d\n", status);
+	fflush(stdout);
 	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
 		fprintf(stderr, "target exit child status=%d\n", status);
 		goto out;
