@@ -166,7 +166,7 @@ jobs:
       KERNEL_REPO: https://android.googlesource.com/kernel/common
       KERNEL_REF: ${{ matrix.kernel_ref }}
       KERNEL_OUT_DIR: ${{ github.workspace }}/.cache/qemu-linux-arm64-out-${{ matrix.cache_suffix }}
-      QEMU_KERNEL_CACHE_REV: v4
+      QEMU_KERNEL_CACHE_REV: v5
 
     steps:
       - name: Checkout
