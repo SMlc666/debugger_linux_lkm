@@ -3270,6 +3270,48 @@ check_child:
 	return -1;
 }
 
+static void best_effort_resume_and_thaw_target(int session_fd,
+					       const char *stage)
+{
+	struct lkmdbg_stop_query_request stop_req;
+	struct lkmdbg_freeze_request thaw_req;
+	const char *tag = stage ? stage : "unknown";
+
+	memset(&stop_req, 0, sizeof(stop_req));
+	if (get_stop_state(session_fd, &stop_req) == 0 &&
+	    (stop_req.stop.flags & LKMDBG_STOP_FLAG_ACTIVE)) {
+		printf("selftest target exit cleanup stage=%s active stop reason=%u flags=0x%x cookie=%" PRIu64 "\n",
+		       tag, stop_req.stop.reason, stop_req.stop.flags,
+		       (uint64_t)stop_req.stop.cookie);
+		fflush(stdout);
+		if (continue_target(session_fd, stop_req.stop.cookie, 2000, 0,
+				    NULL) == 0) {
+			printf("selftest target exit cleanup stage=%s continue ok cookie=%" PRIu64 "\n",
+			       tag, (uint64_t)stop_req.stop.cookie);
+			fflush(stdout);
+		} else {
+			printf("selftest target exit cleanup stage=%s continue fail errno=%d\n",
+			       tag, errno);
+			fflush(stdout);
+		}
+	}
+
+	memset(&thaw_req, 0, sizeof(thaw_req));
+	thaw_req.version = LKMDBG_PROTO_VERSION;
+	thaw_req.size = sizeof(thaw_req);
+	thaw_req.timeout_ms = 2000;
+	if (ioctl(session_fd, LKMDBG_IOC_THAW_THREADS, &thaw_req) == 0) {
+		printf("selftest target exit cleanup stage=%s thaw ok total=%u settled=%u parked=%u\n",
+		       tag, thaw_req.threads_total, thaw_req.threads_settled,
+		       thaw_req.threads_parked);
+		fflush(stdout);
+	} else if (errno != ENODEV && errno != ESRCH && errno != ENOENT) {
+		printf("selftest target exit cleanup stage=%s thaw fail errno=%d\n",
+		       tag, errno);
+		fflush(stdout);
+	}
+}
+
 static int expect_dead_mem_accesses_fail(int session_fd,
 					 const struct child_info *info)
 {
@@ -3976,13 +4018,15 @@ static int wait_for_child_exit(pid_t child, int *status_out)
 	return 0;
 }
 
-static void kill_and_reap_child(pid_t child)
+static void kill_and_reap_child(int session_fd, pid_t child)
 {
 	struct timespec ts;
 	int64_t deadline_ms;
 
 	if (child <= 0)
 		return;
+	if (session_fd >= 0)
+		best_effort_resume_and_thaw_target(session_fd, "reap-prep");
 	(void)kill(child, SIGKILL);
 	if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
 		fprintf(stderr, "clock_gettime failed during child reap: %s\n",
@@ -7896,7 +7940,7 @@ static int verify_inflight_exit_race(void)
 			close(info_fd);
 			close(cmd_fd);
 			close(resp_fd);
-			kill_and_reap_child(child);
+			kill_and_reap_child(session_fd, child);
 			return -1;
 		}
 		if (!reaped_child && wait_for_child_exit(child, &status) < 0) {
@@ -8017,6 +8061,7 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 	printf("selftest target exit cleanup stage=armed resources\n");
 	fflush(stdout);
 
+	best_effort_resume_and_thaw_target(session_fd, "pre-exit");
 	if (request_child_exit(cmd_fd) < 0)
 		goto out;
 	printf("selftest target exit cleanup stage=exit requested\n");
@@ -9002,7 +9047,7 @@ static int run_selftest(const char *prog)
 		printf("selftest target exit cleanup stage=failure cleanup begin pid=%d\n",
 		       child);
 		fflush(stdout);
-		kill_and_reap_child(child);
+		kill_and_reap_child(session_fd, child);
 		printf("selftest target exit cleanup stage=failure cleanup after reap pid=%d\n",
 		       child);
 		fflush(stdout);
