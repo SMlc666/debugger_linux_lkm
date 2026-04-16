@@ -1,6 +1,7 @@
 ifneq ($(KERNELRELEASE),)
 ccflags-y += -I$(src)/include
 ccflags-y += -I$(src)/third_party/kernelpatch/include
+ccflags-y += $(call cc-disable-warning, array-bounds)
 
 obj-m += lkmdbg.o
 
