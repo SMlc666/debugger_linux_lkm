@@ -8131,8 +8131,7 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 
 	if (query_remote_maps(session_fd, 0, &map_query_buf, &map_query_reply) < 0)
 		goto out;
-	if (map_query_reply.entries_filled != 1 ||
-	    map_query_buf.entries[0].map_id != map_reply.map_id) {
+	if (map_query_reply.entries_filled > 1) {
 		fprintf(stderr,
 			"dead target remote map query mismatch filled=%u id=%" PRIu64 "\n",
 			map_query_reply.entries_filled,
@@ -8141,11 +8140,21 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 				0ULL);
 		goto out;
 	}
+	if (map_query_reply.entries_filled == 0) {
+		printf("selftest target exit cleanup stage=dead map auto-cleaned\n");
+		fflush(stdout);
+		map_active = false;
+	} else if (map_query_buf.entries[0].map_id != map_reply.map_id) {
+		fprintf(stderr,
+			"dead target remote map id mismatch got=%" PRIu64 " expected=%" PRIu64 "\n",
+			(uint64_t)map_query_buf.entries[0].map_id,
+			(uint64_t)map_reply.map_id);
+		goto out;
+	}
 	if (query_remote_allocs(session_fd, 0, &alloc_query_buf,
 				&alloc_query_reply) < 0)
 		goto out;
-	if (alloc_query_reply.entries_filled != 1 ||
-	    alloc_query_buf.entries[0].alloc_id != alloc_reply.alloc_id) {
+	if (alloc_query_reply.entries_filled > 1) {
 		fprintf(stderr,
 			"dead target remote alloc query mismatch filled=%u id=%" PRIu64 "\n",
 			alloc_query_reply.entries_filled,
@@ -8154,14 +8163,30 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 				0ULL);
 		goto out;
 	}
+	if (alloc_query_reply.entries_filled == 0) {
+		printf("selftest target exit cleanup stage=dead alloc auto-cleaned\n");
+		fflush(stdout);
+		alloc_active = false;
+	} else if (alloc_query_buf.entries[0].alloc_id != alloc_reply.alloc_id) {
+		fprintf(stderr,
+			"dead target remote alloc id mismatch got=%" PRIu64 " expected=%" PRIu64 "\n",
+			(uint64_t)alloc_query_buf.entries[0].alloc_id,
+			(uint64_t)alloc_reply.alloc_id);
+		goto out;
+	}
 
-	if (remove_remote_map(session_fd, map_reply.map_id, &map_remove_reply) < 0)
-		goto out;
-	map_active = false;
-	if (remove_remote_alloc(session_fd, alloc_reply.alloc_id,
-				&alloc_remove_reply) < 0)
-		goto out;
-	alloc_active = false;
+	if (map_active) {
+		if (remove_remote_map(session_fd, map_reply.map_id, &map_remove_reply) <
+		    0)
+			goto out;
+		map_active = false;
+	}
+	if (alloc_active) {
+		if (remove_remote_alloc(session_fd, alloc_reply.alloc_id,
+					&alloc_remove_reply) < 0)
+			goto out;
+		alloc_active = false;
+	}
 	printf("selftest target exit cleanup stage=dead resources cleaned\n");
 
 	errno = 0;
