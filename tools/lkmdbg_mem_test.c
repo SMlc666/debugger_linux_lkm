@@ -8009,6 +8009,9 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 	int replacement_info_fd = -1;
 	int replacement_cmd_fd = -1;
 	int replacement_resp_fd = -1;
+	bool map_active = false;
+	bool alloc_active = false;
+	bool pte_active = false;
 	int status;
 	int child_reaped = 0;
 	int ret = -1;
@@ -8044,6 +8047,7 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 			      LKMDBG_REMOTE_MAP_PROT_READ, 0,
 			      &map_reply) < 0)
 		goto out;
+	map_active = true;
 	if (map_reply.map_fd >= 0) {
 		close(map_reply.map_fd);
 		map_reply.map_fd = -1;
@@ -8054,10 +8058,12 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 					LKMDBG_REMOTE_ALLOC_PROT_WRITE,
 				&alloc_reply) < 0)
 		goto out;
+	alloc_active = true;
 	if (apply_pte_patch(session_fd, info->basic_addr,
 			    LKMDBG_PTE_MODE_PROTNONE, 0, 0,
 			    &pte_apply_reply) < 0)
 		goto out;
+	pte_active = true;
 	printf("selftest target exit cleanup stage=armed resources\n");
 	fflush(stdout);
 
@@ -8133,12 +8139,15 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 
 	if (remove_remote_map(session_fd, map_reply.map_id, &map_remove_reply) < 0)
 		goto out;
+	map_active = false;
 	if (remove_remote_alloc(session_fd, alloc_reply.alloc_id,
 				&alloc_remove_reply) < 0)
 		goto out;
+	alloc_active = false;
 	if (remove_pte_patch(session_fd, pte_apply_reply.id, &pte_remove_reply) <
 	    0)
 		goto out;
+	pte_active = false;
 	if (!(pte_remove_reply.state & LKMDBG_PTE_PATCH_STATE_LOST)) {
 		fprintf(stderr, "dead target pte remove state mismatch=0x%x\n",
 			pte_remove_reply.state);
@@ -8231,6 +8240,51 @@ out:
 	printf("selftest target exit cleanup stage=out ret=%d replacement_pid=%d\n",
 	       ret, replacement_child);
 	fflush(stdout);
+	if (pte_active && pte_apply_reply.id) {
+		struct lkmdbg_pte_patch_request cleanup_reply;
+
+		memset(&cleanup_reply, 0, sizeof(cleanup_reply));
+		if (remove_pte_patch(session_fd, pte_apply_reply.id,
+				     &cleanup_reply) == 0) {
+			printf("selftest target exit cleanup stage=cleanup remove pte id=%" PRIu64 " state=0x%x\n",
+			       (uint64_t)cleanup_reply.id, cleanup_reply.state);
+			fflush(stdout);
+		} else {
+			printf("selftest target exit cleanup stage=cleanup remove pte fail id=%" PRIu64 " errno=%d\n",
+			       (uint64_t)pte_apply_reply.id, errno);
+			fflush(stdout);
+		}
+	}
+	if (alloc_active && alloc_reply.alloc_id) {
+		struct lkmdbg_remote_alloc_handle_request cleanup_reply;
+
+		memset(&cleanup_reply, 0, sizeof(cleanup_reply));
+		if (remove_remote_alloc(session_fd, alloc_reply.alloc_id,
+					&cleanup_reply) == 0) {
+			printf("selftest target exit cleanup stage=cleanup remove alloc id=%" PRIu64 "\n",
+			       (uint64_t)cleanup_reply.alloc_id);
+			fflush(stdout);
+		} else {
+			printf("selftest target exit cleanup stage=cleanup remove alloc fail id=%" PRIu64 " errno=%d\n",
+			       (uint64_t)alloc_reply.alloc_id, errno);
+			fflush(stdout);
+		}
+	}
+	if (map_active && map_reply.map_id) {
+		struct lkmdbg_remote_map_handle_request cleanup_reply;
+
+		memset(&cleanup_reply, 0, sizeof(cleanup_reply));
+		if (remove_remote_map(session_fd, map_reply.map_id,
+				      &cleanup_reply) == 0) {
+			printf("selftest target exit cleanup stage=cleanup remove map id=%" PRIu64 "\n",
+			       (uint64_t)cleanup_reply.map_id);
+			fflush(stdout);
+		} else {
+			printf("selftest target exit cleanup stage=cleanup remove map fail id=%" PRIu64 " errno=%d\n",
+			       (uint64_t)map_reply.map_id, errno);
+			fflush(stdout);
+		}
+	}
 	if (replacement_info_fd >= 0)
 		close(replacement_info_fd);
 	if (replacement_cmd_fd >= 0 && replacement_resp_fd >= 0)
