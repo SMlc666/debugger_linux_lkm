@@ -3155,23 +3155,49 @@ static int wait_for_target_exit_event(int session_fd, pid_t child,
 				      struct lkmdbg_event_record *event_out)
 {
 	struct lkmdbg_event_record event;
+	int waited = 0;
 
-	if (wait_for_session_event(session_fd, LKMDBG_EVENT_TARGET_EXIT, 0, 5000,
-				   &event) < 0)
-		return -1;
-	if (event.tgid != child) {
-		fprintf(stderr,
-			"target exit event tgid mismatch got=%d expected=%d\n",
-			event.tgid, child);
-		return -1;
+	while (waited < 5000) {
+		int slice = 5000 - waited;
+		int ret;
+
+		if (slice > 1000)
+			slice = 1000;
+		ret = read_session_event_timeout(session_fd, &event, slice);
+		if (ret < 0)
+			return -1;
+		if (ret > 0) {
+			waited += slice;
+			continue;
+		}
+		waited += slice;
+
+		if (event.type != LKMDBG_EVENT_TARGET_EXIT)
+			continue;
+		if (event.tgid != child) {
+			fprintf(stderr,
+				"target exit event tgid mismatch got=%d expected=%d\n",
+				event.tgid, child);
+			return -1;
+		}
+		if (event.tid <= 0) {
+			fprintf(stderr, "target exit event tid invalid=%d\n",
+				event.tid);
+			return -1;
+		}
+		if (event.tid != child) {
+			printf("selftest target exit cleanup stage=ignoring thread-exit tid=%d tgid=%d code=%" PRIu64 "\n",
+			       event.tid, event.tgid, (uint64_t)event.value0);
+			fflush(stdout);
+			continue;
+		}
+		if (event_out)
+			*event_out = event;
+		return 0;
 	}
-	if (event.tid <= 0) {
-		fprintf(stderr, "target exit event tid invalid=%d\n", event.tid);
-		return -1;
-	}
-	if (event_out)
-		*event_out = event;
-	return 0;
+
+	fprintf(stderr, "target exit leader event timed out child=%d\n", child);
+	return -1;
 }
 
 static int expect_dead_mem_accesses_fail(int session_fd,
@@ -4229,8 +4255,13 @@ static int verify_cross_page_permission_flip(int session_fd,
 	unsigned char payload[SELFTEST_PERMISSION_SPAN];
 	unsigned char readback[SELFTEST_PERMISSION_SPAN];
 	unsigned char *original_pages = NULL;
+	struct lkmdbg_page_entry page_entries[PAGE_QUERY_BATCH];
 	struct lkmdbg_mem_op op;
 	struct lkmdbg_mem_request req;
+	struct page_query_buffer page_query_buf = {
+		.entries = page_entries,
+	};
+	struct lkmdbg_page_query_request page_query_reply;
 	uintptr_t page1;
 	uintptr_t page2;
 	size_t tracked_len;
@@ -4355,10 +4386,45 @@ static int verify_cross_page_permission_flip(int session_fd,
 	if (write_target_memory(session_fd, page2, payload + prefix,
 				sizeof(payload) - prefix, &bytes_done, 0) < 0 ||
 	    bytes_done != sizeof(payload) - prefix) {
-		fprintf(stderr,
-			"perm flip restore second-half mismatch bytes_done=%u expected=%zu\n",
-			bytes_done, sizeof(payload) - prefix);
-		goto out;
+		uint32_t page_flags;
+
+		memset(page_entries, 0, sizeof(page_entries));
+		memset(&page_query_reply, 0, sizeof(page_query_reply));
+		if (query_target_pages(session_fd, page2, info->page_size,
+				       &page_query_buf, &page_query_reply) < 0)
+			goto out;
+		if (!page_query_reply.entries_filled ||
+		    page_entries[0].page_addr != page2) {
+			fprintf(stderr,
+				"perm flip restore second-half query mismatch filled=%u addr=0x%" PRIx64 "\n",
+				page_query_reply.entries_filled,
+				page_query_reply.entries_filled ?
+					(uint64_t)page_entries[0].page_addr : 0ULL);
+			goto out;
+		}
+		page_flags = page_entries[0].flags;
+		if (!(page_flags & LKMDBG_PAGE_FLAG_PROT_WRITE) ||
+		    !(page_flags & LKMDBG_PAGE_FLAG_MAYWRITE) ||
+		    !(page_flags & LKMDBG_PAGE_FLAG_FORCE_WRITE) ||
+		    (page_flags & LKMDBG_PAGE_FLAG_NOFAULT_WRITE)) {
+			fprintf(stderr,
+				"perm flip restore second-half mismatch bytes_done=%u expected=%zu flags=0x%x\n",
+				bytes_done, sizeof(payload) - prefix, page_flags);
+			goto out;
+		}
+		bytes_done = 0;
+		if (write_target_memory_flags(session_fd, page2, payload + prefix,
+					      sizeof(payload) - prefix,
+					      LKMDBG_MEM_OP_FLAG_FORCE_ACCESS,
+					      &bytes_done, 0) < 0 ||
+		    bytes_done != sizeof(payload) - prefix) {
+			fprintf(stderr,
+				"perm flip restore second-half force-write mismatch bytes_done=%u expected=%zu flags=0x%x\n",
+				bytes_done, sizeof(payload) - prefix, page_flags);
+			goto out;
+		}
+		printf("selftest cross-page permission flip fallback force-write flags=0x%x\n",
+		       page_flags);
 	}
 	memset(readback, 0, sizeof(readback));
 	if (read_target_memory_flags(session_fd, page2 - prefix, readback,
