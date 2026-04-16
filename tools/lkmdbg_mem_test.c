@@ -9101,14 +9101,14 @@ static int run_selftest(const char *prog)
 		printf("selftest target exit cleanup stage=failure cleanup begin pid=%d\n",
 		       child);
 		fflush(stdout);
-		kill_and_reap_child(session_fd, child);
-		printf("selftest target exit cleanup stage=failure cleanup after reap pid=%d\n",
-		       child);
-		fflush(stdout);
 		printf("selftest target exit cleanup stage=failure cleanup before close session\n");
 		fflush(stdout);
 		close(session_fd);
 		printf("selftest target exit cleanup stage=failure cleanup after close session\n");
+		fflush(stdout);
+		kill_and_reap_child(-1, child);
+		printf("selftest target exit cleanup stage=failure cleanup after reap pid=%d\n",
+		       child);
 		fflush(stdout);
 		close(info_pipe[0]);
 		close(cmd_pipe[1]);
