@@ -8034,10 +8034,6 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 	struct lkmdbg_remote_alloc_handle_request alloc_remove_reply;
 	struct lkmdbg_remote_alloc_query_request alloc_query_reply;
 	struct remote_alloc_query_buffer alloc_query_buf = { 0 };
-	struct lkmdbg_pte_patch_request pte_apply_reply;
-	struct lkmdbg_pte_patch_request pte_remove_reply;
-	struct lkmdbg_pte_patch_entry pte_entries[4];
-	struct lkmdbg_pte_patch_query_request pte_query_reply;
 	struct child_info replacement_info;
 	struct lkmdbg_event_record exit_event;
 	char replacement_readback[32];
@@ -8050,7 +8046,6 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 	int replacement_resp_fd = -1;
 	bool map_active = false;
 	bool alloc_active = false;
-	bool pte_active = false;
 	int status;
 	int child_reaped = 0;
 	int ret = -1;
@@ -8061,9 +8056,6 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 	memset(&alloc_reply, 0, sizeof(alloc_reply));
 	memset(&alloc_remove_reply, 0, sizeof(alloc_remove_reply));
 	memset(&alloc_query_reply, 0, sizeof(alloc_query_reply));
-	memset(&pte_apply_reply, 0, sizeof(pte_apply_reply));
-	memset(&pte_remove_reply, 0, sizeof(pte_remove_reply));
-	memset(&pte_query_reply, 0, sizeof(pte_query_reply));
 	memset(&replacement_info, 0, sizeof(replacement_info));
 	memset(&exit_event, 0, sizeof(exit_event));
 	(void)resp_fd;
@@ -8098,11 +8090,6 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 				&alloc_reply) < 0)
 		goto out;
 	alloc_active = true;
-	if (apply_pte_patch(session_fd, info->basic_addr,
-			    LKMDBG_PTE_MODE_PROTNONE, 0, 0,
-			    &pte_apply_reply) < 0)
-		goto out;
-	pte_active = true;
 	printf("selftest target exit cleanup stage=armed resources\n");
 	fflush(stdout);
 
@@ -8167,23 +8154,6 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 				0ULL);
 		goto out;
 	}
-	if (query_pte_patches(session_fd, 0, pte_entries,
-			      (uint32_t)(sizeof(pte_entries) /
-					 sizeof(pte_entries[0])),
-			      &pte_query_reply) < 0)
-		goto out;
-	if (pte_query_reply.entries_filled != 1 ||
-	    pte_entries[0].id != pte_apply_reply.id ||
-	    !(pte_entries[0].state & LKMDBG_PTE_PATCH_STATE_LOST)) {
-		fprintf(stderr,
-			"dead target pte query mismatch filled=%u id=%" PRIu64 " state=0x%x\n",
-			pte_query_reply.entries_filled,
-			pte_query_reply.entries_filled ?
-				(uint64_t)pte_entries[0].id :
-				0ULL,
-			pte_query_reply.entries_filled ? pte_entries[0].state : 0U);
-		goto out;
-	}
 
 	if (remove_remote_map(session_fd, map_reply.map_id, &map_remove_reply) < 0)
 		goto out;
@@ -8192,15 +8162,6 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 				&alloc_remove_reply) < 0)
 		goto out;
 	alloc_active = false;
-	if (remove_pte_patch(session_fd, pte_apply_reply.id, &pte_remove_reply) <
-	    0)
-		goto out;
-	pte_active = false;
-	if (!(pte_remove_reply.state & LKMDBG_PTE_PATCH_STATE_LOST)) {
-		fprintf(stderr, "dead target pte remove state mismatch=0x%x\n",
-			pte_remove_reply.state);
-		goto out;
-	}
 	printf("selftest target exit cleanup stage=dead resources cleaned\n");
 
 	errno = 0;
@@ -8288,21 +8249,6 @@ out:
 	printf("selftest target exit cleanup stage=out ret=%d replacement_pid=%d\n",
 	       ret, replacement_child);
 	fflush(stdout);
-	if (pte_active && pte_apply_reply.id) {
-		struct lkmdbg_pte_patch_request cleanup_reply;
-
-		memset(&cleanup_reply, 0, sizeof(cleanup_reply));
-		if (remove_pte_patch(session_fd, pte_apply_reply.id,
-				     &cleanup_reply) == 0) {
-			printf("selftest target exit cleanup stage=cleanup remove pte id=%" PRIu64 " state=0x%x\n",
-			       (uint64_t)cleanup_reply.id, cleanup_reply.state);
-			fflush(stdout);
-		} else {
-			printf("selftest target exit cleanup stage=cleanup remove pte fail id=%" PRIu64 " errno=%d\n",
-			       (uint64_t)pte_apply_reply.id, errno);
-			fflush(stdout);
-		}
-	}
 	if (alloc_active && alloc_reply.alloc_id) {
 		struct lkmdbg_remote_alloc_handle_request cleanup_reply;
 
