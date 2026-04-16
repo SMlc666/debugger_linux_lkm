@@ -3700,8 +3700,6 @@ static int child_selftest_main(int info_fd, int cmd_fd, int resp_fd)
 		}
 		case CHILD_OP_EXIT:
 			*freeze_stop = 1;
-			for (i = 0; i < SELFTEST_FREEZE_THREADS; i++)
-				pthread_join(freeze_threads[i], NULL);
 			return 0;
 		default:
 			return 2;
