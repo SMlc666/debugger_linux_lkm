@@ -3,9 +3,20 @@
 
 #include <errno.h>
 #include <sys/poll.h>
+#include <time.h>
 #include <unistd.h>
 
 #define LKMDBG_EVENT_READ_BATCH 16U
+
+static int64_t monotonic_time_ms(void)
+{
+	struct timespec ts;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0)
+		return -1;
+
+	return ((int64_t)ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
+}
 
 int drain_session_events(int session_fd)
 {
@@ -112,23 +123,37 @@ int wait_for_session_event_common(int session_fd, uint32_t type, uint32_t code,
 				  struct lkmdbg_event_record *event_out,
 				  bool report_timeout)
 {
-	int waited = 0;
+	int64_t start_ms = monotonic_time_ms();
+	int64_t deadline_ms;
 
-	while (waited < timeout_ms) {
+	if (start_ms < 0) {
+		lkmdbg_log_errorf("clock_gettime failed: %s", strerror(errno));
+		return -1;
+	}
+	deadline_ms = start_ms + timeout_ms;
+
+	while (1) {
 		struct lkmdbg_event_record event;
-		int slice = timeout_ms - waited;
+		int64_t now_ms = monotonic_time_ms();
+		int64_t remaining_ms;
+		int slice;
 		int ret;
 
+		if (now_ms < 0) {
+			lkmdbg_log_errorf("clock_gettime failed: %s", strerror(errno));
+			return -1;
+		}
+		remaining_ms = deadline_ms - now_ms;
+		if (remaining_ms <= 0)
+			break;
+		slice = (int)remaining_ms;
 		if (slice > 1000)
 			slice = 1000;
 		ret = read_session_event_timeout(session_fd, &event, slice);
 		if (ret < 0)
 			return -1;
-		if (ret > 0) {
-			waited += slice;
+		if (ret > 0)
 			continue;
-		}
-		waited += slice;
 
 		if (event.type != type)
 			continue;
@@ -158,23 +183,37 @@ int wait_for_syscall_event(int session_fd, uint32_t phase, uint32_t syscall_nr,
 			   int timeout_ms,
 			   struct lkmdbg_event_record *event_out)
 {
-	int waited = 0;
+	int64_t start_ms = monotonic_time_ms();
+	int64_t deadline_ms;
 
-	while (waited < timeout_ms) {
+	if (start_ms < 0) {
+		lkmdbg_log_errorf("clock_gettime failed: %s", strerror(errno));
+		return -1;
+	}
+	deadline_ms = start_ms + timeout_ms;
+
+	while (1) {
 		struct lkmdbg_event_record event;
-		int slice = timeout_ms - waited;
+		int64_t now_ms = monotonic_time_ms();
+		int64_t remaining_ms;
+		int slice;
 		int ret;
 
+		if (now_ms < 0) {
+			lkmdbg_log_errorf("clock_gettime failed: %s", strerror(errno));
+			return -1;
+		}
+		remaining_ms = deadline_ms - now_ms;
+		if (remaining_ms <= 0)
+			break;
+		slice = (int)remaining_ms;
 		if (slice > 1000)
 			slice = 1000;
 		ret = read_session_event_timeout(session_fd, &event, slice);
 		if (ret < 0)
 			return -1;
-		if (ret > 0) {
-			waited += slice;
+		if (ret > 0)
 			continue;
-		}
-		waited += slice;
 
 		if (event.type != LKMDBG_EVENT_TARGET_SYSCALL)
 			continue;

@@ -21,6 +21,7 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "../include/lkmdbg_ioctl.h"
@@ -3155,22 +3156,36 @@ static int wait_for_target_exit_event(int session_fd, pid_t child,
 				      struct lkmdbg_event_record *event_out)
 {
 	struct lkmdbg_event_record event;
-	int waited = 0;
+	struct timespec ts;
+	int64_t deadline_ms;
 
-	while (waited < 5000) {
-		int slice = 5000 - waited;
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
+		fprintf(stderr, "clock_gettime failed: %s\n", strerror(errno));
+		return -1;
+	}
+	deadline_ms = ((int64_t)ts.tv_sec * 1000) + (ts.tv_nsec / 1000000) + 5000;
+
+	while (1) {
+		int64_t now_ms;
+		int slice;
 		int ret;
 
+		if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
+			fprintf(stderr, "clock_gettime failed: %s\n",
+				strerror(errno));
+			return -1;
+		}
+		now_ms = ((int64_t)ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
+		if (now_ms >= deadline_ms)
+			break;
+		slice = (int)(deadline_ms - now_ms);
 		if (slice > 1000)
 			slice = 1000;
 		ret = read_session_event_timeout(session_fd, &event, slice);
 		if (ret < 0)
 			return -1;
-		if (ret > 0) {
-			waited += slice;
+		if (ret > 0)
 			continue;
-		}
-		waited += slice;
 
 		if (event.type != LKMDBG_EVENT_TARGET_EXIT)
 			continue;
