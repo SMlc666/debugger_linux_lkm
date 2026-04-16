@@ -3152,18 +3152,58 @@ static int verify_remote_string(int session_fd, uintptr_t remote_addr,
 	return 0;
 }
 
+static int reap_child_nonblock(pid_t child, int *status_out, int *reaped_out)
+{
+	int status;
+	pid_t waited;
+
+	if (reaped_out)
+		*reaped_out = 0;
+
+	waited = waitpid(child, &status, WNOHANG);
+	if (waited < 0) {
+		if (errno == ECHILD) {
+			if (reaped_out)
+				*reaped_out = 1;
+			return 0;
+		}
+		fprintf(stderr, "waitpid(%d, WNOHANG) failed: %s\n", child,
+			strerror(errno));
+		return -1;
+	}
+	if (waited == 0)
+		return 0;
+	if (waited != child) {
+		fprintf(stderr, "waitpid(%d, WNOHANG) returned pid=%d\n", child,
+			waited);
+		return -1;
+	}
+
+	if (status_out)
+		*status_out = status;
+	if (reaped_out)
+		*reaped_out = 1;
+	return 0;
+}
+
 static int wait_for_target_exit_event(int session_fd, pid_t child,
-				      struct lkmdbg_event_record *event_out)
+				      struct lkmdbg_event_record *event_out,
+				      int *child_status_out,
+				      int *child_reaped_out)
 {
 	struct lkmdbg_event_record event;
 	struct timespec ts;
 	int64_t deadline_ms;
+	int child_status = 0;
+	int child_reaped = 0;
 
 	if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
 		fprintf(stderr, "clock_gettime failed: %s\n", strerror(errno));
 		return -1;
 	}
 	deadline_ms = ((int64_t)ts.tv_sec * 1000) + (ts.tv_nsec / 1000000) + 5000;
+	if (child_reaped_out)
+		*child_reaped_out = 0;
 
 	while (1) {
 		int64_t now_ms;
@@ -3184,30 +3224,45 @@ static int wait_for_target_exit_event(int session_fd, pid_t child,
 		ret = read_session_event_timeout(session_fd, &event, slice);
 		if (ret < 0)
 			return -1;
-		if (ret > 0)
-			continue;
 
-		if (event.type != LKMDBG_EVENT_TARGET_EXIT)
-			continue;
-		if (event.tgid != child) {
-			fprintf(stderr,
-				"target exit event tgid mismatch got=%d expected=%d\n",
-				event.tgid, child);
+		if (ret == 0) {
+			if (event.type != LKMDBG_EVENT_TARGET_EXIT)
+				goto check_child;
+			if (event.tgid != child) {
+				fprintf(stderr,
+					"target exit event tgid mismatch got=%d expected=%d\n",
+					event.tgid, child);
+				return -1;
+			}
+			if (event.tid <= 0) {
+				fprintf(stderr, "target exit event tid invalid=%d\n",
+					event.tid);
+				return -1;
+			}
+			if (event.tid != child) {
+				printf("selftest target exit cleanup stage=ignoring thread-exit tid=%d tgid=%d code=%" PRIu64 "\n",
+				       event.tid, event.tgid,
+				       (uint64_t)event.value0);
+				fflush(stdout);
+				goto check_child;
+			}
+			if (event_out)
+				*event_out = event;
+			return 0;
+		}
+
+check_child:
+		if (reap_child_nonblock(child, &child_status, &child_reaped) < 0)
 			return -1;
-		}
-		if (event.tid <= 0) {
-			fprintf(stderr, "target exit event tid invalid=%d\n",
-				event.tid);
-			return -1;
-		}
-		if (event.tid != child) {
-			printf("selftest target exit cleanup stage=ignoring thread-exit tid=%d tgid=%d code=%" PRIu64 "\n",
-			       event.tid, event.tgid, (uint64_t)event.value0);
-			fflush(stdout);
+		if (!child_reaped)
 			continue;
-		}
-		if (event_out)
-			*event_out = event;
+		if (child_status_out)
+			*child_status_out = child_status;
+		if (child_reaped_out)
+			*child_reaped_out = 1;
+		printf("selftest target exit cleanup stage=child reaped without leader event status=%d\n",
+		       child_status);
+		fflush(stdout);
 		return 0;
 	}
 
@@ -3919,6 +3974,19 @@ static int wait_for_child_exit(pid_t child, int *status_out)
 	if (status_out)
 		*status_out = status;
 	return 0;
+}
+
+static void kill_and_reap_child(pid_t child)
+{
+	int status;
+	int reaped = 0;
+
+	if (child <= 0)
+		return;
+	if (reap_child_nonblock(child, &status, &reaped) < 0 || reaped)
+		return;
+	(void)kill(child, SIGKILL);
+	(void)waitpid(child, NULL, 0);
 }
 
 static int stop_selftest_child(pid_t child, int cmd_fd, int resp_fd,
@@ -7726,6 +7794,7 @@ static int verify_inflight_exit_race(void)
 		int resp_fd = -1;
 		int session_fd = -1;
 		int status;
+		int reaped_child = 0;
 		int xfer_ret;
 		unsigned int i;
 		uint32_t race_ops;
@@ -7796,16 +7865,17 @@ static int verify_inflight_exit_race(void)
 			waitpid(child, NULL, 0);
 			return -1;
 		}
-		if (wait_for_target_exit_event(session_fd, child, NULL) < 0) {
+		if (wait_for_target_exit_event(session_fd, child, NULL, &status,
+					       &reaped_child) < 0) {
 			free(buf);
 			close(session_fd);
 			close(info_fd);
 			close(cmd_fd);
 			close(resp_fd);
-			waitpid(child, NULL, 0);
+			kill_and_reap_child(child);
 			return -1;
 		}
-		if (wait_for_child_exit(child, &status) < 0) {
+		if (!reaped_child && wait_for_child_exit(child, &status) < 0) {
 			free(buf);
 			close(session_fd);
 			close(info_fd);
@@ -7872,6 +7942,7 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 	int replacement_cmd_fd = -1;
 	int replacement_resp_fd = -1;
 	int status;
+	int child_reaped = 0;
 	int ret = -1;
 
 	memset(&map_reply, 0, sizeof(map_reply));
@@ -7926,15 +7997,19 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 		goto out;
 	printf("selftest target exit cleanup stage=exit requested\n");
 	fflush(stdout);
-	if (wait_for_target_exit_event(session_fd, child, &exit_event) < 0)
+	if (wait_for_target_exit_event(session_fd, child, &exit_event, &status,
+				       &child_reaped) < 0)
 		goto out;
-	printf("selftest target exit cleanup stage=exit event received tid=%d code=%" PRIu64 "\n",
-	       exit_event.tid, (uint64_t)exit_event.value0);
-	fflush(stdout);
-	if (wait_for_child_exit(child, &status) < 0)
-		goto out;
-	printf("selftest target exit cleanup stage=child reaped status=%d\n", status);
-	fflush(stdout);
+	if (!child_reaped) {
+		printf("selftest target exit cleanup stage=exit event received tid=%d code=%" PRIu64 "\n",
+		       exit_event.tid, (uint64_t)exit_event.value0);
+		fflush(stdout);
+		if (wait_for_child_exit(child, &status) < 0)
+			goto out;
+		printf("selftest target exit cleanup stage=child reaped status=%d\n",
+		       status);
+		fflush(stdout);
+	}
 	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
 		fprintf(stderr, "target exit child status=%d\n", status);
 		goto out;
@@ -8897,6 +8972,7 @@ static int run_selftest(const char *prog)
 	if (verify_target_exit_cleanup_and_rebind(session_fd, child, &info,
 						  cmd_pipe[1], resp_pipe[0]) <
 	    0) {
+		kill_and_reap_child(child);
 		close(session_fd);
 		close(info_pipe[0]);
 		close(cmd_pipe[1]);
