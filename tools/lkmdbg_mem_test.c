@@ -9106,18 +9106,10 @@ static int run_selftest(const char *prog)
 		close(session_fd);
 		printf("selftest target exit cleanup stage=failure cleanup after close session\n");
 		fflush(stdout);
-		kill_and_reap_child(-1, child);
-		printf("selftest target exit cleanup stage=failure cleanup after reap pid=%d\n",
+		(void)kill(child, SIGKILL);
+		printf("selftest target exit cleanup stage=failure cleanup fast-exit pid=%d\n",
 		       child);
 		fflush(stdout);
-		close(info_pipe[0]);
-		close(cmd_pipe[1]);
-		close(resp_pipe[0]);
-		free(large_buf);
-		free(batch_a);
-		free(batch_b);
-		free(batch_c);
-		free(batch_d);
 		return 1;
 	}
 
