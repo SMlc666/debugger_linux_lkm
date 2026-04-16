@@ -33,11 +33,16 @@ int lkmdbg_get_target_identity(struct lkmdbg_session *session, pid_t *tgid_out,
 static struct task_struct *lkmdbg_get_target_leader(struct lkmdbg_session *session)
 {
 	pid_t target_tgid;
+	struct task_struct *task;
 
 	if (lkmdbg_get_target_identity(session, &target_tgid, NULL))
 		return ERR_PTR(-ENODEV);
 
-	return get_pid_task(find_vpid(target_tgid), PIDTYPE_TGID);
+	task = get_pid_task(find_vpid(target_tgid), PIDTYPE_TGID);
+	if (!task)
+		return ERR_PTR(-ESRCH);
+
+	return task;
 }
 
 int lkmdbg_get_target_thread(struct lkmdbg_session *session, pid_t tid_override,
