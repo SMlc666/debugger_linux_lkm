@@ -7,6 +7,7 @@
 #include <linux/input.h>
 #include <linux/reboot.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -161,6 +162,11 @@ struct qemu_behavior_debug_result {
 	__u32 mmu_supported;
 	__u32 mmu_armed;
 };
+
+static void qemu_behavior_worker_sigtrap_handler(int signum)
+{
+	(void)signum;
+}
 
 static int qemu_open_session(void);
 static void qemu_drain_one_event(int session_fd);
@@ -1507,10 +1513,19 @@ static void qemu_behavior_spawn_worker(struct qemu_behavior_shared **shared_out,
 	if (child == 0) {
 		__u64 total_ns = 0;
 		__u64 iters = 0;
+		struct sigaction trap_act;
 
 		prctl(PR_SET_NAME, "lkmdbg-behavior", 0, 0, 0);
-		/* Disturbance debug ops may transiently surface SIGTRAP in the worker. */
-		(void)signal(SIGTRAP, SIG_IGN);
+		/*
+		 * Disturbance debug ops can surface repeated SIGTRAP events.
+		 * Use sigaction() to keep a persistent handler in place.
+		 */
+		memset(&trap_act, 0, sizeof(trap_act));
+		trap_act.sa_handler = qemu_behavior_worker_sigtrap_handler;
+		trap_act.sa_flags = SA_RESTART;
+		sigemptyset(&trap_act.sa_mask);
+		if (sigaction(SIGTRAP, &trap_act, NULL) < 0)
+			_exit(2);
 		shared->ready = 1;
 		while (!shared->stop) {
 			__u64 t0 = qemu_now_ns();
