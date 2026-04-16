@@ -7841,9 +7841,11 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 			    LKMDBG_PTE_MODE_PROTNONE, 0, 0,
 			    &pte_apply_reply) < 0)
 		goto out;
+	printf("selftest target exit cleanup stage=armed resources\n");
 
 	if (request_child_exit(cmd_fd) < 0)
 		goto out;
+	printf("selftest target exit cleanup stage=exit requested\n");
 	if (wait_for_target_exit_event(session_fd, child, &exit_event) < 0)
 		goto out;
 	if (wait_for_child_exit(child, &status) < 0)
@@ -7855,6 +7857,7 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 
 	if (expect_dead_mem_accesses_fail(session_fd, info) < 0)
 		goto out;
+	printf("selftest target exit cleanup stage=dead access verified\n");
 
 	if (query_remote_maps(session_fd, 0, &map_query_buf, &map_query_reply) < 0)
 		goto out;
@@ -7912,6 +7915,7 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 			pte_remove_reply.state);
 		goto out;
 	}
+	printf("selftest target exit cleanup stage=dead resources cleaned\n");
 
 	errno = 0;
 	if (create_remote_map(session_fd, info->large_addr, 0, info->page_size,
@@ -7937,6 +7941,8 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 				 &replacement_cmd_fd, &replacement_resp_fd,
 				 &replacement_info) < 0)
 		goto out;
+	printf("selftest target exit cleanup stage=replacement started pid=%d\n",
+	       replacement_child);
 	if (child_read_remote_range(replacement_cmd_fd, replacement_resp_fd,
 				    replacement_info.basic_addr,
 				    replacement_readback,
@@ -7969,6 +7975,8 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 
 	if (set_target(session_fd, replacement_child) < 0)
 		goto out;
+	printf("selftest target exit cleanup stage=rebound pid=%d\n",
+	       replacement_child);
 	if (write_target_memory(session_fd, replacement_info.basic_addr,
 				rebind_payload, strlen(rebind_payload) + 1, NULL,
 				0) < 0)
