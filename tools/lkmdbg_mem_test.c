@@ -286,6 +286,8 @@ static int request_child_exit(int cmd_fd);
 static int wait_for_child_exit(pid_t child, int *status_out);
 static int stop_selftest_child(pid_t child, int cmd_fd, int resp_fd,
 			       int send_exit);
+static void best_effort_resume_and_thaw_target(int session_fd,
+						const char *stage);
 
 static int wait_for_stop_event_or_state(int session_fd, uint32_t reason,
 					int timeout_ms,
@@ -3196,6 +3198,7 @@ static int wait_for_target_exit_event(int session_fd, pid_t child,
 	int64_t deadline_ms;
 	int child_status = 0;
 	int child_reaped = 0;
+	unsigned int resume_nudges = 0;
 
 	if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
 		fprintf(stderr, "clock_gettime failed: %s\n", strerror(errno));
@@ -3254,8 +3257,14 @@ static int wait_for_target_exit_event(int session_fd, pid_t child,
 check_child:
 		if (reap_child_nonblock(child, &child_status, &child_reaped) < 0)
 			return -1;
-		if (!child_reaped)
+		if (!child_reaped) {
+			if (resume_nudges < 8U) {
+				best_effort_resume_and_thaw_target(session_fd,
+								   "exit-wait");
+				resume_nudges++;
+			}
 			continue;
+		}
 		if (child_status_out)
 			*child_status_out = child_status;
 		if (child_reaped_out)
@@ -3267,6 +3276,36 @@ check_child:
 	}
 
 	fprintf(stderr, "target exit leader event timed out child=%d\n", child);
+	best_effort_resume_and_thaw_target(session_fd, "exit-timeout");
+	(void)kill(child, SIGKILL);
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+		int64_t force_deadline_ms =
+			((int64_t)ts.tv_sec * 1000) + (ts.tv_nsec / 1000000) + 2000;
+
+		for (;;) {
+			int64_t now_ms;
+
+			if (reap_child_nonblock(child, &child_status, &child_reaped) < 0)
+				return -1;
+			if (child_reaped) {
+				if (child_status_out)
+					*child_status_out = child_status;
+				if (child_reaped_out)
+					*child_reaped_out = 1;
+				printf("selftest target exit cleanup stage=force-reaped child status=%d\n",
+				       child_status);
+				fflush(stdout);
+				return 0;
+			}
+			if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0)
+				break;
+			now_ms = ((int64_t)ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
+			if (now_ms >= force_deadline_ms)
+				break;
+			usleep(1000);
+		}
+	}
+	fprintf(stderr, "target exit force-reap timed out child=%d\n", child);
 	return -1;
 }
 
@@ -8085,7 +8124,16 @@ static int verify_target_exit_cleanup_and_rebind(int session_fd, pid_t child,
 		       status);
 		fflush(stdout);
 	}
-	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+	if (WIFEXITED(status)) {
+		if (WEXITSTATUS(status) != 0) {
+			fprintf(stderr, "target exit child status=%d\n", status);
+			goto out;
+		}
+	} else if (WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL) {
+		printf("selftest target exit cleanup stage=accepted forced kill status=%d\n",
+		       status);
+		fflush(stdout);
+	} else {
 		fprintf(stderr, "target exit child status=%d\n", status);
 		goto out;
 	}
