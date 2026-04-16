@@ -9110,7 +9110,7 @@ static int run_selftest(const char *prog)
 		printf("selftest target exit cleanup stage=failure cleanup fast-exit pid=%d\n",
 		       child);
 		fflush(stdout);
-		return 1;
+		_exit(1);
 	}
 
 	close(session_fd);
