@@ -448,17 +448,12 @@ static void __nocfi lkmdbg_input_event_replacement(struct input_dev *dev,
 						   unsigned int code,
 						   int value)
 {
-	struct lkmdbg_hook_registry_entry *registry;
 	void (*orig)(struct input_dev *dev, unsigned int type, unsigned int code,
 		     int value);
 	struct lkmdbg_input_device *device;
 	bool injected = false;
 
 	atomic_inc(&lkmdbg_input_event_inflight);
-
-	registry = READ_ONCE(lkmdbg_input_event_registry);
-	if (registry)
-		lkmdbg_hook_registry_note_hit(registry);
 
 	orig = READ_ONCE(lkmdbg_input_event_orig);
 	if (orig)
