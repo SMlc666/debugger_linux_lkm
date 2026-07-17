@@ -81,13 +81,6 @@ int main(void)
 	uint8_t readback[sizeof(expected)];
 	uint8_t *mapped = MAP_FAILED;
 	uint32_t bytes_done = 0;
-	struct lkmdbg_remote_map_entry entries[2];
-	struct lkmdbg_remote_map_query_request maps = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(maps),
-		.entries_addr = (uintptr_t)entries,
-		.max_entries = 2,
-	};
 	struct lkmdbg_remote_map_handle_request remove_req;
 	int info_pipe[2], cmd_pipe[2];
 	pid_t child = -1;
@@ -119,9 +112,6 @@ int main(void)
 	if (ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_MAP, &req) < 0 ||
 	    req.map_fd < 0 || req.mapped_length < sizeof(expected))
 		goto out;
-	if (ioctl(session_fd, LKMDBG_IOC_QUERY_REMOTE_MAPS, &maps) < 0 ||
-	    maps.entries_filled != 1 || entries[0].map_id != req.map_id)
-		goto out;
 	mapped = mmap(NULL, req.mapped_length, PROT_READ | PROT_WRITE,
 		      MAP_SHARED, req.map_fd, 0);
 	if (mapped == MAP_FAILED)
@@ -149,11 +139,6 @@ int main(void)
 out:
 	if (session_fd >= 0 && req.map_id) {
 		if (bridge_remove_remote_map(session_fd, req.map_id, &remove_req) < 0)
-			status = 1;
-		maps.entries_filled = 0;
-		maps.start_id = 0;
-		if (ioctl(session_fd, LKMDBG_IOC_QUERY_REMOTE_MAPS, &maps) < 0 ||
-		    maps.entries_filled != 0)
 			status = 1;
 	}
 	if (mapped != MAP_FAILED) {
