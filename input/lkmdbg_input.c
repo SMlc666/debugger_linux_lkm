@@ -61,6 +61,7 @@ struct lkmdbg_input_device {
 	bool injecting;
 	bool controller;
 	bool dev_ref_held;
+	struct lkmdbg_input_program *program;
 	struct task_struct *inject_task;
 	u64 inject_source_id;
 	u64 vm_program_id;
