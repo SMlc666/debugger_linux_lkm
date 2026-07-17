@@ -95,6 +95,13 @@ jobs:
           echo "Using KDIR=$KDIR"
           make KDIR="$KDIR" CC="gcc"
 
+      - name: Check input VM userspace ABI
+        run: |
+          cc -O2 -Wall -Wextra \
+            -o "$RUNNER_TEMP/lkmdbg_input_vm_abi_test" \
+            tools/lkmdbg_input_vm_abi_test.c
+          "$RUNNER_TEMP/lkmdbg_input_vm_abi_test"
+
   qemu-arm64-build-artifacts:
     runs-on: ubuntu-24.04
     needs: prepare-ci-image

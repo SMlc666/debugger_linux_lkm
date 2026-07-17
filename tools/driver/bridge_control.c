@@ -759,6 +759,65 @@ int bridge_open_input_channel(
 	return 0;
 }
 
+int bridge_input_load_program(int channel_fd,
+				      const struct lkmdbg_input_vm_insn *insns,
+				      uint32_t insn_count, uint32_t state_slots,
+				      uint32_t flags,
+				      struct lkmdbg_input_vm_load_request *reply_out)
+{
+	struct lkmdbg_input_vm_load_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.insns_addr = (uintptr_t)insns,
+		.insn_count = insn_count,
+		.state_slots = state_slots,
+		.flags = flags,
+	};
+
+	if (ioctl(channel_fd, LKMDBG_INPUT_IOC_LOAD_PROGRAM, &req) < 0) {
+		lkmdbg_log_errorf("INPUT_LOAD_PROGRAM failed: %s", strerror(errno));
+		return -1;
+	}
+	if (reply_out)
+		*reply_out = req;
+	return 0;
+}
+
+int bridge_input_unload_program(int channel_fd)
+{
+	if (ioctl(channel_fd, LKMDBG_INPUT_IOC_UNLOAD_PROGRAM) < 0) {
+		lkmdbg_log_errorf("INPUT_UNLOAD_PROGRAM failed: %s", strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+int bridge_input_get_program_info(int channel_fd,
+					 struct lkmdbg_input_vm_info *reply_out)
+{
+	struct lkmdbg_input_vm_info info = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(info),
+	};
+
+	if (ioctl(channel_fd, LKMDBG_INPUT_IOC_GET_PROGRAM_INFO, &info) < 0) {
+		lkmdbg_log_errorf("INPUT_GET_PROGRAM_INFO failed: %s", strerror(errno));
+		return -1;
+	}
+	if (reply_out)
+		*reply_out = info;
+	return 0;
+}
+
+int bridge_input_reset_state(int channel_fd)
+{
+	if (ioctl(channel_fd, LKMDBG_INPUT_IOC_RESET_STATE) < 0) {
+		lkmdbg_log_errorf("INPUT_RESET_STATE failed: %s", strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
 int bridge_add_hwpoint_ex(int session_fd, pid_t tid, uint64_t addr,
 			  uint32_t type, uint32_t len, uint32_t flags,
 			  uint64_t trigger_hit_count, uint32_t action_flags,

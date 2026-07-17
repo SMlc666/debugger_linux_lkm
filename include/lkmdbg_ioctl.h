@@ -4,7 +4,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define LKMDBG_PROTO_VERSION 27
+#define LKMDBG_PROTO_VERSION 28
 #define LKMDBG_IOC_MAGIC 0xBD
 #define LKMDBG_EVENT_VERSION 3
 #define LKMDBG_EVENT_MASK_WORDS 2U
@@ -92,6 +92,9 @@
 #define LKMDBG_INPUT_DEVICE_FLAG_CAN_INJECT 0x00000010U
 
 #define LKMDBG_INPUT_CHANNEL_FLAG_INCLUDE_INJECTED 0x00000001U
+#define LKMDBG_INPUT_CHANNEL_FLAG_CONTROLLER 0x00000002U
+#define LKMDBG_INPUT_CHANNEL_FLAG_RAW_EVENTS 0x00000004U
+#define LKMDBG_INPUT_CHANNEL_FLAG_PRESENTED_EVENTS 0x00000008U
 
 #define LKMDBG_INPUT_EVENT_FLAG_INJECTED 0x00000001U
 
@@ -1083,6 +1086,74 @@ struct lkmdbg_input_event {
 	__u32 reserved1;
 };
 
+/* Generic, profile-free input event transform VM. */
+#define LKMDBG_INPUT_VM_MAX_INSNS 256U
+#define LKMDBG_INPUT_VM_MAX_STATE 64U
+#define LKMDBG_INPUT_VM_MAX_OUTPUTS 8U
+
+#define LKMDBG_INPUT_VM_OP_NOP 0U
+#define LKMDBG_INPUT_VM_OP_LOAD_CTX 1U
+#define LKMDBG_INPUT_VM_OP_LOAD_STATE 2U
+#define LKMDBG_INPUT_VM_OP_STORE_STATE 3U
+#define LKMDBG_INPUT_VM_OP_MOV_IMM 4U
+#define LKMDBG_INPUT_VM_OP_MOV_REG 5U
+#define LKMDBG_INPUT_VM_OP_ADD_IMM 6U
+#define LKMDBG_INPUT_VM_OP_CMP_EQ_IMM 7U
+#define LKMDBG_INPUT_VM_OP_JNZ 8U
+#define LKMDBG_INPUT_VM_OP_SET_TYPE 9U
+#define LKMDBG_INPUT_VM_OP_SET_CODE 10U
+#define LKMDBG_INPUT_VM_OP_SET_VALUE 11U
+#define LKMDBG_INPUT_VM_OP_EMIT 12U
+#define LKMDBG_INPUT_VM_OP_PASS 13U
+#define LKMDBG_INPUT_VM_OP_DROP 14U
+
+#define LKMDBG_INPUT_VM_CTX_TYPE 0U
+#define LKMDBG_INPUT_VM_CTX_CODE 1U
+#define LKMDBG_INPUT_VM_CTX_VALUE 2U
+#define LKMDBG_INPUT_VM_CTX_SOURCE 3U
+#define LKMDBG_INPUT_VM_CTX_DEVICE 4U
+#define LKMDBG_INPUT_VM_CTX_FLAGS 5U
+
+#define LKMDBG_INPUT_VM_FLAG_REPLACE 0x00000001U
+#define LKMDBG_INPUT_VM_FLAG_RESET_STATE 0x00000002U
+
+#define LKMDBG_INPUT_EVENT_FLAG_REWRITTEN 0x00000002U
+#define LKMDBG_INPUT_EVENT_FLAG_EMITTED 0x00000004U
+#define LKMDBG_INPUT_EVENT_FLAG_DROPPED 0x00000008U
+#define LKMDBG_INPUT_EVENT_FLAG_VM_ERROR 0x00000010U
+
+struct lkmdbg_input_vm_insn {
+	__u8 opcode;
+	__u8 dst;
+	__u8 src;
+	__u8 reserved0;
+	__s32 offset;
+	__s64 imm;
+};
+
+struct lkmdbg_input_vm_load_request {
+	__u32 version;
+	__u32 size;
+	__u64 insns_addr;
+	__u32 insn_count;
+	__u32 state_slots;
+	__u32 flags;
+	__u32 reserved0;
+	__u64 program_id;
+};
+
+struct lkmdbg_input_vm_info {
+	__u32 version;
+	__u32 size;
+	__u64 program_id;
+	__u32 insn_count;
+	__u32 state_slots;
+	__u64 executions;
+	__u64 rewrites;
+	__u64 drops;
+	__u64 vm_errors;
+};
+
 #define LKMDBG_IOC_OPEN_SESSION \
 	_IOW(LKMDBG_IOC_MAGIC, 0x01, struct lkmdbg_open_session_request)
 #define LKMDBG_IOC_GET_STATUS \
@@ -1164,6 +1235,16 @@ struct lkmdbg_input_event {
 	_IOWR(LKMDBG_IOC_MAGIC, 0x34, struct lkmdbg_input_device_info_request)
 #define LKMDBG_IOC_OPEN_INPUT_CHANNEL \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x35, struct lkmdbg_input_channel_request)
+
+#define LKMDBG_INPUT_IOC_MAGIC 0xC7
+#define LKMDBG_INPUT_IOC_LOAD_PROGRAM \
+	_IOWR(LKMDBG_INPUT_IOC_MAGIC, 0x01, struct lkmdbg_input_vm_load_request)
+#define LKMDBG_INPUT_IOC_UNLOAD_PROGRAM \
+	_IO(LKMDBG_INPUT_IOC_MAGIC, 0x02)
+#define LKMDBG_INPUT_IOC_GET_PROGRAM_INFO \
+	_IOR(LKMDBG_INPUT_IOC_MAGIC, 0x03, struct lkmdbg_input_vm_info)
+#define LKMDBG_INPUT_IOC_RESET_STATE \
+	_IO(LKMDBG_INPUT_IOC_MAGIC, 0x04)
 #define LKMDBG_IOC_REMOTE_CALL \
 	_IOWR(LKMDBG_IOC_MAGIC, 0x36, struct lkmdbg_remote_call_request)
 #define LKMDBG_IOC_RESOLVE_SYSCALL \

@@ -111,6 +111,15 @@ int bridge_get_input_device_info(
 int bridge_open_input_channel(
 	int session_fd, uint64_t device_id, uint32_t flags,
 	struct lkmdbg_input_channel_request *reply_out);
+int bridge_input_load_program(int channel_fd,
+				      const struct lkmdbg_input_vm_insn *insns,
+				      uint32_t insn_count, uint32_t state_slots,
+				      uint32_t flags,
+				      struct lkmdbg_input_vm_load_request *reply_out);
+int bridge_input_unload_program(int channel_fd);
+int bridge_input_get_program_info(int channel_fd,
+					 struct lkmdbg_input_vm_info *reply_out);
+int bridge_input_reset_state(int channel_fd);
 
 /* Bridge-prefixed aliases for callers that define local helper names. */
 int bridge_add_hwpoint_ex(int session_fd, pid_t tid, uint64_t addr,

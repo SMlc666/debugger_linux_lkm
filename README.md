@@ -238,6 +238,24 @@ The current session ioctls include:
 - `LKMDBG_IOC_REMOTE_CALL`
 - `LKMDBG_IOC_REMOTE_THREAD_CREATE`
 
+### Generic input transform VM
+
+Input channels are profile-free. Open one channel with
+`LKMDBG_INPUT_CHANNEL_FLAG_CONTROLLER` to become the single controller for a
+device; other channels remain observers. The controller loads a bounded
+program through the channel fd using `LKMDBG_INPUT_IOC_LOAD_PROGRAM` and an
+array of `struct lkmdbg_input_vm_insn`. Programs can read event context or
+bounded state, rewrite type/code/value, emit up to eight outputs, pass, or
+drop. `GET_PROGRAM_INFO`, `RESET_STATE`, and `UNLOAD_PROGRAM` complete the
+control path. Physical events pass through on VM errors, while injected event
+write failures are reported to the writer.
+
+The `input_event` hook is reference-counted: it is installed when the first
+input channel is opened and removed after the last channel closes, unless
+`enable_input_tracking=1` pins it for the module lifetime. With no channels,
+the VM, transform state, and observer queues consume no per-device runtime
+resources beyond the existing device registry.
+
 Syscall tracing now has three session-fd modes:
 
 - `EVENT`: queue `LKMDBG_EVENT_TARGET_SYSCALL` records
