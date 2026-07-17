@@ -39,6 +39,7 @@
 #define MMU_TEST_TOOL "/lkmdbg_mmu_test"
 #define WATCHPOINT_CTRL_TOOL "/qemu_watchpoint_control"
 #define EXAMPLE_SESSION_STATUS_TOOL "/lkmdbg_example_session_status"
+#define EXAMPLE_SESSION_LIFECYCLE_STRESS_TOOL "/lkmdbg_example_session_lifecycle_stress"
 #define EXAMPLE_MEM_RW_TOOL "/lkmdbg_example_mem_rw"
 #define EXAMPLE_THREADS_QUERY_TOOL "/lkmdbg_example_threads_query"
 #define EXAMPLE_REGS_FP_TOOL "/lkmdbg_example_regs_fp"
@@ -1245,6 +1246,9 @@ static void qemu_run_transport_core_tools(void)
 	char *const mem_test_argv[] = { MEM_TEST_TOOL, "selftest", NULL };
 	char *const mmu_test_argv[] = { MMU_TEST_TOOL, "selftest", NULL };
 	char *const ex_session_status_argv[] = { EXAMPLE_SESSION_STATUS_TOOL, NULL };
+	char *const ex_session_lifecycle_stress_argv[] = {
+		EXAMPLE_SESSION_LIFECYCLE_STRESS_TOOL, NULL,
+	};
 	char *const ex_mem_rw_argv[] = { EXAMPLE_MEM_RW_TOOL, NULL };
 	char *const ex_threads_query_argv[] = { EXAMPLE_THREADS_QUERY_TOOL, NULL };
 	char *const ex_regs_fp_argv[] = { EXAMPLE_REGS_FP_TOOL, NULL };
@@ -1256,6 +1260,7 @@ static void qemu_run_transport_core_tools(void)
 
 	qemu_cluster_begin("transport-core-tools");
 	qemu_run_tool(ex_session_status_argv);
+	qemu_run_tool(ex_session_lifecycle_stress_argv);
 	qemu_run_tool(ex_mem_rw_argv);
 	qemu_run_tool(ex_threads_query_argv);
 	qemu_run_tool(ex_regs_fp_argv);
