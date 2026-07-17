@@ -147,10 +147,6 @@ int main(void)
 	       info.addr, (uint64_t)req.mapped_length);
 	status = 0;
 out:
-	if (mapped != MAP_FAILED) {
-		munmap(mapped, req.mapped_length);
-		mapped = MAP_FAILED;
-	}
 	if (session_fd >= 0 && req.map_id) {
 		if (bridge_remove_remote_map(session_fd, req.map_id, &remove_req) < 0)
 			status = 1;
@@ -159,6 +155,10 @@ out:
 		if (ioctl(session_fd, LKMDBG_IOC_QUERY_REMOTE_MAPS, &maps) < 0 ||
 		    maps.entries_filled != 0)
 			status = 1;
+	}
+	if (mapped != MAP_FAILED) {
+		munmap(mapped, req.mapped_length);
+		mapped = MAP_FAILED;
 	}
 	if (req.map_fd >= 0)
 		close(req.map_fd);
