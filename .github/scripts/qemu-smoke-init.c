@@ -46,6 +46,7 @@
 #define EXAMPLE_SYSRULE_COMBO_TOOL "/lkmdbg_example_sysrule_combo"
 #define EXAMPLE_VMA_PAGE_QUERY_TOOL "/lkmdbg_example_vma_page_query"
 #define EXAMPLE_REMOTE_ALLOC_RW_TOOL "/lkmdbg_example_remote_alloc_rw"
+#define EXAMPLE_REMOTE_MAP_RW_TOOL "/lkmdbg_example_remote_map_rw"
 #define EXAMPLE_PHYS_TRANSLATE_READ_TOOL "/lkmdbg_example_phys_translate_read"
 #define EXAMPLE_PERF_BASELINE_TOOL "/lkmdbg_example_perf_baseline"
 #define EXAMPLE_THROUGHPUT_COMPARE_TOOL "/lkmdbg_example_throughput_compare"
@@ -1280,6 +1281,10 @@ static void qemu_run_transport_extended_tools(void)
 		EXAMPLE_REMOTE_ALLOC_RW_TOOL,
 		NULL,
 	};
+	char *const ex_remote_map_rw_argv[] = {
+		EXAMPLE_REMOTE_MAP_RW_TOOL,
+		NULL,
+	};
 	char *const ex_phys_translate_read_argv[] = {
 		EXAMPLE_PHYS_TRANSLATE_READ_TOOL,
 		NULL,
@@ -1302,6 +1307,7 @@ static void qemu_run_transport_extended_tools(void)
 	qemu_run_tool(ex_sysrule_combo_argv);
 	qemu_run_tool(ex_vma_page_query_argv);
 	qemu_run_tool(ex_remote_alloc_rw_argv);
+	qemu_run_tool(ex_remote_map_rw_argv);
 	qemu_run_tool(ex_phys_translate_read_argv);
 	qemu_run_tool(ex_perf_baseline_argv);
 	qemu_run_tool(ex_throughput_compare_argv);
@@ -2356,6 +2362,48 @@ static ssize_t qemu_input_read_events(int channel_fd,
 	return nr / (ssize_t)sizeof(events[0]);
 }
 
+static void qemu_run_input_vm_drop_test(int session_fd, __u64 device_id)
+{
+	struct lkmdbg_input_vm_insn drop = {
+		.opcode = LKMDBG_INPUT_VM_OP_DROP,
+	};
+	struct lkmdbg_input_vm_load_request load = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(load),
+		.insns_addr = (uintptr_t)&drop,
+		.insn_count = 1,
+	};
+	struct lkmdbg_input_event event = {
+		.type = EV_KEY,
+		.code = KEY_A,
+		.value = 1,
+	};
+	struct lkmdbg_input_event observed[4];
+	int controller_fd;
+	ssize_t count;
+
+	controller_fd = qemu_open_input_channel(
+		session_fd, device_id,
+		LKMDBG_INPUT_CHANNEL_FLAG_CONTROLLER |
+		LKMDBG_INPUT_CHANNEL_FLAG_INCLUDE_INJECTED);
+	if (ioctl(controller_fd, LKMDBG_INPUT_IOC_LOAD_PROGRAM, &load) != 0)
+		qemu_fail("input_vm_load_drop errno=%d", errno);
+	qemu_check(load.program_id != 0, "input_vm_load_drop_no_id");
+	qemu_check(write(controller_fd, &event, sizeof(event)) ==
+		   (ssize_t)sizeof(event), "input_vm_drop_write errno=%d", errno);
+	count = qemu_input_read_events(controller_fd, observed,
+				       sizeof(observed) / sizeof(observed[0]), 1000);
+	qemu_check(count >= 1, "input_vm_drop_no_observation");
+	qemu_check((observed[0].flags & LKMDBG_INPUT_EVENT_FLAG_DROPPED) != 0,
+		   "input_vm_drop_flag_missing flags=0x%x", observed[0].flags);
+	if (ioctl(controller_fd, LKMDBG_INPUT_IOC_UNLOAD_PROGRAM) != 0)
+		qemu_fail("input_vm_unload_drop errno=%d", errno);
+	close(controller_fd);
+	printf("LKMDBG_QEMU_INPUT_VM_DROP_OK device_id=%llu\n",
+	       (unsigned long long)device_id);
+	fflush(stdout);
+}
+
 static __u64 qemu_find_keyboard_input_device(
 	int session_fd, struct lkmdbg_input_device_info_request *info_out)
 {
@@ -2574,6 +2622,7 @@ static void qemu_run_input_smoke(void)
 	       (unsigned long long)device_id);
 	fflush(stdout);
 	qemu_expect_no_input_events(default_fd, QEMU_INPUT_IDLE_TIMEOUT_MS);
+	qemu_run_input_vm_drop_test(session_fd, device_id);
 	printf("LKMDBG_QEMU_INPUT_DEFAULT_CHANNEL_CLEAN device_id=%llu\n",
 	       (unsigned long long)device_id);
 	fflush(stdout);
