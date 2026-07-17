@@ -2404,6 +2404,80 @@ static void qemu_run_input_vm_drop_test(int session_fd, __u64 device_id)
 	fflush(stdout);
 }
 
+static void qemu_run_input_vm_rewrite_state_test(int session_fd,
+						 __u64 device_id)
+{
+	struct lkmdbg_input_vm_insn rewrite_prog[] = {
+		{ .opcode = LKMDBG_INPUT_VM_OP_MOV_IMM, .dst = 7, .imm = 7 },
+		{ .opcode = LKMDBG_INPUT_VM_OP_SET_VALUE, .src = 7 },
+		{ .opcode = LKMDBG_INPUT_VM_OP_PASS },
+	};
+	struct lkmdbg_input_vm_insn state_prog[] = {
+		{ .opcode = LKMDBG_INPUT_VM_OP_LOAD_STATE, .dst = 7, .imm = 0 },
+		{ .opcode = LKMDBG_INPUT_VM_OP_ADD_IMM, .dst = 7, .imm = 1 },
+		{ .opcode = LKMDBG_INPUT_VM_OP_STORE_STATE, .src = 7, .imm = 0 },
+		{ .opcode = LKMDBG_INPUT_VM_OP_SET_VALUE, .src = 7 },
+		{ .opcode = LKMDBG_INPUT_VM_OP_PASS },
+	};
+	struct lkmdbg_input_vm_load_request load = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(load),
+	};
+	struct lkmdbg_input_event event = {
+		.type = EV_KEY,
+		.code = KEY_A,
+		.value = 1,
+	};
+	struct lkmdbg_input_event observed[8];
+	int controller_fd;
+	ssize_t count;
+
+	controller_fd = qemu_open_input_channel(
+		session_fd, device_id,
+		LKMDBG_INPUT_CHANNEL_FLAG_CONTROLLER |
+		LKMDBG_INPUT_CHANNEL_FLAG_INCLUDE_INJECTED);
+	load.insns_addr = (uintptr_t)rewrite_prog;
+	load.insn_count = sizeof(rewrite_prog) / sizeof(rewrite_prog[0]);
+	if (ioctl(controller_fd, LKMDBG_INPUT_IOC_LOAD_PROGRAM, &load) != 0)
+		qemu_fail("input_vm_load_rewrite errno=%d", errno);
+	if (write(controller_fd, &event, sizeof(event)) != (ssize_t)sizeof(event))
+		qemu_fail("input_vm_rewrite_write errno=%d", errno);
+	count = qemu_input_read_events(controller_fd, observed,
+				       sizeof(observed) / sizeof(observed[0]), 1000);
+	qemu_check(count >= 1, "input_vm_rewrite_no_observation");
+	qemu_check(observed[0].value == 7 &&
+			   (observed[0].flags & LKMDBG_INPUT_EVENT_FLAG_REWRITTEN),
+			   "input_vm_rewrite_bad_result value=%d flags=0x%x",
+			   observed[0].value, observed[0].flags);
+	if (ioctl(controller_fd, LKMDBG_INPUT_IOC_UNLOAD_PROGRAM) != 0)
+		qemu_fail("input_vm_unload_rewrite errno=%d", errno);
+
+	memset(&load, 0, sizeof(load));
+	load.version = LKMDBG_PROTO_VERSION;
+	load.size = sizeof(load);
+	load.insns_addr = (uintptr_t)state_prog;
+	load.insn_count = sizeof(state_prog) / sizeof(state_prog[0]);
+	load.state_slots = 1;
+	if (ioctl(controller_fd, LKMDBG_INPUT_IOC_LOAD_PROGRAM, &load) != 0)
+		qemu_fail("input_vm_load_state errno=%d", errno);
+	if (write(controller_fd, &event, sizeof(event)) != (ssize_t)sizeof(event) ||
+	    write(controller_fd, &event, sizeof(event)) != (ssize_t)sizeof(event))
+		qemu_fail("input_vm_state_write errno=%d", errno);
+	count = qemu_input_read_events(controller_fd, observed,
+				       sizeof(observed) / sizeof(observed[0]), 1000);
+	qemu_check(count >= 2, "input_vm_state_no_observation count=%zd", count);
+	qemu_check(observed[0].value == 1 && observed[1].value == 2,
+		   "input_vm_state_bad_values first=%d second=%d",
+		   observed[0].value, observed[1].value);
+	if (ioctl(controller_fd, LKMDBG_INPUT_IOC_RESET_STATE) != 0 ||
+	    ioctl(controller_fd, LKMDBG_INPUT_IOC_UNLOAD_PROGRAM) != 0)
+		qemu_fail("input_vm_state_cleanup errno=%d", errno);
+	close(controller_fd);
+	printf("LKMDBG_QEMU_INPUT_VM_REWRITE_STATE_OK device_id=%llu\n",
+	       (unsigned long long)device_id);
+	fflush(stdout);
+}
+
 static __u64 qemu_find_keyboard_input_device(
 	int session_fd, struct lkmdbg_input_device_info_request *info_out)
 {
@@ -2623,6 +2697,7 @@ static void qemu_run_input_smoke(void)
 	fflush(stdout);
 	qemu_expect_no_input_events(default_fd, QEMU_INPUT_IDLE_TIMEOUT_MS);
 	qemu_run_input_vm_drop_test(session_fd, device_id);
+	qemu_run_input_vm_rewrite_state_test(session_fd, device_id);
 	printf("LKMDBG_QEMU_INPUT_DEFAULT_CHANNEL_CLEAN device_id=%llu\n",
 	       (unsigned long long)device_id);
 	fflush(stdout);
