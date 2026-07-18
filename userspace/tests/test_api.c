@@ -46,6 +46,16 @@ int main(void)
 	      errno == EINVAL && result.operations_done == 0 &&
 	      result.bytes_done == 0);
 	errno = 0;
+	CHECK(lkmdbg_physical_readv(session, NULL, 0, &result) == -1 &&
+	      errno == EINVAL && result.operations_done == 0 &&
+	      result.bytes_done == 0);
+	errno = 0;
+	CHECK(lkmdbg_physical_read(session, 0, NULL, 1, 0, &result) == -1 &&
+	      errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_virtual_to_physical(session, 0, 0, NULL) == -1 &&
+	      errno == EINVAL);
+	errno = 0;
 	CHECK(lkmdbg_event_read(session, NULL, 0, NULL, 0) == -1 &&
 	      errno == EINVAL);
 	errno = 0;

@@ -227,6 +227,118 @@ int lkmdbg_memory_write(struct lkmdbg_session *session,
 				  flags, true, result_out);
 }
 
+static int lkmdbg_physical_xferv(struct lkmdbg_session *session,
+				 struct lkmdbg_phys_op *operations,
+				 uint32_t operation_count, bool write,
+				 struct lkmdbg_transfer_result *result_out)
+{
+	struct lkmdbg_phys_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.ops_addr = (uintptr_t)operations,
+		.op_count = operation_count,
+	};
+	int ret;
+
+	if (result_out)
+		*result_out = (struct lkmdbg_transfer_result) { 0 };
+	if (lkmdbg_validate_session(session) < 0 || !operations ||
+	    operation_count == 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	ret = ioctl(session->fd,
+		    write ? LKMDBG_IOC_WRITE_PHYS : LKMDBG_IOC_READ_PHYS, &req);
+	if (result_out) {
+		result_out->operations_done = req.ops_done;
+		result_out->bytes_done = req.bytes_done;
+	}
+	return ret;
+}
+
+int lkmdbg_physical_readv(struct lkmdbg_session *session,
+			  struct lkmdbg_phys_op *operations,
+			  uint32_t operation_count,
+			  struct lkmdbg_transfer_result *result_out)
+{
+	return lkmdbg_physical_xferv(session, operations, operation_count, false,
+				     result_out);
+}
+
+int lkmdbg_physical_writev(struct lkmdbg_session *session,
+			   struct lkmdbg_phys_op *operations,
+			   uint32_t operation_count,
+			   struct lkmdbg_transfer_result *result_out)
+{
+	return lkmdbg_physical_xferv(session, operations, operation_count, true,
+				     result_out);
+}
+
+static int lkmdbg_physical_xfer(struct lkmdbg_session *session,
+				uint64_t physical_address, void *buffer,
+				size_t length, uint32_t flags, bool write,
+				struct lkmdbg_transfer_result *result_out)
+{
+	struct lkmdbg_phys_op op;
+
+	if (!buffer || length == 0 || length > UINT32_MAX) {
+		errno = EINVAL;
+		return -1;
+	}
+	op = (struct lkmdbg_phys_op) {
+		.phys_addr = physical_address,
+		.local_addr = (uintptr_t)buffer,
+		.length = (uint32_t)length,
+		.flags = flags,
+	};
+	return lkmdbg_physical_xferv(session, &op, 1, write, result_out);
+}
+
+int lkmdbg_physical_read(struct lkmdbg_session *session,
+			 uint64_t physical_address, void *buffer, size_t length,
+			 uint32_t flags,
+			 struct lkmdbg_transfer_result *result_out)
+{
+	return lkmdbg_physical_xfer(session, physical_address, buffer, length,
+				    flags, false, result_out);
+}
+
+int lkmdbg_physical_write(struct lkmdbg_session *session,
+			  uint64_t physical_address, const void *buffer,
+			  size_t length, uint32_t flags,
+			  struct lkmdbg_transfer_result *result_out)
+{
+	return lkmdbg_physical_xfer(session, physical_address, (void *)buffer,
+				    length, flags, true, result_out);
+}
+
+int lkmdbg_virtual_to_physical(struct lkmdbg_session *session,
+			       uintptr_t virtual_address, size_t length,
+			       struct lkmdbg_phys_op *translation_out)
+{
+	struct lkmdbg_transfer_result result;
+	struct lkmdbg_phys_op op;
+
+	if (!translation_out || length == 0 || length > UINT32_MAX) {
+		errno = EINVAL;
+		return -1;
+	}
+	op = (struct lkmdbg_phys_op) {
+		.phys_addr = virtual_address,
+		.length = (uint32_t)length,
+		.flags = LKMDBG_PHYS_OP_FLAG_TARGET_VADDR |
+			 LKMDBG_PHYS_OP_FLAG_TRANSLATE_ONLY,
+	};
+	if (lkmdbg_physical_xferv(session, &op, 1, false, &result) < 0)
+		return -1;
+	*translation_out = op;
+	if (result.operations_done != 1 || op.resolved_phys_addr == 0) {
+		errno = EFAULT;
+		return -1;
+	}
+	return 0;
+}
+
 int lkmdbg_event_read(struct lkmdbg_session *session,
 		      struct lkmdbg_event_record *events, size_t capacity,
 		      size_t *count_out, int timeout_ms)

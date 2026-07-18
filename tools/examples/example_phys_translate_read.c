@@ -8,9 +8,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "../../include/lkmdbg_ioctl.h"
-#include "../driver/bridge_c.h"
-#include "../driver/bridge_memory.h"
+#include "lkmdbg/lkmdbg.h"
 
 struct example_child_info {
 	uintptr_t addr;
@@ -84,17 +82,16 @@ int main(void)
 	int cmd_pipe[2];
 	struct example_child_info info;
 	struct lkmdbg_phys_op op;
-	struct lkmdbg_phys_request phys_req;
+	struct lkmdbg_transfer_result transfer;
 	uint8_t phys_data[sizeof(info.bytes)];
 	uint64_t resolved_pa = 0;
 	pid_t child;
-	int session_fd = -1;
+	struct lkmdbg_session *session = NULL;
 	char cmd = 'q';
 	int status = 1;
 
 	memset(&info, 0, sizeof(info));
 	memset(&op, 0, sizeof(op));
-	memset(&phys_req, 0, sizeof(phys_req));
 	memset(phys_data, 0, sizeof(phys_data));
 
 	if (pipe(info_pipe) != 0 || pipe(cmd_pipe) != 0) {
@@ -125,45 +122,39 @@ int main(void)
 		goto out;
 	}
 
-	session_fd = open_session_fd();
-	if (session_fd < 0)
+	if (lkmdbg_session_open(&session) < 0)
 		goto out;
-	if (set_target(session_fd, child) < 0)
+	if (lkmdbg_session_set_target(session, child, 0) < 0)
 		goto out;
 
-	op.phys_addr = info.addr;
-	op.length = (uint32_t)sizeof(info.bytes);
-	op.flags = LKMDBG_PHYS_OP_FLAG_TARGET_VADDR |
-		   LKMDBG_PHYS_OP_FLAG_TRANSLATE_ONLY;
-	if (xfer_physical_memory(session_fd, &op, 1, 0, &phys_req, 0) < 0) {
+	if (lkmdbg_virtual_to_physical(session, info.addr, sizeof(info.bytes),
+				       &op) < 0) {
 		fprintf(stderr,
 			"example_phys_translate_read: translate failed errno=%d\n",
 			errno);
 		goto out;
 	}
-	if (phys_req.ops_done != 1 || !op.resolved_phys_addr) {
+	if (!op.resolved_phys_addr) {
 		fprintf(stderr,
-			"example_phys_translate_read: bad translate reply ops_done=%u pa=0x%" PRIx64 "\n",
-			phys_req.ops_done, (uint64_t)op.resolved_phys_addr);
+			"example_phys_translate_read: bad translate reply pa=0x%" PRIx64
+			"\n", (uint64_t)op.resolved_phys_addr);
 		goto out;
 	}
 	resolved_pa = op.resolved_phys_addr;
 
-	memset(&op, 0, sizeof(op));
-	op.phys_addr = resolved_pa;
-	op.local_addr = (uintptr_t)phys_data;
-	op.length = (uint32_t)sizeof(phys_data);
-	if (xfer_physical_memory(session_fd, &op, 1, 0, &phys_req, 0) < 0) {
+	if (lkmdbg_physical_read(session, resolved_pa, phys_data,
+				 sizeof(phys_data), 0, &transfer) < 0) {
 		fprintf(stderr,
 			"example_phys_translate_read: phys read failed errno=%d\n",
 			errno);
 		goto out;
 	}
-	if (phys_req.ops_done != 1 || op.bytes_done != sizeof(phys_data) ||
+	if (transfer.operations_done != 1 ||
+	    transfer.bytes_done != sizeof(phys_data) ||
 	    memcmp(phys_data, info.bytes, sizeof(phys_data)) != 0) {
 		fprintf(stderr,
 			"example_phys_translate_read: compare failed ops_done=%u bytes_done=%u\n",
-			phys_req.ops_done, op.bytes_done);
+			transfer.operations_done, (uint32_t)transfer.bytes_done);
 		goto out;
 	}
 
@@ -174,8 +165,7 @@ int main(void)
 
 out:
 	(void)write_full(cmd_pipe[1], &cmd, sizeof(cmd));
-	if (session_fd >= 0)
-		close(session_fd);
+	lkmdbg_session_close(session);
 	close(info_pipe[0]);
 	close(cmd_pipe[1]);
 	kill(child, SIGKILL);

@@ -80,6 +80,25 @@ int lkmdbg_memory_writev(struct lkmdbg_session *session,
 			 struct lkmdbg_mem_op *operations,
 			 uint32_t operation_count,
 			 struct lkmdbg_transfer_result *result_out);
+int lkmdbg_physical_readv(struct lkmdbg_session *session,
+			  struct lkmdbg_phys_op *operations,
+			  uint32_t operation_count,
+			  struct lkmdbg_transfer_result *result_out);
+int lkmdbg_physical_writev(struct lkmdbg_session *session,
+			   struct lkmdbg_phys_op *operations,
+			   uint32_t operation_count,
+			   struct lkmdbg_transfer_result *result_out);
+int lkmdbg_physical_read(struct lkmdbg_session *session,
+			 uint64_t physical_address, void *buffer, size_t length,
+			 uint32_t flags,
+			 struct lkmdbg_transfer_result *result_out);
+int lkmdbg_physical_write(struct lkmdbg_session *session,
+			  uint64_t physical_address, const void *buffer,
+			  size_t length, uint32_t flags,
+			  struct lkmdbg_transfer_result *result_out);
+int lkmdbg_virtual_to_physical(struct lkmdbg_session *session,
+			       uintptr_t virtual_address, size_t length,
+			       struct lkmdbg_phys_op *translation_out);
 
 int lkmdbg_event_read(struct lkmdbg_session *session,
 		      struct lkmdbg_event_record *events, size_t capacity,

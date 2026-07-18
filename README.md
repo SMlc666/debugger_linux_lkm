@@ -80,7 +80,7 @@ cc -O2 -Wall -Wextra -o tools/examples/example_sysrule_combo tools/examples/exam
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_vma_page_query tools/examples/example_vma_page_query.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_remote_alloc_rw tools/examples/example_remote_alloc_rw.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_remote_map_rw tools/examples/example_remote_map_rw.c userspace/src/lkmdbg.c
-cc -O2 -Wall -Wextra -o tools/examples/example_phys_translate_read tools/examples/example_phys_translate_read.c tools/driver/bridge_c.c tools/driver/bridge_memory.c
+cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_phys_translate_read tools/examples/example_phys_translate_read.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -o tools/examples/example_perf_baseline tools/examples/example_perf_baseline.c tools/driver/bridge_c.c tools/driver/bridge_memory.c
 ```
 
