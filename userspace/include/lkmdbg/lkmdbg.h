@@ -17,6 +17,7 @@ extern "C" {
 
 struct lkmdbg_session;
 struct lkmdbg_remote_mapping;
+struct lkmdbg_remote_allocation;
 
 struct lkmdbg_transfer_result {
 	uint32_t operations_done;
@@ -30,6 +31,13 @@ struct lkmdbg_remote_map_options {
 	uint32_t protection;
 	uint32_t flags;
 	uint32_t timeout_ms;
+};
+
+struct lkmdbg_remote_alloc_options {
+	uintptr_t remote_address;
+	uint64_t length;
+	uint32_t protection;
+	uint32_t flags;
 };
 
 int lkmdbg_session_open(struct lkmdbg_session **session_out);
@@ -62,6 +70,10 @@ int lkmdbg_event_read(struct lkmdbg_session *session,
 		      struct lkmdbg_event_record *events, size_t capacity,
 		      size_t *count_out, int timeout_ms);
 
+int lkmdbg_threads_query(struct lkmdbg_session *session, int32_t start_tid,
+			 struct lkmdbg_thread_entry *entries, uint32_t capacity,
+			 struct lkmdbg_thread_query_request *result_out);
+
 int lkmdbg_remote_map_create(
 	struct lkmdbg_session *session,
 	const struct lkmdbg_remote_map_options *options,
@@ -71,6 +83,22 @@ uint64_t lkmdbg_remote_map_length(const struct lkmdbg_remote_mapping *mapping);
 uint64_t lkmdbg_remote_map_id(const struct lkmdbg_remote_mapping *mapping);
 int lkmdbg_remote_map_fd(const struct lkmdbg_remote_mapping *mapping);
 int lkmdbg_remote_map_destroy(struct lkmdbg_remote_mapping *mapping);
+
+int lkmdbg_remote_alloc_create(
+	struct lkmdbg_session *session,
+	const struct lkmdbg_remote_alloc_options *options,
+	struct lkmdbg_remote_allocation **allocation_out);
+uint64_t lkmdbg_remote_alloc_id(
+	const struct lkmdbg_remote_allocation *allocation);
+uintptr_t lkmdbg_remote_alloc_address(
+	const struct lkmdbg_remote_allocation *allocation);
+uint64_t lkmdbg_remote_alloc_length(
+	const struct lkmdbg_remote_allocation *allocation);
+int lkmdbg_remote_alloc_destroy(struct lkmdbg_remote_allocation *allocation);
+int lkmdbg_remote_alloc_query(
+	struct lkmdbg_session *session, uint64_t start_id,
+	struct lkmdbg_remote_alloc_entry *entries, uint32_t capacity,
+	struct lkmdbg_remote_alloc_query_request *result_out);
 
 int lkmdbg_raw_ioctl(struct lkmdbg_session *session, unsigned long command,
 		     void *argument);

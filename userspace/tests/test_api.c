@@ -50,6 +50,17 @@ int main(void)
 	      errno == EINVAL);
 	errno = 0;
 	CHECK(lkmdbg_remote_map_destroy(NULL) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_threads_query(session, 0, NULL, 0, NULL) == -1 &&
+	      errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_remote_alloc_create(session, NULL, NULL) == -1 &&
+	      errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_remote_alloc_query(session, 0, NULL, 0, NULL) == -1 &&
+	      errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_remote_alloc_destroy(NULL) == -1 && errno == EINVAL);
 
 	lkmdbg_session_close(session);
 	CHECK(fcntl(fd, F_GETFD) >= 0);

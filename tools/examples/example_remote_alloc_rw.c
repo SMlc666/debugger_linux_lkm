@@ -9,9 +9,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "../../include/lkmdbg_ioctl.h"
-#include "../driver/bridge_c.h"
-#include "../driver/bridge_memory.h"
+#include "lkmdbg/lkmdbg.h"
 
 static void fill_pattern(uint8_t *buf, size_t len, uint8_t seed)
 {
@@ -21,7 +19,8 @@ static void fill_pattern(uint8_t *buf, size_t len, uint8_t seed)
 		buf[i] = (uint8_t)(seed + i * 7U);
 }
 
-static int query_alloc_exists(int session_fd, uint64_t alloc_id, int *exists_out)
+static int query_alloc_exists(struct lkmdbg_session *session, uint64_t alloc_id,
+			      int *exists_out)
 {
 	struct lkmdbg_remote_alloc_entry entries[16];
 	struct lkmdbg_remote_alloc_query_request req = {
@@ -34,17 +33,16 @@ static int query_alloc_exists(int session_fd, uint64_t alloc_id, int *exists_out
 	uint64_t cursor = 0;
 
 	*exists_out = 0;
-		for (;;) {
-			uint32_t i;
+	for (;;) {
+		uint32_t i;
 
-			memset(entries, 0, sizeof(entries));
-			if (bridge_query_remote_allocs(
-				    session_fd, cursor, entries,
-				    (uint32_t)(sizeof(entries) /
-					       sizeof(entries[0])),
-				    &req) < 0)
-				return -1;
-			for (i = 0; i < req.entries_filled; i++) {
+		memset(entries, 0, sizeof(entries));
+		if (lkmdbg_remote_alloc_query(
+			    session, cursor, entries,
+			    (uint32_t)(sizeof(entries) / sizeof(entries[0])),
+			    &req) < 0)
+			return -1;
+		for (i = 0; i < req.entries_filled; i++) {
 			if (entries[i].alloc_id == alloc_id) {
 				*exists_out = 1;
 				return 0;
@@ -120,8 +118,7 @@ static int run_child(int info_fd, int cmd_fd)
 	if (write_full(info_fd, &info, sizeof(info)) != (ssize_t)sizeof(info))
 		return 1;
 
-	for (;;)
-	{
+	for (;;) {
 		if (read_full(cmd_fd, &cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd))
 			return 1;
 		if (cmd == 'q')
@@ -133,25 +130,20 @@ static int run_child(int info_fd, int cmd_fd)
 
 int main(void)
 {
-	struct lkmdbg_remote_alloc_request alloc_req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(alloc_req),
-		.prot = LKMDBG_REMOTE_ALLOC_PROT_READ |
+	struct lkmdbg_remote_alloc_options alloc_options = {
+		.protection = LKMDBG_REMOTE_ALLOC_PROT_READ |
 			LKMDBG_REMOTE_ALLOC_PROT_WRITE,
 	};
-	struct lkmdbg_remote_alloc_handle_request remove_req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(remove_req),
-	};
+	struct lkmdbg_remote_allocation *allocation = NULL;
+	struct lkmdbg_session *session = NULL;
+	struct lkmdbg_transfer_result transfer;
 	uint8_t wbuf[128];
 	uint8_t rbuf[128];
 	struct example_child_info info;
 	uintptr_t shell_addr;
 	pid_t child;
-	int session_fd = -1;
 	int info_pipe[2];
 	int cmd_pipe[2];
-	uint32_t bytes_done = 0;
 	char cmd = 'q';
 	int exists = 0;
 	int status = 1;
@@ -193,54 +185,53 @@ int main(void)
 	}
 
 	shell_addr = info.map_addr + info.page_size;
-	alloc_req.remote_addr = shell_addr;
-	alloc_req.length = info.page_size * 2U;
+	alloc_options.remote_address = shell_addr;
+	alloc_options.length = info.page_size * 2U;
 
-	session_fd = open_session_fd();
-	if (session_fd < 0)
+	if (lkmdbg_session_open(&session) < 0)
 		goto out;
-	if (set_target(session_fd, child) < 0)
+	if (lkmdbg_session_set_target(session, child, 0) < 0)
 		goto out;
 
-	if (bridge_create_remote_alloc(session_fd, shell_addr,
-				       info.page_size * 2U,
-				       LKMDBG_REMOTE_ALLOC_PROT_READ |
-					       LKMDBG_REMOTE_ALLOC_PROT_WRITE,
-				       0, &alloc_req) < 0) {
+	if (lkmdbg_remote_alloc_create(session, &alloc_options, &allocation) < 0) {
 		fprintf(stderr,
 			"example_remote_alloc_rw: CREATE_REMOTE_ALLOC failed errno=%d\n",
 			errno);
 		goto out;
 	}
-	if (!alloc_req.alloc_id || !alloc_req.remote_addr ||
-	    alloc_req.mapped_length < sizeof(wbuf)) {
+	if (!lkmdbg_remote_alloc_id(allocation) ||
+	    !lkmdbg_remote_alloc_address(allocation) ||
+	    lkmdbg_remote_alloc_length(allocation) < sizeof(wbuf)) {
 		fprintf(stderr,
 			"example_remote_alloc_rw: bad alloc reply id=%" PRIu64 " addr=0x%" PRIx64 " len=%" PRIu64 "\n",
-			(uint64_t)alloc_req.alloc_id, (uint64_t)alloc_req.remote_addr,
-			(uint64_t)alloc_req.mapped_length);
+			lkmdbg_remote_alloc_id(allocation),
+			(uint64_t)lkmdbg_remote_alloc_address(allocation),
+			lkmdbg_remote_alloc_length(allocation));
 		goto out;
 	}
+	shell_addr = lkmdbg_remote_alloc_address(allocation);
 
 	fill_pattern(wbuf, sizeof(wbuf), 0x31);
-	if (write_target_memory(session_fd, shell_addr, wbuf,
-				sizeof(wbuf), &bytes_done, 0) < 0 ||
-	    bytes_done != sizeof(wbuf)) {
+	if (lkmdbg_memory_write(session, shell_addr, wbuf, sizeof(wbuf), 0,
+				&transfer) < 0 ||
+	    transfer.bytes_done != sizeof(wbuf)) {
 		fprintf(stderr,
-			"example_remote_alloc_rw: write failed bytes_done=%u\n",
-			bytes_done);
+			"example_remote_alloc_rw: write failed bytes_done=%" PRIu64 "\n",
+			transfer.bytes_done);
 		goto out;
 	}
-	bytes_done = 0;
-	if (read_target_memory(session_fd, shell_addr, rbuf,
-			       sizeof(rbuf), &bytes_done, 0) < 0 ||
-	    bytes_done != sizeof(rbuf) || memcmp(wbuf, rbuf, sizeof(wbuf)) != 0) {
+	if (lkmdbg_memory_read(session, shell_addr, rbuf, sizeof(rbuf), 0,
+			       &transfer) < 0 ||
+	    transfer.bytes_done != sizeof(rbuf) ||
+	    memcmp(wbuf, rbuf, sizeof(wbuf)) != 0) {
 		fprintf(stderr,
-			"example_remote_alloc_rw: readback mismatch bytes_done=%u\n",
-			bytes_done);
+			"example_remote_alloc_rw: readback mismatch bytes_done=%" PRIu64
+			"\n", transfer.bytes_done);
 		goto out;
 	}
 
-	if (query_alloc_exists(session_fd, alloc_req.alloc_id, &exists) < 0) {
+	if (query_alloc_exists(session, lkmdbg_remote_alloc_id(allocation),
+			       &exists) < 0) {
 		fprintf(stderr,
 			"example_remote_alloc_rw: QUERY_REMOTE_ALLOCS failed errno=%d\n",
 			errno);
@@ -249,42 +240,48 @@ int main(void)
 	if (!exists) {
 		fprintf(stderr,
 			"example_remote_alloc_rw: alloc id not found id=%" PRIu64 "\n",
-			(uint64_t)alloc_req.alloc_id);
+			lkmdbg_remote_alloc_id(allocation));
 		goto out;
 	}
 
-	remove_req.alloc_id = alloc_req.alloc_id;
-	if (bridge_remove_remote_alloc(session_fd, remove_req.alloc_id,
-				       &remove_req) < 0) {
-		fprintf(stderr,
-			"example_remote_alloc_rw: REMOVE_REMOTE_ALLOC failed errno=%d\n",
-			errno);
-		goto out;
-	}
+	{
+		uint64_t removed_id = lkmdbg_remote_alloc_id(allocation);
+		uint64_t removed_addr = lkmdbg_remote_alloc_address(allocation);
+		uint64_t removed_length = lkmdbg_remote_alloc_length(allocation);
 
-	if (query_alloc_exists(session_fd, alloc_req.alloc_id, &exists) < 0) {
-		fprintf(stderr,
-			"example_remote_alloc_rw: post-remove query failed errno=%d\n",
-			errno);
-		goto out;
-	}
-	if (exists) {
-		fprintf(stderr,
-			"example_remote_alloc_rw: alloc still visible id=%" PRIu64 "\n",
-			(uint64_t)alloc_req.alloc_id);
-		goto out;
-	}
+		if (lkmdbg_remote_alloc_destroy(allocation) < 0) {
+			fprintf(stderr,
+				"example_remote_alloc_rw: REMOVE_REMOTE_ALLOC failed errno=%d\n",
+				errno);
+			allocation = NULL;
+			goto out;
+		}
+		allocation = NULL;
 
-	status = 0;
-	printf("example_remote_alloc_rw: ok id=%" PRIu64 " addr=0x%" PRIx64
-	       " len=%" PRIu64 "\n",
-	       (uint64_t)alloc_req.alloc_id, (uint64_t)alloc_req.remote_addr,
-	       (uint64_t)alloc_req.mapped_length);
+		if (query_alloc_exists(session, removed_id, &exists) < 0) {
+			fprintf(stderr,
+				"example_remote_alloc_rw: post-remove query failed errno=%d\n",
+				errno);
+			goto out;
+		}
+		if (exists) {
+			fprintf(stderr,
+				"example_remote_alloc_rw: alloc still visible id=%" PRIu64
+				"\n", removed_id);
+			goto out;
+		}
+
+		status = 0;
+		printf("example_remote_alloc_rw: ok id=%" PRIu64
+		       " addr=0x%" PRIx64 " len=%" PRIu64 "\n",
+		       removed_id, removed_addr, removed_length);
+	}
 
 out:
 	(void)write_full(cmd_pipe[1], &cmd, sizeof(cmd));
-	if (session_fd >= 0)
-		close(session_fd);
+	if (allocation && lkmdbg_remote_alloc_destroy(allocation) < 0)
+		status = 1;
+	lkmdbg_session_close(session);
 	close(info_pipe[0]);
 	close(cmd_pipe[1]);
 	kill(child, SIGKILL);

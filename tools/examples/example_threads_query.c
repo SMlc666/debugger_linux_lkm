@@ -7,9 +7,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "../../include/lkmdbg_ioctl.h"
-#include "../driver/bridge_c.h"
-#include "../driver/bridge_control.h"
+#include "lkmdbg/lkmdbg.h"
 
 static int run_child(void)
 {
@@ -23,7 +21,7 @@ int main(void)
 	struct lkmdbg_thread_entry entries[32];
 	struct lkmdbg_thread_query_request reply;
 	pid_t child;
-	int session_fd = -1;
+	struct lkmdbg_session *session = NULL;
 	uint32_t i;
 	int found = 0;
 	int status = 1;
@@ -39,14 +37,13 @@ int main(void)
 	if (child == 0)
 		_exit(run_child());
 
-	session_fd = open_session_fd();
-	if (session_fd < 0)
+	if (lkmdbg_session_open(&session) < 0)
 		goto out;
-	if (set_target(session_fd, child) < 0)
+	if (lkmdbg_session_set_target(session, child, 0) < 0)
 		goto out;
-	if (query_target_threads(session_fd, 0, entries,
-				 (uint32_t)(sizeof(entries) / sizeof(entries[0])),
-				 &reply) < 0) {
+	if (lkmdbg_threads_query(
+		    session, 0, entries,
+		    (uint32_t)(sizeof(entries) / sizeof(entries[0])), &reply) < 0) {
 		goto out;
 	}
 	if (reply.entries_filled == 0) {
@@ -71,8 +68,7 @@ int main(void)
 	       reply.entries_filled);
 
 out:
-	if (session_fd >= 0)
-		close(session_fd);
+	lkmdbg_session_close(session);
 	kill(child, SIGKILL);
 	waitpid(child, NULL, 0);
 	return status;

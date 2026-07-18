@@ -24,6 +24,13 @@ struct lkmdbg_remote_mapping {
 	void *data;
 };
 
+struct lkmdbg_remote_allocation {
+	int session_fd;
+	uint64_t alloc_id;
+	uintptr_t remote_address;
+	uint64_t length;
+};
+
 static int lkmdbg_validate_session(const struct lkmdbg_session *session)
 {
 	if (!session || session->fd < 0) {
@@ -42,6 +49,7 @@ int lkmdbg_session_adopt_fd(int fd, int take_ownership,
 		errno = EINVAL;
 		return -1;
 	}
+	*session_out = NULL;
 	session = calloc(1, sizeof(*session));
 	if (!session)
 		return -1;
@@ -64,6 +72,7 @@ int lkmdbg_session_open(struct lkmdbg_session **session_out)
 		errno = EINVAL;
 		return -1;
 	}
+	*session_out = NULL;
 	proc_fd = open("/proc/version", O_RDONLY | O_CLOEXEC);
 	if (proc_fd < 0)
 		return -1;
@@ -256,6 +265,32 @@ int lkmdbg_event_read(struct lkmdbg_session *session,
 	return 0;
 }
 
+int lkmdbg_threads_query(struct lkmdbg_session *session, int32_t start_tid,
+			 struct lkmdbg_thread_entry *entries, uint32_t capacity,
+			 struct lkmdbg_thread_query_request *result_out)
+{
+	struct lkmdbg_thread_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = capacity,
+		.start_tid = start_tid,
+	};
+	int ret;
+
+	if (result_out)
+		*result_out = (struct lkmdbg_thread_query_request) { 0 };
+	if (lkmdbg_validate_session(session) < 0 || !entries || capacity == 0 ||
+	    start_tid < 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	ret = ioctl(session->fd, LKMDBG_IOC_QUERY_THREADS, &req);
+	if (result_out)
+		*result_out = req;
+	return ret;
+}
+
 int lkmdbg_remote_map_create(
 	struct lkmdbg_session *session,
 	const struct lkmdbg_remote_map_options *options,
@@ -270,6 +305,7 @@ int lkmdbg_remote_map_create(
 		errno = EINVAL;
 		return -1;
 	}
+	*mapping_out = NULL;
 	if (options->protection & LKMDBG_REMOTE_MAP_PROT_READ)
 		prot |= PROT_READ;
 	if (options->protection & LKMDBG_REMOTE_MAP_PROT_WRITE)
@@ -386,6 +422,131 @@ int lkmdbg_remote_map_destroy(struct lkmdbg_remote_mapping *mapping)
 	free(mapping);
 	if (ret < 0)
 		errno = saved_errno;
+	return ret;
+}
+
+int lkmdbg_remote_alloc_create(
+	struct lkmdbg_session *session,
+	const struct lkmdbg_remote_alloc_options *options,
+	struct lkmdbg_remote_allocation **allocation_out)
+{
+	struct lkmdbg_remote_alloc_request req;
+	struct lkmdbg_remote_allocation *allocation;
+
+	if (lkmdbg_validate_session(session) < 0 || !options || !allocation_out ||
+	    options->length == 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	*allocation_out = NULL;
+	req = (struct lkmdbg_remote_alloc_request) {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.remote_addr = options->remote_address,
+		.length = options->length,
+		.prot = options->protection,
+		.flags = options->flags,
+	};
+	if (ioctl(session->fd, LKMDBG_IOC_CREATE_REMOTE_ALLOC, &req) < 0)
+		return -1;
+	allocation = calloc(1, sizeof(*allocation));
+	if (!allocation)
+		goto fail_remove;
+	allocation->session_fd = dup(session->fd);
+	allocation->alloc_id = req.alloc_id;
+	allocation->remote_address = req.remote_addr;
+	allocation->length = req.mapped_length;
+	if (allocation->session_fd < 0) {
+		int saved_errno = errno;
+		free(allocation);
+		errno = saved_errno;
+		goto fail_remove;
+	}
+	*allocation_out = allocation;
+	return 0;
+
+fail_remove:
+	{
+		int saved_errno = errno;
+		struct lkmdbg_remote_alloc_handle_request remove_req = {
+			.version = LKMDBG_PROTO_VERSION,
+			.size = sizeof(remove_req),
+			.alloc_id = req.alloc_id,
+		};
+		(void)ioctl(session->fd, LKMDBG_IOC_REMOVE_REMOTE_ALLOC,
+			    &remove_req);
+		errno = saved_errno;
+	}
+	return -1;
+}
+
+uint64_t lkmdbg_remote_alloc_id(
+	const struct lkmdbg_remote_allocation *allocation)
+{
+	return allocation ? allocation->alloc_id : 0;
+}
+
+uintptr_t lkmdbg_remote_alloc_address(
+	const struct lkmdbg_remote_allocation *allocation)
+{
+	return allocation ? allocation->remote_address : 0;
+}
+
+uint64_t lkmdbg_remote_alloc_length(
+	const struct lkmdbg_remote_allocation *allocation)
+{
+	return allocation ? allocation->length : 0;
+}
+
+int lkmdbg_remote_alloc_destroy(struct lkmdbg_remote_allocation *allocation)
+{
+	struct lkmdbg_remote_alloc_handle_request req;
+	int ret;
+	int saved_errno;
+
+	if (!allocation) {
+		errno = EINVAL;
+		return -1;
+	}
+	req = (struct lkmdbg_remote_alloc_handle_request) {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.alloc_id = allocation->alloc_id,
+	};
+	ret = ioctl(allocation->session_fd, LKMDBG_IOC_REMOVE_REMOTE_ALLOC, &req);
+	saved_errno = errno;
+	close(allocation->session_fd);
+	free(allocation);
+	if (ret < 0 && saved_errno != ENOENT && saved_errno != ESRCH) {
+		errno = saved_errno;
+		return -1;
+	}
+	return 0;
+}
+
+int lkmdbg_remote_alloc_query(
+	struct lkmdbg_session *session, uint64_t start_id,
+	struct lkmdbg_remote_alloc_entry *entries, uint32_t capacity,
+	struct lkmdbg_remote_alloc_query_request *result_out)
+{
+	struct lkmdbg_remote_alloc_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = capacity,
+		.start_id = start_id,
+	};
+	int ret;
+
+	if (result_out)
+		*result_out = (struct lkmdbg_remote_alloc_query_request) { 0 };
+	if (lkmdbg_validate_session(session) < 0 || !entries || capacity == 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	ret = ioctl(session->fd, LKMDBG_IOC_QUERY_REMOTE_ALLOCS, &req);
+	if (result_out)
+		*result_out = req;
 	return ret;
 }
 
