@@ -40,6 +40,21 @@ struct lkmdbg_remote_alloc_options {
 	uint32_t flags;
 };
 
+struct lkmdbg_vma_query_options {
+	uint64_t start_address;
+	uint32_t flags;
+	uint32_t match_flags_mask;
+	uint32_t match_flags_value;
+	uint32_t match_protection_mask;
+	uint32_t match_protection_value;
+};
+
+struct lkmdbg_page_query_options {
+	uint64_t start_address;
+	uint64_t length;
+	uint32_t flags;
+};
+
 int lkmdbg_session_open(struct lkmdbg_session **session_out);
 int lkmdbg_session_adopt_fd(int fd, int take_ownership,
 			    struct lkmdbg_session **session_out);
@@ -81,6 +96,19 @@ int lkmdbg_registers_get(struct lkmdbg_session *session, pid_t tid,
 			 struct lkmdbg_regs_arm64 *registers_out);
 int lkmdbg_registers_set(struct lkmdbg_session *session, pid_t tid,
 			 const struct lkmdbg_regs_arm64 *registers);
+int lkmdbg_vmas_query(struct lkmdbg_session *session,
+		      const struct lkmdbg_vma_query_options *options,
+		      struct lkmdbg_vma_entry *entries, uint32_t capacity,
+		      char *names, uint32_t names_capacity,
+		      struct lkmdbg_vma_query_request *result_out);
+int lkmdbg_pages_query(struct lkmdbg_session *session,
+		       const struct lkmdbg_page_query_options *options,
+		       struct lkmdbg_page_entry *entries, uint32_t capacity,
+		       struct lkmdbg_page_query_request *result_out);
+int lkmdbg_stealth_get(struct lkmdbg_session *session,
+		       struct lkmdbg_stealth_request *result_out);
+int lkmdbg_stealth_set(struct lkmdbg_session *session, uint32_t flags,
+		       struct lkmdbg_stealth_request *result_out);
 
 int lkmdbg_remote_map_create(
 	struct lkmdbg_session *session,

@@ -8,9 +8,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "../../include/lkmdbg_ioctl.h"
-#include "../driver/bridge_c.h"
-#include "../driver/bridge_memory.h"
+#include "lkmdbg/lkmdbg.h"
 
 struct example_child_info {
 	uintptr_t addr;
@@ -76,7 +74,7 @@ static int run_child(int info_fd, int cmd_fd)
 	}
 }
 
-static int query_vma_for_addr(int session_fd, uintptr_t addr,
+static int query_vma_for_addr(struct lkmdbg_session *session, uintptr_t addr,
 			      struct lkmdbg_vma_entry *entry_out,
 			      const char **name_out,
 			      char *names, size_t names_size)
@@ -86,25 +84,19 @@ static int query_vma_for_addr(int session_fd, uintptr_t addr,
 	unsigned int pass;
 
 	for (pass = 0; pass < 128; pass++) {
-		struct lkmdbg_vma_query_request req = {
-			.version = LKMDBG_PROTO_VERSION,
-			.size = sizeof(req),
-			.start_addr = cursor,
-			.entries_addr = (uintptr_t)entries,
-			.max_entries = (uint32_t)(sizeof(entries) / sizeof(entries[0])),
-			.names_addr = (uintptr_t)names,
-			.names_size = (uint32_t)names_size,
+		struct lkmdbg_vma_query_request req;
+		struct lkmdbg_vma_query_options options = {
+			.start_address = cursor,
 		};
 		uint32_t i;
 
 		memset(entries, 0, sizeof(entries));
 		memset(names, 0, names_size);
-			if (bridge_query_target_vmas(session_fd, cursor, entries,
-						     (uint32_t)(sizeof(entries) /
-								sizeof(entries[0])),
-						     names, (uint32_t)names_size,
-						     &req) < 0)
-				return -1;
+		if (lkmdbg_vmas_query(
+			    session, &options, entries,
+			    (uint32_t)(sizeof(entries) / sizeof(entries[0])), names,
+			    (uint32_t)names_size, &req) < 0)
+			return -1;
 		for (i = 0; i < req.entries_filled; i++) {
 			const struct lkmdbg_vma_entry *e = &entries[i];
 
@@ -141,7 +133,7 @@ int main(void)
 	char names[512];
 	const char *vma_name = "";
 	pid_t child;
-	int session_fd = -1;
+	struct lkmdbg_session *session = NULL;
 	char cmd = 'q';
 	uint64_t page_addr;
 	uint32_t i;
@@ -180,13 +172,12 @@ int main(void)
 		goto out;
 	}
 
-	session_fd = open_session_fd();
-	if (session_fd < 0)
+	if (lkmdbg_session_open(&session) < 0)
 		goto out;
-	if (set_target(session_fd, child) < 0)
+	if (lkmdbg_session_set_target(session, child, 0) < 0)
 		goto out;
 
-	if (query_vma_for_addr(session_fd, info.addr, &vma, &vma_name, names,
+	if (query_vma_for_addr(session, info.addr, &vma, &vma_name, names,
 			       sizeof(names)) < 0) {
 		fprintf(stderr,
 			"example_vma_page_query: QUERY_VMAS failed addr=0x%" PRIxPTR " errno=%d\n",
@@ -202,12 +193,21 @@ int main(void)
 	}
 
 	page_addr = info.addr & ~(uint64_t)(getpagesize() - 1);
-	if (bridge_query_target_pages(
-		    session_fd, page_addr, (uint64_t)getpagesize(), pages,
-		    (uint32_t)(sizeof(pages) / sizeof(pages[0])), &page_req) < 0) {
-		fprintf(stderr, "example_vma_page_query: QUERY_PAGES failed errno=%d\n",
-			errno);
-		goto out;
+	{
+		struct lkmdbg_page_query_options options = {
+			.start_address = page_addr,
+			.length = (uint64_t)getpagesize(),
+		};
+
+		if (lkmdbg_pages_query(
+			    session, &options, pages,
+			    (uint32_t)(sizeof(pages) / sizeof(pages[0])),
+			    &page_req) < 0) {
+			fprintf(stderr,
+				"example_vma_page_query: QUERY_PAGES failed errno=%d\n",
+				errno);
+			goto out;
+		}
 	}
 	for (i = 0; i < page_req.entries_filled; i++) {
 		if (pages[i].page_addr != page_addr)
@@ -238,8 +238,7 @@ int main(void)
 
 out:
 	(void)write_full(cmd_pipe[1], &cmd, sizeof(cmd));
-	if (session_fd >= 0)
-		close(session_fd);
+	lkmdbg_session_close(session);
 	close(info_pipe[0]);
 	close(cmd_pipe[1]);
 	kill(child, SIGKILL);

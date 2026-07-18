@@ -75,9 +75,9 @@ cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_ses
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_mem_rw tools/examples/example_mem_rw.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_threads_query tools/examples/example_threads_query.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_regs_fp tools/examples/example_regs_fp.c userspace/src/lkmdbg.c
-cc -O2 -Wall -Wextra -o tools/examples/example_stealth_roundtrip tools/examples/example_stealth_roundtrip.c tools/driver/bridge_c.c tools/driver/bridge_control.c
+cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_stealth_roundtrip tools/examples/example_stealth_roundtrip.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -o tools/examples/example_sysrule_combo tools/examples/example_sysrule_combo.c tools/driver/bridge_c.c tools/driver/bridge_control.c tools/driver/bridge_events.c
-cc -O2 -Wall -Wextra -o tools/examples/example_vma_page_query tools/examples/example_vma_page_query.c tools/driver/bridge_c.c
+cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_vma_page_query tools/examples/example_vma_page_query.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_remote_alloc_rw tools/examples/example_remote_alloc_rw.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_remote_map_rw tools/examples/example_remote_map_rw.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -o tools/examples/example_phys_translate_read tools/examples/example_phys_translate_read.c tools/driver/bridge_c.c tools/driver/bridge_memory.c

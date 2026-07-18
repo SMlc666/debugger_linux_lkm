@@ -363,6 +363,110 @@ int lkmdbg_registers_set(struct lkmdbg_session *session, pid_t tid,
 	return ioctl(session->fd, LKMDBG_IOC_SET_REGS, &req);
 }
 
+int lkmdbg_vmas_query(struct lkmdbg_session *session,
+		      const struct lkmdbg_vma_query_options *options,
+		      struct lkmdbg_vma_entry *entries, uint32_t capacity,
+		      char *names, uint32_t names_capacity,
+		      struct lkmdbg_vma_query_request *result_out)
+{
+	struct lkmdbg_vma_query_request req;
+	int ret;
+
+	if (result_out)
+		*result_out = (struct lkmdbg_vma_query_request) { 0 };
+	if (lkmdbg_validate_session(session) < 0 || !options || !entries ||
+	    capacity == 0 || (!names && names_capacity != 0)) {
+		errno = EINVAL;
+		return -1;
+	}
+	req = (struct lkmdbg_vma_query_request) {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.start_addr = options->start_address,
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = capacity,
+		.flags = options->flags,
+		.match_flags_mask = options->match_flags_mask,
+		.match_flags_value = options->match_flags_value,
+		.match_prot_mask = options->match_protection_mask,
+		.match_prot_value = options->match_protection_value,
+		.names_addr = (uintptr_t)names,
+		.names_size = names_capacity,
+	};
+	ret = ioctl(session->fd, LKMDBG_IOC_QUERY_VMAS, &req);
+	if (result_out)
+		*result_out = req;
+	return ret;
+}
+
+int lkmdbg_pages_query(struct lkmdbg_session *session,
+		       const struct lkmdbg_page_query_options *options,
+		       struct lkmdbg_page_entry *entries, uint32_t capacity,
+		       struct lkmdbg_page_query_request *result_out)
+{
+	struct lkmdbg_page_query_request req;
+	int ret;
+
+	if (result_out)
+		*result_out = (struct lkmdbg_page_query_request) { 0 };
+	if (lkmdbg_validate_session(session) < 0 || !options || !entries ||
+	    capacity == 0 || options->length == 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	req = (struct lkmdbg_page_query_request) {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.start_addr = options->start_address,
+		.length = options->length,
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = capacity,
+		.flags = options->flags,
+	};
+	ret = ioctl(session->fd, LKMDBG_IOC_QUERY_PAGES, &req);
+	if (result_out)
+		*result_out = req;
+	return ret;
+}
+
+static int lkmdbg_stealth_control(struct lkmdbg_session *session,
+				  uint32_t flags, bool set,
+				  struct lkmdbg_stealth_request *result_out)
+{
+	struct lkmdbg_stealth_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.flags = flags,
+	};
+	int ret;
+
+	if (result_out)
+		*result_out = (struct lkmdbg_stealth_request) { 0 };
+	if (lkmdbg_validate_session(session) < 0)
+		return -1;
+	ret = ioctl(session->fd,
+		    set ? LKMDBG_IOC_SET_STEALTH : LKMDBG_IOC_GET_STEALTH, &req);
+	if (result_out)
+		*result_out = req;
+	return ret;
+}
+
+int lkmdbg_stealth_get(struct lkmdbg_session *session,
+		       struct lkmdbg_stealth_request *result_out)
+{
+	if (!result_out) {
+		errno = EINVAL;
+		return -1;
+	}
+	return lkmdbg_stealth_control(session, 0, false, result_out);
+}
+
+int lkmdbg_stealth_set(struct lkmdbg_session *session, uint32_t flags,
+		       struct lkmdbg_stealth_request *result_out)
+{
+	return lkmdbg_stealth_control(session, flags, true, result_out);
+}
+
 int lkmdbg_remote_map_create(
 	struct lkmdbg_session *session,
 	const struct lkmdbg_remote_map_options *options,

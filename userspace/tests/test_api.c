@@ -58,6 +58,14 @@ int main(void)
 	errno = 0;
 	CHECK(lkmdbg_registers_set(session, 0, NULL) == -1 && errno == EINVAL);
 	errno = 0;
+	CHECK(lkmdbg_vmas_query(session, NULL, NULL, 0, NULL, 0, NULL) == -1 &&
+	      errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_pages_query(session, NULL, NULL, 0, NULL) == -1 &&
+	      errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_stealth_get(session, NULL) == -1 && errno == EINVAL);
+	errno = 0;
 	CHECK(lkmdbg_remote_alloc_create(session, NULL, NULL) == -1 &&
 	      errno == EINVAL);
 	errno = 0;
