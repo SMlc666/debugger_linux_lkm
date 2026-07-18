@@ -7,6 +7,7 @@
 #include <poll.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -379,6 +380,51 @@ int lkmdbg_event_read(struct lkmdbg_session *session,
 	}
 	if (count_out)
 		*count_out = (size_t)nr / sizeof(*events);
+	return 0;
+}
+
+int lkmdbg_event_config_get(
+	struct lkmdbg_session *session,
+	struct lkmdbg_event_config_request *result_out)
+{
+	struct lkmdbg_event_config_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+	};
+
+	if (lkmdbg_validate_session(session) < 0 || !result_out) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (ioctl(session->fd, LKMDBG_IOC_GET_EVENT_CONFIG, &req) < 0)
+		return -1;
+	*result_out = req;
+	return 0;
+}
+
+int lkmdbg_event_config_set(
+	struct lkmdbg_session *session,
+	const uint64_t mask_words[LKMDBG_EVENT_MASK_WORDS], uint32_t flags,
+	struct lkmdbg_event_config_request *result_out)
+{
+	struct lkmdbg_event_config_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.flags = flags,
+	};
+
+	if (lkmdbg_validate_session(session) < 0 || !mask_words) {
+		errno = EINVAL;
+		return -1;
+	}
+	memcpy(req.mask_words, mask_words, sizeof(req.mask_words));
+	if (ioctl(session->fd, LKMDBG_IOC_SET_EVENT_CONFIG, &req) < 0) {
+		if (result_out)
+			*result_out = req;
+		return -1;
+	}
+	if (result_out)
+		*result_out = req;
 	return 0;
 }
 

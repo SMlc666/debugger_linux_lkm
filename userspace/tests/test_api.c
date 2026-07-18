@@ -59,6 +59,11 @@ int main(void)
 	CHECK(lkmdbg_event_read(session, NULL, 0, NULL, 0) == -1 &&
 	      errno == EINVAL);
 	errno = 0;
+	CHECK(lkmdbg_event_config_get(session, NULL) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_event_config_set(session, NULL, 0, NULL) == -1 &&
+	      errno == EINVAL);
+	errno = 0;
 	CHECK(lkmdbg_remote_map_destroy(NULL) == -1 && errno == EINVAL);
 	errno = 0;
 	CHECK(lkmdbg_threads_query(session, 0, NULL, 0, NULL) == -1 &&

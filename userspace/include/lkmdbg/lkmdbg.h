@@ -115,6 +115,13 @@ int lkmdbg_virtual_to_physical(struct lkmdbg_session *session,
 int lkmdbg_event_read(struct lkmdbg_session *session,
 		      struct lkmdbg_event_record *events, size_t capacity,
 		      size_t *count_out, int timeout_ms);
+int lkmdbg_event_config_get(
+	struct lkmdbg_session *session,
+	struct lkmdbg_event_config_request *result_out);
+int lkmdbg_event_config_set(
+	struct lkmdbg_session *session,
+	const uint64_t mask_words[LKMDBG_EVENT_MASK_WORDS], uint32_t flags,
+	struct lkmdbg_event_config_request *result_out);
 
 int lkmdbg_threads_query(struct lkmdbg_session *session, int32_t start_tid,
 			 struct lkmdbg_thread_entry *entries, uint32_t capacity,
