@@ -7,6 +7,8 @@ int main(void)
 {
 	struct lkmdbg_status_reply status;
 	struct lkmdbg_event_config_request event_config;
+	struct lkmdbg_hwpoint_entry hwpoint;
+	struct lkmdbg_hwpoint_query_request hwpoints;
 	struct lkmdbg_session *session;
 
 	if (lkmdbg_session_open(&session) < 0)
@@ -17,6 +19,10 @@ int main(void)
 		return 1;
 	}
 	if (lkmdbg_event_config_get(session, &event_config) < 0) {
+		lkmdbg_session_close(session);
+		return 1;
+	}
+	if (lkmdbg_hwpoints_query(session, 0, &hwpoint, 1, &hwpoints) < 0) {
 		lkmdbg_session_close(session);
 		return 1;
 	}

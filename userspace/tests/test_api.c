@@ -99,6 +99,20 @@ int main(void)
 	      errno == EINVAL);
 	errno = 0;
 	CHECK(lkmdbg_view_region_destroy(NULL) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_hwpoint_create(session, NULL, NULL) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_hwpoint_rearm(NULL, NULL) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_hwpoints_query(session, 0, NULL, 0, NULL) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_hwpoint_destroy(NULL) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_stop_state_get(session, 0, NULL) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_target_continue(session, 0, 0, 0, NULL) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_thread_single_step(session, 0, 0) == -1 && errno == EINVAL);
 
 	lkmdbg_session_close(session);
 	CHECK(fcntl(fd, F_GETFD) >= 0);

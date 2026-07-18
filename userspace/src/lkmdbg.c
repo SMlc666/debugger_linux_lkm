@@ -37,6 +37,11 @@ struct lkmdbg_view_region {
 	uint64_t region_id;
 };
 
+struct lkmdbg_hwpoint {
+	int session_fd;
+	uint64_t id;
+};
+
 static int lkmdbg_validate_session(const struct lkmdbg_session *session)
 {
 	if (!session || session->fd < 0) {
@@ -1030,6 +1035,190 @@ int lkmdbg_view_region_destroy(struct lkmdbg_view_region *region)
 		return -1;
 	}
 	return 0;
+}
+
+int lkmdbg_hwpoint_create(struct lkmdbg_session *session,
+			  const struct lkmdbg_hwpoint_options *options,
+			  struct lkmdbg_hwpoint **hwpoint_out)
+{
+	struct lkmdbg_hwpoint_request req;
+	struct lkmdbg_hwpoint *hwpoint;
+
+	if (lkmdbg_validate_session(session) < 0 || !options || !hwpoint_out ||
+	    options->tid <= 0 || options->length == 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	*hwpoint_out = NULL;
+	req = (struct lkmdbg_hwpoint_request) {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.addr = options->address,
+		.tid = options->tid,
+		.type = options->type,
+		.len = options->length,
+		.flags = options->flags,
+		.trigger_hit_count = options->trigger_hit_count,
+		.action_flags = options->action_flags,
+	};
+	if (ioctl(session->fd, LKMDBG_IOC_ADD_HWPOINT, &req) < 0)
+		return -1;
+	hwpoint = calloc(1, sizeof(*hwpoint));
+	if (!hwpoint)
+		goto fail_remove;
+	hwpoint->session_fd = dup(session->fd);
+	hwpoint->id = req.id;
+	if (hwpoint->session_fd < 0) {
+		int saved_errno = errno;
+		free(hwpoint);
+		errno = saved_errno;
+		goto fail_remove;
+	}
+	*hwpoint_out = hwpoint;
+	return 0;
+
+fail_remove:
+	{
+		int saved_errno = errno;
+		struct lkmdbg_hwpoint_request remove_req = {
+			.version = LKMDBG_PROTO_VERSION,
+			.size = sizeof(remove_req),
+			.id = req.id,
+		};
+		(void)ioctl(session->fd, LKMDBG_IOC_REMOVE_HWPOINT, &remove_req);
+		errno = saved_errno;
+	}
+	return -1;
+}
+
+uint64_t lkmdbg_hwpoint_id(const struct lkmdbg_hwpoint *hwpoint)
+{
+	return hwpoint ? hwpoint->id : 0;
+}
+
+int lkmdbg_hwpoint_rearm(struct lkmdbg_hwpoint *hwpoint,
+			 struct lkmdbg_hwpoint_request *result_out)
+{
+	struct lkmdbg_hwpoint_request req;
+	int ret;
+
+	if (result_out)
+		*result_out = (struct lkmdbg_hwpoint_request) { 0 };
+	if (!hwpoint) {
+		errno = EINVAL;
+		return -1;
+	}
+	req = (struct lkmdbg_hwpoint_request) {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.id = hwpoint->id,
+	};
+	ret = ioctl(hwpoint->session_fd, LKMDBG_IOC_REARM_HWPOINT, &req);
+	if (result_out)
+		*result_out = req;
+	return ret;
+}
+
+int lkmdbg_hwpoints_query(struct lkmdbg_session *session, uint64_t start_id,
+			  struct lkmdbg_hwpoint_entry *entries,
+			  uint32_t capacity,
+			  struct lkmdbg_hwpoint_query_request *result_out)
+{
+	struct lkmdbg_hwpoint_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = capacity,
+		.start_id = start_id,
+	};
+	int ret;
+
+	if (result_out)
+		*result_out = (struct lkmdbg_hwpoint_query_request) { 0 };
+	if (lkmdbg_validate_session(session) < 0 || !entries || capacity == 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	ret = ioctl(session->fd, LKMDBG_IOC_QUERY_HWPOINTS, &req);
+	if (result_out)
+		*result_out = req;
+	return ret;
+}
+
+int lkmdbg_hwpoint_destroy(struct lkmdbg_hwpoint *hwpoint)
+{
+	struct lkmdbg_hwpoint_request req;
+	int ret, saved_errno;
+
+	if (!hwpoint) {
+		errno = EINVAL;
+		return -1;
+	}
+	req = (struct lkmdbg_hwpoint_request) {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.id = hwpoint->id,
+	};
+	ret = ioctl(hwpoint->session_fd, LKMDBG_IOC_REMOVE_HWPOINT, &req);
+	saved_errno = errno;
+	close(hwpoint->session_fd);
+	free(hwpoint);
+	if (ret < 0 && saved_errno != ENOENT && saved_errno != ESRCH) {
+		errno = saved_errno;
+		return -1;
+	}
+	return 0;
+}
+
+int lkmdbg_stop_state_get(struct lkmdbg_session *session, uint32_t flags,
+			  struct lkmdbg_stop_state *state_out)
+{
+	struct lkmdbg_stop_query_request req = {
+		.version = LKMDBG_PROTO_VERSION, .size = sizeof(req), .flags = flags,
+	};
+	if (lkmdbg_validate_session(session) < 0 || !state_out) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (ioctl(session->fd, LKMDBG_IOC_GET_STOP_STATE, &req) < 0)
+		return -1;
+	*state_out = req.stop;
+	return 0;
+}
+
+int lkmdbg_target_continue(struct lkmdbg_session *session, uint64_t stop_cookie,
+			   uint32_t timeout_ms, uint32_t flags,
+			   struct lkmdbg_continue_request *result_out)
+{
+	struct lkmdbg_continue_request req = {
+		.version = LKMDBG_PROTO_VERSION, .size = sizeof(req), .flags = flags,
+		.timeout_ms = timeout_ms, .stop_cookie = stop_cookie,
+	};
+	int ret;
+	if (result_out)
+		*result_out = (struct lkmdbg_continue_request) { 0 };
+	if (lkmdbg_validate_session(session) < 0 || stop_cookie == 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	ret = ioctl(session->fd, LKMDBG_IOC_CONTINUE_TARGET, &req);
+	if (result_out)
+		*result_out = req;
+	return ret;
+}
+
+int lkmdbg_thread_single_step(struct lkmdbg_session *session, pid_t tid,
+			      uint32_t flags)
+{
+	struct lkmdbg_single_step_request req = {
+		.version = LKMDBG_PROTO_VERSION, .size = sizeof(req),
+		.tid = tid, .flags = flags,
+	};
+	if (lkmdbg_validate_session(session) < 0 || tid <= 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	return ioctl(session->fd, LKMDBG_IOC_SINGLE_STEP, &req);
 }
 
 int lkmdbg_raw_ioctl(struct lkmdbg_session *session, unsigned long command,

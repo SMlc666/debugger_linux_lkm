@@ -19,6 +19,7 @@ struct lkmdbg_session;
 struct lkmdbg_remote_mapping;
 struct lkmdbg_remote_allocation;
 struct lkmdbg_view_region;
+struct lkmdbg_hwpoint;
 
 struct lkmdbg_transfer_result {
 	uint32_t operations_done;
@@ -65,6 +66,16 @@ struct lkmdbg_view_region_options {
 	uint32_t fault_policy;
 	uint32_t sync_policy;
 	uint32_t writeback_policy;
+};
+
+struct lkmdbg_hwpoint_options {
+	pid_t tid;
+	uint64_t address;
+	uint32_t type;
+	uint32_t length;
+	uint32_t flags;
+	uint64_t trigger_hit_count;
+	uint32_t action_flags;
 };
 
 int lkmdbg_session_open(struct lkmdbg_session **session_out);
@@ -188,6 +199,25 @@ int lkmdbg_view_regions_query(
 	struct lkmdbg_view_region_entry *entries, uint32_t capacity,
 	struct lkmdbg_view_region_query_request *result_out);
 int lkmdbg_view_region_destroy(struct lkmdbg_view_region *region);
+
+int lkmdbg_hwpoint_create(struct lkmdbg_session *session,
+			  const struct lkmdbg_hwpoint_options *options,
+			  struct lkmdbg_hwpoint **hwpoint_out);
+uint64_t lkmdbg_hwpoint_id(const struct lkmdbg_hwpoint *hwpoint);
+int lkmdbg_hwpoint_rearm(struct lkmdbg_hwpoint *hwpoint,
+			 struct lkmdbg_hwpoint_request *result_out);
+int lkmdbg_hwpoints_query(struct lkmdbg_session *session, uint64_t start_id,
+			  struct lkmdbg_hwpoint_entry *entries,
+			  uint32_t capacity,
+			  struct lkmdbg_hwpoint_query_request *result_out);
+int lkmdbg_hwpoint_destroy(struct lkmdbg_hwpoint *hwpoint);
+int lkmdbg_stop_state_get(struct lkmdbg_session *session, uint32_t flags,
+			  struct lkmdbg_stop_state *state_out);
+int lkmdbg_target_continue(struct lkmdbg_session *session, uint64_t stop_cookie,
+			   uint32_t timeout_ms, uint32_t flags,
+			   struct lkmdbg_continue_request *result_out);
+int lkmdbg_thread_single_step(struct lkmdbg_session *session, pid_t tid,
+			      uint32_t flags);
 
 int lkmdbg_raw_ioctl(struct lkmdbg_session *session, unsigned long command,
 		     void *argument);
