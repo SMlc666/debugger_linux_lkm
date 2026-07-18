@@ -31,6 +31,11 @@ struct lkmdbg_remote_allocation {
 	uint64_t length;
 };
 
+struct lkmdbg_view_region {
+	int session_fd;
+	uint64_t region_id;
+};
+
 static int lkmdbg_validate_session(const struct lkmdbg_session *session)
 {
 	if (!session || session->fd < 0) {
@@ -836,6 +841,149 @@ int lkmdbg_remote_alloc_query(
 	if (result_out)
 		*result_out = req;
 	return ret;
+}
+
+int lkmdbg_view_region_create(
+	struct lkmdbg_session *session,
+	const struct lkmdbg_view_region_options *options,
+	struct lkmdbg_view_region **region_out)
+{
+	struct lkmdbg_view_region_request req;
+	struct lkmdbg_view_region *region;
+
+	if (lkmdbg_validate_session(session) < 0 || !options || !region_out ||
+	    options->length == 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	*region_out = NULL;
+	req = (struct lkmdbg_view_region_request) {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.base_addr = options->base_address,
+		.length = options->length,
+		.access_mask = options->access_mask,
+		.flags = options->flags,
+		.backend = options->backend,
+		.fault_policy = options->fault_policy,
+		.sync_policy = options->sync_policy,
+		.writeback_policy = options->writeback_policy,
+	};
+	if (ioctl(session->fd, LKMDBG_IOC_CREATE_VIEW_REGION, &req) < 0)
+		return -1;
+	region = calloc(1, sizeof(*region));
+	if (!region)
+		goto fail_remove;
+	region->session_fd = dup(session->fd);
+	region->region_id = req.region_id;
+	if (region->session_fd < 0) {
+		int saved_errno = errno;
+		free(region);
+		errno = saved_errno;
+		goto fail_remove;
+	}
+	*region_out = region;
+	return 0;
+
+fail_remove:
+	{
+		int saved_errno = errno;
+		struct lkmdbg_view_region_handle_request remove_req = {
+			.version = LKMDBG_PROTO_VERSION,
+			.size = sizeof(remove_req),
+			.region_id = req.region_id,
+		};
+		(void)ioctl(session->fd, LKMDBG_IOC_REMOVE_VIEW_REGION,
+			    &remove_req);
+		errno = saved_errno;
+	}
+	return -1;
+}
+
+uint64_t lkmdbg_view_region_id(const struct lkmdbg_view_region *region)
+{
+	return region ? region->region_id : 0;
+}
+
+int lkmdbg_view_region_set_backing(
+	struct lkmdbg_view_region *region, uint32_t view_kind,
+	const void *source, uint64_t source_length, uint32_t backing_type,
+	struct lkmdbg_view_backing_request *result_out)
+{
+	struct lkmdbg_view_backing_request req;
+	int ret;
+
+	if (result_out)
+		*result_out = (struct lkmdbg_view_backing_request) { 0 };
+	if (!region || region->session_fd < 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	req = (struct lkmdbg_view_backing_request) {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.region_id = region->region_id,
+		.view_kind = view_kind,
+		.backing_type = backing_type,
+		.source_addr = (uintptr_t)source,
+		.source_length = source_length,
+	};
+	ret = ioctl(region->session_fd, LKMDBG_IOC_SET_VIEW_BACKING, &req);
+	if (result_out)
+		*result_out = req;
+	return ret;
+}
+
+int lkmdbg_view_regions_query(
+	struct lkmdbg_session *session, uint64_t start_id,
+	struct lkmdbg_view_region_entry *entries, uint32_t capacity,
+	struct lkmdbg_view_region_query_request *result_out)
+{
+	struct lkmdbg_view_region_query_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.entries_addr = (uintptr_t)entries,
+		.max_entries = capacity,
+		.start_id = start_id,
+	};
+	int ret;
+
+	if (result_out)
+		*result_out = (struct lkmdbg_view_region_query_request) { 0 };
+	if (lkmdbg_validate_session(session) < 0 || !entries || capacity == 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	ret = ioctl(session->fd, LKMDBG_IOC_QUERY_VIEW_REGIONS, &req);
+	if (result_out)
+		*result_out = req;
+	return ret;
+}
+
+int lkmdbg_view_region_destroy(struct lkmdbg_view_region *region)
+{
+	struct lkmdbg_view_region_handle_request req;
+	int ret;
+	int saved_errno;
+
+	if (!region) {
+		errno = EINVAL;
+		return -1;
+	}
+	req = (struct lkmdbg_view_region_handle_request) {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.region_id = region->region_id,
+	};
+	ret = ioctl(region->session_fd, LKMDBG_IOC_REMOVE_VIEW_REGION, &req);
+	saved_errno = errno;
+	close(region->session_fd);
+	free(region);
+	if (ret < 0 && saved_errno != ENOENT && saved_errno != ESRCH) {
+		errno = saved_errno;
+		return -1;
+	}
+	return 0;
 }
 
 int lkmdbg_raw_ioctl(struct lkmdbg_session *session, unsigned long command,

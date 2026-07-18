@@ -18,6 +18,7 @@ extern "C" {
 struct lkmdbg_session;
 struct lkmdbg_remote_mapping;
 struct lkmdbg_remote_allocation;
+struct lkmdbg_view_region;
 
 struct lkmdbg_transfer_result {
 	uint32_t operations_done;
@@ -53,6 +54,17 @@ struct lkmdbg_page_query_options {
 	uint64_t start_address;
 	uint64_t length;
 	uint32_t flags;
+};
+
+struct lkmdbg_view_region_options {
+	uintptr_t base_address;
+	uint64_t length;
+	uint32_t access_mask;
+	uint32_t flags;
+	uint32_t backend;
+	uint32_t fault_policy;
+	uint32_t sync_policy;
+	uint32_t writeback_policy;
 };
 
 int lkmdbg_session_open(struct lkmdbg_session **session_out);
@@ -154,6 +166,21 @@ int lkmdbg_remote_alloc_query(
 	struct lkmdbg_session *session, uint64_t start_id,
 	struct lkmdbg_remote_alloc_entry *entries, uint32_t capacity,
 	struct lkmdbg_remote_alloc_query_request *result_out);
+
+int lkmdbg_view_region_create(
+	struct lkmdbg_session *session,
+	const struct lkmdbg_view_region_options *options,
+	struct lkmdbg_view_region **region_out);
+uint64_t lkmdbg_view_region_id(const struct lkmdbg_view_region *region);
+int lkmdbg_view_region_set_backing(
+	struct lkmdbg_view_region *region, uint32_t view_kind,
+	const void *source, uint64_t source_length, uint32_t backing_type,
+	struct lkmdbg_view_backing_request *result_out);
+int lkmdbg_view_regions_query(
+	struct lkmdbg_session *session, uint64_t start_id,
+	struct lkmdbg_view_region_entry *entries, uint32_t capacity,
+	struct lkmdbg_view_region_query_request *result_out);
+int lkmdbg_view_region_destroy(struct lkmdbg_view_region *region);
 
 int lkmdbg_raw_ioctl(struct lkmdbg_session *session, unsigned long command,
 		     void *argument);

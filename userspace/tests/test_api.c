@@ -83,6 +83,17 @@ int main(void)
 	      errno == EINVAL);
 	errno = 0;
 	CHECK(lkmdbg_remote_alloc_destroy(NULL) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_view_region_create(session, NULL, NULL) == -1 &&
+	      errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_view_region_set_backing(NULL, 0, NULL, 0, 0, NULL) == -1 &&
+	      errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_view_regions_query(session, 0, NULL, 0, NULL) == -1 &&
+	      errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_view_region_destroy(NULL) == -1 && errno == EINVAL);
 
 	lkmdbg_session_close(session);
 	CHECK(fcntl(fd, F_GETFD) >= 0);
