@@ -73,6 +73,14 @@ int lkmdbg_event_read(struct lkmdbg_session *session,
 int lkmdbg_threads_query(struct lkmdbg_session *session, int32_t start_tid,
 			 struct lkmdbg_thread_entry *entries, uint32_t capacity,
 			 struct lkmdbg_thread_query_request *result_out);
+int lkmdbg_threads_freeze(struct lkmdbg_session *session, uint32_t timeout_ms,
+			  struct lkmdbg_freeze_request *result_out);
+int lkmdbg_threads_thaw(struct lkmdbg_session *session, uint32_t timeout_ms,
+			struct lkmdbg_freeze_request *result_out);
+int lkmdbg_registers_get(struct lkmdbg_session *session, pid_t tid,
+			 struct lkmdbg_regs_arm64 *registers_out);
+int lkmdbg_registers_set(struct lkmdbg_session *session, pid_t tid,
+			 const struct lkmdbg_regs_arm64 *registers);
 
 int lkmdbg_remote_map_create(
 	struct lkmdbg_session *session,

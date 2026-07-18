@@ -54,6 +54,10 @@ int main(void)
 	CHECK(lkmdbg_threads_query(session, 0, NULL, 0, NULL) == -1 &&
 	      errno == EINVAL);
 	errno = 0;
+	CHECK(lkmdbg_registers_get(session, 0, NULL) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(lkmdbg_registers_set(session, 0, NULL) == -1 && errno == EINVAL);
+	errno = 0;
 	CHECK(lkmdbg_remote_alloc_create(session, NULL, NULL) == -1 &&
 	      errno == EINVAL);
 	errno = 0;

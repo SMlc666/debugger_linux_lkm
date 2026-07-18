@@ -459,10 +459,11 @@ jobs:
             "$GITHUB_WORKSPACE/tools/examples/example_threads_query.c" \
             "$GITHUB_WORKSPACE/userspace/src/lkmdbg.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -I "$GITHUB_WORKSPACE/userspace/include" \
+            -I "$GITHUB_WORKSPACE/include" \
             -o "$RUNNER_TEMP/lkmdbg_example_regs_fp" \
             "$GITHUB_WORKSPACE/tools/examples/example_regs_fp.c" \
-            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
-            "$GITHUB_WORKSPACE/tools/driver/bridge_control.c"
+            "$GITHUB_WORKSPACE/userspace/src/lkmdbg.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/lkmdbg_example_stealth_roundtrip" \
             "$GITHUB_WORKSPACE/tools/examples/example_stealth_roundtrip.c" \

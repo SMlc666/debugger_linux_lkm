@@ -74,7 +74,7 @@ cc -O2 -Wall -Wextra -o tools/lkmdbg_sysrule_ctl tools/lkmdbg_sysrule_ctl.c tool
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_session_status tools/examples/example_session_status.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_mem_rw tools/examples/example_mem_rw.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_threads_query tools/examples/example_threads_query.c userspace/src/lkmdbg.c
-cc -O2 -Wall -Wextra -o tools/examples/example_regs_fp tools/examples/example_regs_fp.c tools/driver/bridge_c.c tools/driver/bridge_control.c
+cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_regs_fp tools/examples/example_regs_fp.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -o tools/examples/example_stealth_roundtrip tools/examples/example_stealth_roundtrip.c tools/driver/bridge_c.c tools/driver/bridge_control.c
 cc -O2 -Wall -Wextra -o tools/examples/example_sysrule_combo tools/examples/example_sysrule_combo.c tools/driver/bridge_c.c tools/driver/bridge_control.c tools/driver/bridge_events.c
 cc -O2 -Wall -Wextra -o tools/examples/example_vma_page_query tools/examples/example_vma_page_query.c tools/driver/bridge_c.c

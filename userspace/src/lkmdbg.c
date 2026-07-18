@@ -291,6 +291,78 @@ int lkmdbg_threads_query(struct lkmdbg_session *session, int32_t start_tid,
 	return ret;
 }
 
+static int lkmdbg_threads_control(struct lkmdbg_session *session,
+				  uint32_t timeout_ms, bool thaw,
+				  struct lkmdbg_freeze_request *result_out)
+{
+	struct lkmdbg_freeze_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.timeout_ms = timeout_ms,
+	};
+	int ret;
+
+	if (result_out)
+		*result_out = (struct lkmdbg_freeze_request) { 0 };
+	if (lkmdbg_validate_session(session) < 0)
+		return -1;
+	ret = ioctl(session->fd,
+		    thaw ? LKMDBG_IOC_THAW_THREADS : LKMDBG_IOC_FREEZE_THREADS,
+		    &req);
+	if (result_out)
+		*result_out = req;
+	return ret;
+}
+
+int lkmdbg_threads_freeze(struct lkmdbg_session *session, uint32_t timeout_ms,
+			  struct lkmdbg_freeze_request *result_out)
+{
+	return lkmdbg_threads_control(session, timeout_ms, false, result_out);
+}
+
+int lkmdbg_threads_thaw(struct lkmdbg_session *session, uint32_t timeout_ms,
+			struct lkmdbg_freeze_request *result_out)
+{
+	return lkmdbg_threads_control(session, timeout_ms, true, result_out);
+}
+
+int lkmdbg_registers_get(struct lkmdbg_session *session, pid_t tid,
+			 struct lkmdbg_regs_arm64 *registers_out)
+{
+	struct lkmdbg_thread_regs_request req = {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.tid = tid,
+	};
+
+	if (lkmdbg_validate_session(session) < 0 || tid <= 0 || !registers_out) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (ioctl(session->fd, LKMDBG_IOC_GET_REGS, &req) < 0)
+		return -1;
+	*registers_out = req.regs;
+	return 0;
+}
+
+int lkmdbg_registers_set(struct lkmdbg_session *session, pid_t tid,
+			 const struct lkmdbg_regs_arm64 *registers)
+{
+	struct lkmdbg_thread_regs_request req;
+
+	if (lkmdbg_validate_session(session) < 0 || tid <= 0 || !registers) {
+		errno = EINVAL;
+		return -1;
+	}
+	req = (struct lkmdbg_thread_regs_request) {
+		.version = LKMDBG_PROTO_VERSION,
+		.size = sizeof(req),
+		.tid = tid,
+		.regs = *registers,
+	};
+	return ioctl(session->fd, LKMDBG_IOC_SET_REGS, &req);
+}
+
 int lkmdbg_remote_map_create(
 	struct lkmdbg_session *session,
 	const struct lkmdbg_remote_map_options *options,

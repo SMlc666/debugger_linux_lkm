@@ -9,9 +9,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "../../include/lkmdbg_ioctl.h"
-#include "../driver/bridge_c.h"
-#include "../driver/bridge_control.h"
+#include "lkmdbg/lkmdbg.h"
 
 static int run_child(void)
 {
@@ -25,7 +23,7 @@ static int run_child(void)
 	return 0;
 }
 
-static int pick_parked_tid(int session_fd, unsigned int attempts,
+static int pick_parked_tid(struct lkmdbg_session *session, unsigned int attempts,
 			   useconds_t delay_us, pid_t *tid_out)
 {
 	struct lkmdbg_thread_entry entries[32];
@@ -39,10 +37,10 @@ static int pick_parked_tid(int session_fd, unsigned int attempts,
 		for (;;) {
 			memset(entries, 0, sizeof(entries));
 			memset(&reply, 0, sizeof(reply));
-			if (query_target_threads(session_fd, cursor, entries,
-						 (uint32_t)(sizeof(entries) /
-							    sizeof(entries[0])),
-						 &reply) < 0)
+			if (lkmdbg_threads_query(
+				    session, cursor, entries,
+				    (uint32_t)(sizeof(entries) / sizeof(entries[0])),
+				    &reply) < 0)
 				return -1;
 			for (i = 0; i < reply.entries_filled; i++) {
 				if (!(entries[i].flags & LKMDBG_THREAD_FLAG_FREEZE_PARKED))
@@ -64,11 +62,11 @@ static int pick_parked_tid(int session_fd, unsigned int attempts,
 
 int main(void)
 {
-	struct lkmdbg_thread_regs_request regs;
+	struct lkmdbg_regs_arm64 regs;
 	struct lkmdbg_freeze_request freeze_reply;
 	pid_t child;
 	pid_t tid = 0;
-	int session_fd = -1;
+	struct lkmdbg_session *session = NULL;
 	uint64_t saved_x19;
 	uint64_t saved_x20;
 	uint32_t saved_fpsr;
@@ -99,12 +97,11 @@ int main(void)
 	if (child == 0)
 		_exit(run_child());
 
-	session_fd = open_session_fd();
-	if (session_fd < 0)
+	if (lkmdbg_session_open(&session) < 0)
 		goto out;
-	if (set_target(session_fd, child) < 0)
+	if (lkmdbg_session_set_target(session, child, 0) < 0)
 		goto out;
-	if (freeze_target_threads(session_fd, 2000, &freeze_reply, 0) < 0)
+	if (lkmdbg_threads_freeze(session, 2000, &freeze_reply) < 0)
 		goto out;
 	frozen = 1;
 
@@ -116,7 +113,7 @@ int main(void)
 		goto out;
 	}
 
-	if (pick_parked_tid(session_fd, 50, 20000, &tid) < 0) {
+	if (pick_parked_tid(session, 50, 20000, &tid) < 0) {
 		fprintf(stderr,
 			"example_regs_fp: no parked frozen thread after freeze total=%u settled=%u parked=%u\n",
 			freeze_reply.threads_total, freeze_reply.threads_settled,
@@ -124,22 +121,22 @@ int main(void)
 		goto out;
 	}
 
-	if (get_target_regs(session_fd, tid, &regs) < 0)
+	if (lkmdbg_registers_get(session, tid, &regs) < 0)
 		goto out;
-	if (!(regs.regs.features & LKMDBG_REGS_ARM64_FEATURE_FP)) {
+	if (!(regs.features & LKMDBG_REGS_ARM64_FEATURE_FP)) {
 		fprintf(stderr, "example_regs_fp: FP feature missing features=0x%x\n",
-			regs.regs.features);
+			regs.features);
 		goto out;
 	}
 
-	saved_x19 = regs.regs.regs[19];
-	saved_x20 = regs.regs.regs[20];
-	saved_fpsr = regs.regs.fpsr;
-	saved_fpcr = regs.regs.fpcr;
-	saved_v0_lo = regs.regs.vregs[0].lo;
-	saved_v0_hi = regs.regs.vregs[0].hi;
-	saved_v1_lo = regs.regs.vregs[1].lo;
-	saved_v1_hi = regs.regs.vregs[1].hi;
+	saved_x19 = regs.regs[19];
+	saved_x20 = regs.regs[20];
+	saved_fpsr = regs.fpsr;
+	saved_fpcr = regs.fpcr;
+	saved_v0_lo = regs.vregs[0].lo;
+	saved_v0_hi = regs.vregs[0].hi;
+	saved_v1_lo = regs.vregs[1].lo;
+	saved_v1_hi = regs.vregs[1].hi;
 
 	expect_x19 = saved_x19 ^ 0x5a5a5a5a5a5a5a5aULL;
 	expect_x20 = saved_x20 ^ 0xa5a5a5a5a5a5a5a5ULL;
@@ -150,77 +147,69 @@ int main(void)
 	expect_v1_lo = saved_v1_lo ^ 0x100ULL;
 	expect_v1_hi = saved_v1_hi ^ 0x1000ULL;
 
-	regs.regs.regs[19] = expect_x19;
-	regs.regs.regs[20] = expect_x20;
-	regs.regs.fpsr = expect_fpsr;
-	regs.regs.fpcr = expect_fpcr;
-	regs.regs.vregs[0].lo = expect_v0_lo;
-	regs.regs.vregs[0].hi = expect_v0_hi;
-	regs.regs.vregs[1].lo = expect_v1_lo;
-	regs.regs.vregs[1].hi = expect_v1_hi;
-	if (set_target_regs(session_fd, &regs) < 0)
+	regs.regs[19] = expect_x19;
+	regs.regs[20] = expect_x20;
+	regs.fpsr = expect_fpsr;
+	regs.fpcr = expect_fpcr;
+	regs.vregs[0].lo = expect_v0_lo;
+	regs.vregs[0].hi = expect_v0_hi;
+	regs.vregs[1].lo = expect_v1_lo;
+	regs.vregs[1].hi = expect_v1_hi;
+	if (lkmdbg_registers_set(session, tid, &regs) < 0)
 		goto out;
 
 	memset(&regs, 0, sizeof(regs));
-	if (get_target_regs(session_fd, tid, &regs) < 0)
+	if (lkmdbg_registers_get(session, tid, &regs) < 0)
 		goto out;
-	if (regs.regs.regs[19] != expect_x19 ||
-	    regs.regs.regs[20] != expect_x20 ||
-	    regs.regs.fpsr != expect_fpsr ||
-	    regs.regs.fpcr != expect_fpcr ||
-	    regs.regs.vregs[0].lo != expect_v0_lo ||
-	    regs.regs.vregs[0].hi != expect_v0_hi ||
-	    regs.regs.vregs[1].lo != expect_v1_lo ||
-	    regs.regs.vregs[1].hi != expect_v1_hi) {
+	if (regs.regs[19] != expect_x19 || regs.regs[20] != expect_x20 ||
+	    regs.fpsr != expect_fpsr || regs.fpcr != expect_fpcr ||
+	    regs.vregs[0].lo != expect_v0_lo ||
+	    regs.vregs[0].hi != expect_v0_hi ||
+	    regs.vregs[1].lo != expect_v1_lo ||
+	    regs.vregs[1].hi != expect_v1_hi) {
 		fprintf(stderr,
 			"example_regs_fp: verify failed x19=0x%" PRIx64
 			" x20=0x%" PRIx64 " fpsr=0x%x fpcr=0x%x"
 			" v0=(0x%" PRIx64 ",0x%" PRIx64 ")"
 			" v1=(0x%" PRIx64 ",0x%" PRIx64 ")\n",
-			(uint64_t)regs.regs.regs[19],
-			(uint64_t)regs.regs.regs[20],
-			regs.regs.fpsr, regs.regs.fpcr,
-			(uint64_t)regs.regs.vregs[0].lo,
-			(uint64_t)regs.regs.vregs[0].hi,
-			(uint64_t)regs.regs.vregs[1].lo,
-			(uint64_t)regs.regs.vregs[1].hi);
+			(uint64_t)regs.regs[19], (uint64_t)regs.regs[20],
+			regs.fpsr, regs.fpcr, (uint64_t)regs.vregs[0].lo,
+			(uint64_t)regs.vregs[0].hi,
+			(uint64_t)regs.vregs[1].lo,
+			(uint64_t)regs.vregs[1].hi);
 		goto out;
 	}
 
-	regs.regs.regs[19] = saved_x19;
-	regs.regs.regs[20] = saved_x20;
-	regs.regs.fpsr = saved_fpsr;
-	regs.regs.fpcr = saved_fpcr;
-	regs.regs.vregs[0].lo = saved_v0_lo;
-	regs.regs.vregs[0].hi = saved_v0_hi;
-	regs.regs.vregs[1].lo = saved_v1_lo;
-	regs.regs.vregs[1].hi = saved_v1_hi;
-	if (set_target_regs(session_fd, &regs) < 0)
+	regs.regs[19] = saved_x19;
+	regs.regs[20] = saved_x20;
+	regs.fpsr = saved_fpsr;
+	regs.fpcr = saved_fpcr;
+	regs.vregs[0].lo = saved_v0_lo;
+	regs.vregs[0].hi = saved_v0_hi;
+	regs.vregs[1].lo = saved_v1_lo;
+	regs.vregs[1].hi = saved_v1_hi;
+	if (lkmdbg_registers_set(session, tid, &regs) < 0)
 		goto out;
 
 	memset(&regs, 0, sizeof(regs));
-	if (get_target_regs(session_fd, tid, &regs) < 0)
+	if (lkmdbg_registers_get(session, tid, &regs) < 0)
 		goto out;
-	if (regs.regs.regs[19] != saved_x19 ||
-	    regs.regs.regs[20] != saved_x20 ||
-	    regs.regs.fpsr != saved_fpsr ||
-	    regs.regs.fpcr != saved_fpcr ||
-	    regs.regs.vregs[0].lo != saved_v0_lo ||
-	    regs.regs.vregs[0].hi != saved_v0_hi ||
-	    regs.regs.vregs[1].lo != saved_v1_lo ||
-	    regs.regs.vregs[1].hi != saved_v1_hi) {
+	if (regs.regs[19] != saved_x19 || regs.regs[20] != saved_x20 ||
+	    regs.fpsr != saved_fpsr || regs.fpcr != saved_fpcr ||
+	    regs.vregs[0].lo != saved_v0_lo ||
+	    regs.vregs[0].hi != saved_v0_hi ||
+	    regs.vregs[1].lo != saved_v1_lo ||
+	    regs.vregs[1].hi != saved_v1_hi) {
 		fprintf(stderr,
 			"example_regs_fp: restore verify failed x19=0x%" PRIx64
 			" x20=0x%" PRIx64 " fpsr=0x%x fpcr=0x%x"
 			" v0=(0x%" PRIx64 ",0x%" PRIx64 ")"
 			" v1=(0x%" PRIx64 ",0x%" PRIx64 ")\n",
-			(uint64_t)regs.regs.regs[19],
-			(uint64_t)regs.regs.regs[20],
-			regs.regs.fpsr, regs.regs.fpcr,
-			(uint64_t)regs.regs.vregs[0].lo,
-			(uint64_t)regs.regs.vregs[0].hi,
-			(uint64_t)regs.regs.vregs[1].lo,
-			(uint64_t)regs.regs.vregs[1].hi);
+			(uint64_t)regs.regs[19], (uint64_t)regs.regs[20],
+			regs.fpsr, regs.fpcr, (uint64_t)regs.vregs[0].lo,
+			(uint64_t)regs.vregs[0].hi,
+			(uint64_t)regs.vregs[1].lo,
+			(uint64_t)regs.vregs[1].hi);
 		goto out;
 	}
 
@@ -230,9 +219,8 @@ int main(void)
 
 out:
 	if (frozen)
-		(void)thaw_target_threads(session_fd, 2000, NULL, 0);
-	if (session_fd >= 0)
-		close(session_fd);
+		(void)lkmdbg_threads_thaw(session, 2000, NULL);
+	lkmdbg_session_close(session);
 	kill(child, SIGKILL);
 	waitpid(child, NULL, 0);
 	return status;
