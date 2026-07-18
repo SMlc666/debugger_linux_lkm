@@ -10,9 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "../../include/lkmdbg_ioctl.h"
-#include "../driver/bridge_c.h"
-#include "../driver/bridge_memory.h"
+#include "lkmdbg/lkmdbg.h"
 
 struct example_child_info {
 	uintptr_t map_addr;
@@ -20,7 +18,8 @@ struct example_child_info {
 	uint32_t map_len;
 };
 
-static int run_mem_xfer_loops(int session_fd, uintptr_t remote_addr, uint8_t *buf,
+static int run_mem_xfer_loops(struct lkmdbg_session *session,
+			      uintptr_t remote_addr, uint8_t *buf,
 			      size_t total_len, size_t chunk_len, int loops,
 			      int write, const char *tag)
 {
@@ -31,28 +30,27 @@ static int run_mem_xfer_loops(int session_fd, uintptr_t remote_addr, uint8_t *bu
 
 		while (done < total_len) {
 			size_t this_len = total_len - done;
-			uint32_t bytes_done = 0;
+			struct lkmdbg_transfer_result transfer;
 			int ret;
 
 			if (this_len > chunk_len)
 				this_len = chunk_len;
 
 			if (write) {
-				ret = write_target_memory(session_fd,
-							  remote_addr + done,
-							  buf + done, this_len,
-							  &bytes_done, 0);
+				ret = lkmdbg_memory_write(session, remote_addr + done,
+							  buf + done, this_len, 0,
+							  &transfer);
 			} else {
-				ret = read_target_memory(session_fd,
-							 remote_addr + done,
-							 buf + done, this_len,
-							 &bytes_done, 0);
+				ret = lkmdbg_memory_read(session, remote_addr + done,
+							 buf + done, this_len, 0,
+							 &transfer);
 			}
 
-			if (ret < 0 || bytes_done != this_len) {
+			if (ret < 0 || transfer.bytes_done != this_len) {
 				fprintf(stderr,
-					"example_perf_baseline: %s failed loop=%d off=%zu req=%zu done=%u\n",
-					tag, loop, done, this_len, bytes_done);
+					"example_perf_baseline: %s failed loop=%d off=%zu req=%zu done=%" PRIu64 "\n",
+					tag, loop, done, this_len,
+					transfer.bytes_done);
 				return -1;
 			}
 
@@ -154,7 +152,8 @@ int main(void)
 	int cmd_pipe[2];
 	struct example_child_info info;
 	struct lkmdbg_phys_op translate_op;
-	struct lkmdbg_phys_request phys_req;
+	struct lkmdbg_remote_allocation *rw_allocation = NULL;
+	struct lkmdbg_session *session = NULL;
 	uint8_t *buf = NULL;
 	uint64_t t0;
 	uint64_t t1;
@@ -172,15 +171,12 @@ int main(void)
 	size_t chunk_len;
 	size_t rw_alloc_len;
 	pid_t child;
-	int session_fd = -1;
 	char cmd = 'q';
-	uint64_t rw_alloc_id = 0;
 	int i;
 	int status = 1;
 
 	memset(&info, 0, sizeof(info));
 	memset(&translate_op, 0, sizeof(translate_op));
-	memset(&phys_req, 0, sizeof(phys_req));
 
 	if (pipe(info_pipe) != 0 || pipe(cmd_pipe) != 0) {
 		fprintf(stderr, "example_perf_baseline: pipe failed errno=%d\n",
@@ -215,10 +211,9 @@ int main(void)
 		goto out;
 	}
 
-	session_fd = open_session_fd();
-	if (session_fd < 0)
+	if (lkmdbg_session_open(&session) < 0)
 		goto out;
-	if (set_target(session_fd, child) < 0)
+	if (lkmdbg_session_set_target(session, child, 0) < 0)
 		goto out;
 
 	bench_len = info.page_size * 128U;
@@ -231,38 +226,33 @@ int main(void)
 	bench_base = shell_addr;
 	rw_alloc_len = info.page_size * 2U;
 	{
-		struct lkmdbg_remote_alloc_request rw_alloc_req = {
-			.version = LKMDBG_PROTO_VERSION,
-			.size = sizeof(rw_alloc_req),
-			.remote_addr = shell_addr,
+		struct lkmdbg_remote_alloc_options options = {
+			.remote_address = shell_addr,
 			.length = rw_alloc_len,
-			.prot = LKMDBG_REMOTE_ALLOC_PROT_READ |
+			.protection = LKMDBG_REMOTE_ALLOC_PROT_READ |
 				LKMDBG_REMOTE_ALLOC_PROT_WRITE,
 		};
 		int alloc_ret;
 		int alloc_errno = 0;
 
-			errno = 0;
-			alloc_ret = bridge_create_remote_alloc(
-				session_fd, shell_addr, rw_alloc_len,
-				LKMDBG_REMOTE_ALLOC_PROT_READ |
-					LKMDBG_REMOTE_ALLOC_PROT_WRITE,
-				0, &rw_alloc_req);
-			if (alloc_ret < 0)
-				alloc_errno = errno;
-		if (alloc_ret < 0 || !rw_alloc_req.alloc_id ||
-		    rw_alloc_req.mapped_length < rw_alloc_len) {
+		errno = 0;
+		alloc_ret = lkmdbg_remote_alloc_create(session, &options,
+						      &rw_allocation);
+		if (alloc_ret < 0)
+			alloc_errno = errno;
+		if (alloc_ret < 0 || !lkmdbg_remote_alloc_id(rw_allocation) ||
+		    lkmdbg_remote_alloc_length(rw_allocation) < rw_alloc_len) {
 			fprintf(stderr,
 				"example_perf_baseline: CREATE_REMOTE_ALLOC(rw) failed ret=%d errno=%d id=%" PRIu64
 				" len=%" PRIu64 " target=%d shell=0x%" PRIxPTR " req_len=%zu page=%u map=0x%"
 				PRIxPTR "/%u\n",
-				alloc_ret, alloc_errno, (uint64_t)rw_alloc_req.alloc_id,
-				(uint64_t)rw_alloc_req.mapped_length, child, shell_addr,
+				alloc_ret, alloc_errno,
+				lkmdbg_remote_alloc_id(rw_allocation),
+				lkmdbg_remote_alloc_length(rw_allocation), child, shell_addr,
 				rw_alloc_len, info.page_size, info.map_addr, info.map_len);
 			goto out;
 		}
-		rw_alloc_id = rw_alloc_req.alloc_id;
-		bench_base = (uintptr_t)rw_alloc_req.remote_addr;
+		bench_base = lkmdbg_remote_alloc_address(rw_allocation);
 	}
 	if (bench_len > rw_alloc_len / 2U)
 		bench_len = rw_alloc_len / 2U;
@@ -278,23 +268,23 @@ int main(void)
 	memset(buf, 0x5A, bench_len);
 
 	/* Warmup */
-	if (run_mem_xfer_loops(session_fd, bench_base, buf, bench_len,
+	if (run_mem_xfer_loops(session, bench_base, buf, bench_len,
 			       chunk_len, 1, 0, "READ_MEM warmup") < 0)
 		goto out;
-	if (run_mem_xfer_loops(session_fd, bench_base + bench_len, buf,
+	if (run_mem_xfer_loops(session, bench_base + bench_len, buf,
 			       bench_len, chunk_len, 1, 1,
 			       "WRITE_MEM warmup") < 0)
 		goto out;
 
 	t0 = now_ns();
-	if (run_mem_xfer_loops(session_fd, bench_base, buf, bench_len,
+	if (run_mem_xfer_loops(session, bench_base, buf, bench_len,
 			       chunk_len, LOOPS_RW, 0, "READ_MEM") < 0)
 		goto out;
 	t1 = now_ns();
 	ns_read = t1 - t0;
 
 	t0 = now_ns();
-	if (run_mem_xfer_loops(session_fd, bench_base + bench_len, buf,
+	if (run_mem_xfer_loops(session, bench_base + bench_len, buf,
 			       bench_len, chunk_len, LOOPS_RW, 1,
 			       "WRITE_MEM") < 0)
 		goto out;
@@ -304,17 +294,12 @@ int main(void)
 	t0 = now_ns();
 	for (i = 0; i < LOOPS_XLATE; i++) {
 		memset(&translate_op, 0, sizeof(translate_op));
-		memset(&phys_req, 0, sizeof(phys_req));
-		translate_op.phys_addr = bench_base + (uintptr_t)((i % 32) * 64);
-		translate_op.length = 8;
-		translate_op.flags = LKMDBG_PHYS_OP_FLAG_TARGET_VADDR |
-				     LKMDBG_PHYS_OP_FLAG_TRANSLATE_ONLY;
-		if (xfer_physical_memory(session_fd, &translate_op, 1, 0, &phys_req,
-					 0) < 0 ||
-		    phys_req.ops_done != 1 || !translate_op.resolved_phys_addr) {
+		if (lkmdbg_virtual_to_physical(
+			    session, bench_base + (uintptr_t)((i % 32) * 64), 8,
+			    &translate_op) < 0) {
 			fprintf(stderr,
-				"example_perf_baseline: translate failed loop=%d ops=%u pa=0x%" PRIx64 "\n",
-				i, phys_req.ops_done,
+				"example_perf_baseline: translate failed loop=%d pa=0x%" PRIx64 "\n",
+				i,
 				(uint64_t)translate_op.resolved_phys_addr);
 			goto out;
 		}
@@ -322,59 +307,42 @@ int main(void)
 	t1 = now_ns();
 	ns_xlate = t1 - t0;
 
-	if (rw_alloc_id) {
-		struct lkmdbg_remote_alloc_handle_request rw_free_req = {
-			.version = LKMDBG_PROTO_VERSION,
-			.size = sizeof(rw_free_req),
-			.alloc_id = rw_alloc_id,
-		};
-
-			if (bridge_remove_remote_alloc(session_fd, rw_alloc_id,
-						       &rw_free_req) < 0) {
-				fprintf(stderr,
-					"example_perf_baseline: REMOVE_REMOTE_ALLOC(rw) failed errno=%d\n",
-					errno);
+	if (rw_allocation) {
+		if (lkmdbg_remote_alloc_destroy(rw_allocation) < 0) {
+			fprintf(stderr,
+				"example_perf_baseline: REMOVE_REMOTE_ALLOC(rw) failed errno=%d\n",
+				errno);
 			goto out;
 		}
-		rw_alloc_id = 0;
+		rw_allocation = NULL;
 	}
 
 	t0 = now_ns();
 	for (i = 0; i < LOOPS_ALLOC; i++) {
-		struct lkmdbg_remote_alloc_request alloc_req = {
-			.version = LKMDBG_PROTO_VERSION,
-			.size = sizeof(alloc_req),
-			.remote_addr = shell_addr,
+		struct lkmdbg_remote_alloc_options options = {
+			.remote_address = shell_addr,
 			.length = info.page_size * 2U,
-			.prot = LKMDBG_REMOTE_ALLOC_PROT_READ |
+			.protection = LKMDBG_REMOTE_ALLOC_PROT_READ |
 				LKMDBG_REMOTE_ALLOC_PROT_WRITE,
 		};
-		struct lkmdbg_remote_alloc_handle_request free_req = {
-			.version = LKMDBG_PROTO_VERSION,
-			.size = sizeof(free_req),
-		};
+		struct lkmdbg_remote_allocation *allocation = NULL;
 
-			if (bridge_create_remote_alloc(
-				    session_fd, shell_addr, info.page_size * 2U,
-				    LKMDBG_REMOTE_ALLOC_PROT_READ |
-					    LKMDBG_REMOTE_ALLOC_PROT_WRITE,
-				    0, &alloc_req) < 0 ||
-			    !alloc_req.alloc_id) {
-				fprintf(stderr,
-					"example_perf_baseline: CREATE_REMOTE_ALLOC failed loop=%d errno=%d id=%" PRIu64
+		if (lkmdbg_remote_alloc_create(session, &options, &allocation) < 0 ||
+		    !lkmdbg_remote_alloc_id(allocation)) {
+			fprintf(stderr,
+				"example_perf_baseline: CREATE_REMOTE_ALLOC failed loop=%d errno=%d id=%" PRIu64
 				" len=%" PRIu64 " shell=0x%" PRIxPTR "\n",
-				i, errno, (uint64_t)alloc_req.alloc_id,
-				(uint64_t)alloc_req.mapped_length, shell_addr);
+				i, errno, lkmdbg_remote_alloc_id(allocation),
+				lkmdbg_remote_alloc_length(allocation), shell_addr);
+			if (allocation)
+				(void)lkmdbg_remote_alloc_destroy(allocation);
 			goto out;
 		}
 
-		free_req.alloc_id = alloc_req.alloc_id;
-			if (bridge_remove_remote_alloc(session_fd,
-						       free_req.alloc_id,
-						       &free_req) < 0) {
-				fprintf(stderr,
-					"example_perf_baseline: REMOVE_REMOTE_ALLOC failed loop=%d errno=%d\n",
-					i, errno);
+		if (lkmdbg_remote_alloc_destroy(allocation) < 0) {
+			fprintf(stderr,
+				"example_perf_baseline: REMOVE_REMOTE_ALLOC failed loop=%d errno=%d\n",
+				i, errno);
 			goto out;
 		}
 	}
@@ -394,19 +362,11 @@ int main(void)
 	       LOOPS_XLATE, LOOPS_ALLOC);
 
 out:
-	if (rw_alloc_id && session_fd >= 0) {
-		struct lkmdbg_remote_alloc_handle_request rw_free_req = {
-			.version = LKMDBG_PROTO_VERSION,
-			.size = sizeof(rw_free_req),
-			.alloc_id = rw_alloc_id,
-		};
-		(void)bridge_remove_remote_alloc(session_fd, rw_alloc_id,
-						 &rw_free_req);
-	}
+	if (rw_allocation)
+		(void)lkmdbg_remote_alloc_destroy(rw_allocation);
 	(void)write_full(cmd_pipe[1], &cmd, sizeof(cmd));
 	free(buf);
-	if (session_fd >= 0)
-		close(session_fd);
+	lkmdbg_session_close(session);
 	close(info_pipe[0]);
 	close(cmd_pipe[1]);
 	kill(child, SIGKILL);

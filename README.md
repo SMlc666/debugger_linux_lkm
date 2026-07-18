@@ -81,7 +81,8 @@ cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_vma
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_remote_alloc_rw tools/examples/example_remote_alloc_rw.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_remote_map_rw tools/examples/example_remote_map_rw.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_phys_translate_read tools/examples/example_phys_translate_read.c userspace/src/lkmdbg.c
-cc -O2 -Wall -Wextra -o tools/examples/example_perf_baseline tools/examples/example_perf_baseline.c tools/driver/bridge_c.c tools/driver/bridge_memory.c
+cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_perf_baseline tools/examples/example_perf_baseline.c userspace/src/lkmdbg.c
+cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_throughput_compare tools/examples/example_throughput_compare.c userspace/src/lkmdbg.c
 ```
 
 `tools/examples/` now provides one-file runnable examples for core session-fd flows and is executed in QEMU smoke CI.

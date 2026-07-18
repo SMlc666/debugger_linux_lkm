@@ -14,8 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "../driver/bridge_c.h"
-#include "../driver/bridge_memory.h"
+#include "lkmdbg/lkmdbg.h"
 
 struct example_child_info {
 	uintptr_t map_addr;
@@ -69,7 +68,8 @@ static ssize_t write_full(int fd, const void *buf, size_t len)
 	return (ssize_t)done;
 }
 
-static int run_lkm_xfer_loops(int session_fd, uintptr_t remote_addr, uint8_t *buf,
+static int run_lkm_xfer_loops(struct lkmdbg_session *session,
+			      uintptr_t remote_addr, uint8_t *buf,
 			      size_t total_len, size_t chunk_len, int loops,
 			      int write, const char *tag)
 {
@@ -80,26 +80,25 @@ static int run_lkm_xfer_loops(int session_fd, uintptr_t remote_addr, uint8_t *bu
 
 		while (done < total_len) {
 			size_t this_len = total_len - done;
-			uint32_t bytes_done = 0;
+			struct lkmdbg_transfer_result transfer;
 			int ret;
 
 			if (this_len > chunk_len)
 				this_len = chunk_len;
 			if (write) {
-				ret = write_target_memory(session_fd,
-							  remote_addr + done,
-							  buf + done, this_len,
-							  &bytes_done, 0);
+				ret = lkmdbg_memory_write(session, remote_addr + done,
+							  buf + done, this_len, 0,
+							  &transfer);
 			} else {
-				ret = read_target_memory(session_fd,
-							 remote_addr + done,
-							 buf + done, this_len,
-							 &bytes_done, 0);
+				ret = lkmdbg_memory_read(session, remote_addr + done,
+							 buf + done, this_len, 0,
+							 &transfer);
 			}
-			if (ret < 0 || bytes_done != this_len) {
+			if (ret < 0 || transfer.bytes_done != this_len) {
 				fprintf(stderr,
-					"example_throughput_compare: %s failed loop=%d off=%zu req=%zu done=%u\n",
-					tag, loop, done, this_len, bytes_done);
+					"example_throughput_compare: %s failed loop=%d off=%zu req=%zu done=%" PRIu64 "\n",
+					tag, loop, done, this_len,
+					transfer.bytes_done);
 				return -1;
 			}
 
@@ -223,7 +222,7 @@ int main(void)
 	size_t chunk_len;
 	size_t i;
 	pid_t child;
-	int session_fd = -1;
+	struct lkmdbg_session *session = NULL;
 	char cmd = 'q';
 	int status = 1;
 
@@ -264,10 +263,9 @@ int main(void)
 		goto out;
 	}
 
-	session_fd = open_session_fd();
-	if (session_fd < 0)
+	if (lkmdbg_session_open(&session) < 0)
 		goto out;
-	if (set_target(session_fd, child) < 0)
+	if (lkmdbg_session_set_target(session, child, 0) < 0)
 		goto out;
 
 	bench_len = DEFAULT_BENCH_LEN;
@@ -302,10 +300,10 @@ int main(void)
 		write_buf[i] = (uint8_t)(0xa0U + (i & 0x1fU));
 	memset(verify_buf, 0, bench_len);
 
-	if (run_lkm_xfer_loops(session_fd, read_base, read_buf, bench_len,
+	if (run_lkm_xfer_loops(session, read_base, read_buf, bench_len,
 			       chunk_len, 1, 0, "READ_MEM warmup") < 0)
 		goto out;
-	if (run_lkm_xfer_loops(session_fd, write_base, write_buf, bench_len,
+	if (run_lkm_xfer_loops(session, write_base, write_buf, bench_len,
 			       chunk_len, 1, 1, "WRITE_MEM warmup") < 0)
 		goto out;
 	if (run_vm_xfer_loops(child, read_base, read_buf, bench_len, chunk_len, 1,
@@ -316,14 +314,14 @@ int main(void)
 		goto out;
 
 	t0 = now_ns();
-	if (run_lkm_xfer_loops(session_fd, read_base, read_buf, bench_len,
+	if (run_lkm_xfer_loops(session, read_base, read_buf, bench_len,
 			       chunk_len, LOOPS_RW, 0, "READ_MEM") < 0)
 		goto out;
 	t1 = now_ns();
 	ns_lkm_read = t1 - t0;
 
 	t0 = now_ns();
-	if (run_lkm_xfer_loops(session_fd, write_base, write_buf, bench_len,
+	if (run_lkm_xfer_loops(session, write_base, write_buf, bench_len,
 			       chunk_len, LOOPS_RW, 1, "WRITE_MEM") < 0)
 		goto out;
 	t1 = now_ns();
@@ -376,8 +374,7 @@ out:
 	free(read_buf);
 	free(write_buf);
 	free(verify_buf);
-	if (session_fd >= 0)
-		close(session_fd);
+	lkmdbg_session_close(session);
 	close(info_pipe[0]);
 	close(cmd_pipe[1]);
 	kill(child, SIGKILL);

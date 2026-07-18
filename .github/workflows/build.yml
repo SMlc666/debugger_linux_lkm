@@ -501,15 +501,17 @@ jobs:
             "$GITHUB_WORKSPACE/tools/examples/example_phys_translate_read.c" \
             "$GITHUB_WORKSPACE/userspace/src/lkmdbg.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -I "$GITHUB_WORKSPACE/userspace/include" \
+            -I "$GITHUB_WORKSPACE/include" \
             -o "$RUNNER_TEMP/lkmdbg_example_perf_baseline" \
             "$GITHUB_WORKSPACE/tools/examples/example_perf_baseline.c" \
-            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
-            "$GITHUB_WORKSPACE/tools/driver/bridge_memory.c"
+            "$GITHUB_WORKSPACE/userspace/src/lkmdbg.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -I "$GITHUB_WORKSPACE/userspace/include" \
+            -I "$GITHUB_WORKSPACE/include" \
             -o "$RUNNER_TEMP/lkmdbg_example_throughput_compare" \
             "$GITHUB_WORKSPACE/tools/examples/example_throughput_compare.c" \
-            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
-            "$GITHUB_WORKSPACE/tools/driver/bridge_memory.c"
+            "$GITHUB_WORKSPACE/userspace/src/lkmdbg.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
             -o "$RUNNER_TEMP/lkmdbg_example_view_external_read" \
             "$GITHUB_WORKSPACE/tools/examples/example_view_external_read.c" \
