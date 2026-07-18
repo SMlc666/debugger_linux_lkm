@@ -19,6 +19,7 @@ Current source layout:
 - `mem/`: target memory read/write helpers
 - `ui/`: debugfs status export
 - `include/`: shared kernel/user protocol and internal declarations
+- `userspace/`: supported `liblkmdbg` C SDK, packaging, and tests
 - `tools/`: host-side CLI tools, examples, and reusable bridge helpers
 
 Current hook support is intentionally minimal:
@@ -53,11 +54,24 @@ make KDIR=/path/to/kernel/build
 Build the user-space bootstrap test tool:
 
 ```bash
+cmake -S userspace -B build/userspace -G Ninja
+cmake --build build/userspace
+ctest --test-dir build/userspace --output-on-failure
+```
+
+This produces the supported `liblkmdbg.so` and `liblkmdbg.a` libraries. See
+[`userspace/README.md`](userspace/README.md) for installation and API details.
+The older `tools/driver/bridge_*` helpers remain as compatibility code while
+the command-line tools migrate to the SDK.
+
+Build the legacy user-space tools directly:
+
+```bash
 cc -O2 -Wall -Wextra -o tools/lkmdbg_open_session tools/lkmdbg_open_session.c tools/driver/bridge_c.c
 cc -O2 -Wall -Wextra -o tools/lkmdbg_stealth_ctl tools/lkmdbg_stealth_ctl.c
 cc -O2 -Wall -Wextra -pthread -o tools/lkmdbg_mem_test tools/lkmdbg_mem_test.c tools/driver/bridge_c.c tools/driver/bridge_events.c tools/driver/bridge_memory.c tools/driver/bridge_control.c
 cc -O2 -Wall -Wextra -o tools/lkmdbg_sysrule_ctl tools/lkmdbg_sysrule_ctl.c tools/driver/bridge_c.c tools/driver/bridge_control.c
-cc -O2 -Wall -Wextra -o tools/examples/example_session_status tools/examples/example_session_status.c tools/driver/bridge_c.c
+cc -O2 -Wall -Wextra -Iuserspace/include -Iinclude -o tools/examples/example_session_status tools/examples/example_session_status.c userspace/src/lkmdbg.c
 cc -O2 -Wall -Wextra -o tools/examples/example_mem_rw tools/examples/example_mem_rw.c tools/driver/bridge_c.c tools/driver/bridge_memory.c
 cc -O2 -Wall -Wextra -o tools/examples/example_threads_query tools/examples/example_threads_query.c tools/driver/bridge_c.c tools/driver/bridge_control.c
 cc -O2 -Wall -Wextra -o tools/examples/example_regs_fp tools/examples/example_regs_fp.c tools/driver/bridge_c.c tools/driver/bridge_control.c
@@ -103,7 +117,7 @@ sudo ./tools/lkmdbg_sysrule_ctl list <pid>
 - `rwnr` (requires trailing `rewrite_nr`)
 - `rwret`
 
-User-space driver code is split under `tools/driver/`:
+Legacy user-space driver code is split under `tools/driver/`:
 
 - `session.*` for session open/target/status
 - `events.*` for event config ioctls

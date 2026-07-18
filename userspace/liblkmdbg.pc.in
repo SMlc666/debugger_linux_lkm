@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: liblkmdbg
+Description: User-space SDK for the lkmdbg kernel module
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -llkmdbg
+Cflags: -I${includedir}

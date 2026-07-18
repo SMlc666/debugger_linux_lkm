@@ -102,6 +102,62 @@ jobs:
             tools/lkmdbg_input_vm_abi_test.c
           "$RUNNER_TEMP/lkmdbg_input_vm_abi_test"
 
+  userspace-sdk:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and test SDK
+        env:
+          CC: ${{ matrix.compiler }}
+        run: |
+          cmake -S userspace -B "$RUNNER_TEMP/sdk-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Werror"
+          cmake --build "$RUNNER_TEMP/sdk-build"
+          ctest --test-dir "$RUNNER_TEMP/sdk-build" --output-on-failure
+
+      - name: Test installed SDK
+        env:
+          CC: ${{ matrix.compiler }}
+        run: |
+          cmake --install "$RUNNER_TEMP/sdk-build" \
+            --prefix "$RUNNER_TEMP/sdk-install"
+          export PKG_CONFIG_PATH="$RUNNER_TEMP/sdk-install/lib/pkgconfig"
+          "$CC" -O2 -Wall -Wextra -Werror \
+            -o "$RUNNER_TEMP/sdk-consumer" \
+            userspace/tests/test_api.c \
+            $(pkg-config --cflags --libs liblkmdbg)
+          LD_LIBRARY_PATH="$RUNNER_TEMP/sdk-install/lib" \
+            "$RUNNER_TEMP/sdk-consumer"
+          "$CC" -O2 -Wall -Wextra -Werror \
+            $(pkg-config --cflags liblkmdbg) \
+            -o "$RUNNER_TEMP/sdk-consumer-static" \
+            userspace/tests/test_api.c \
+            "$RUNNER_TEMP/sdk-install/lib/liblkmdbg.a"
+          "$RUNNER_TEMP/sdk-consumer-static"
+          printf '#include <lkmdbg/lkmdbg.h>\nint main() { return 0; }\n' | \
+            c++ -x c++ -std=c++17 -Wall -Wextra -Werror \
+              $(pkg-config --cflags liblkmdbg) -c -o "$RUNNER_TEMP/sdk-cxx.o" -
+
+      - name: Test SDK with UBSan
+        if: matrix.compiler == 'clang'
+        env:
+          CC: clang
+        run: |
+          cmake -S userspace -B "$RUNNER_TEMP/sdk-sanitize" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -fsanitize=undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=undefined"
+          cmake --build "$RUNNER_TEMP/sdk-sanitize"
+          ctest --test-dir "$RUNNER_TEMP/sdk-sanitize" --output-on-failure
+
   qemu-arm64-build-artifacts:
     runs-on: ubuntu-24.04
     needs: prepare-ci-image
@@ -381,9 +437,11 @@ jobs:
             "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
             "$GITHUB_WORKSPACE/tools/driver/bridge_control.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -I "$GITHUB_WORKSPACE/userspace/include" \
+            -I "$GITHUB_WORKSPACE/include" \
             -o "$RUNNER_TEMP/lkmdbg_example_session_status" \
             "$GITHUB_WORKSPACE/tools/examples/example_session_status.c" \
-            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c"
+            "$GITHUB_WORKSPACE/userspace/src/lkmdbg.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static -pthread \
             -o "$RUNNER_TEMP/lkmdbg_example_session_lifecycle_stress" \
             "$GITHUB_WORKSPACE/tools/examples/example_session_lifecycle_stress.c" \
