@@ -322,7 +322,9 @@ fail_remove:
 			.size = sizeof(remove_req),
 			.map_id = req.map_id,
 		};
-		(void)ioctl(session->fd, LKMDBG_IOC_REMOVE_REMOTE_MAP, &remove_req);
+		if (req.map_id != 0)
+			(void)ioctl(session->fd, LKMDBG_IOC_REMOVE_REMOTE_MAP,
+				    &remove_req);
 		if (req.map_fd >= 0)
 			close(req.map_fd);
 		errno = saved_errno;
@@ -369,7 +371,8 @@ int lkmdbg_remote_map_destroy(struct lkmdbg_remote_mapping *mapping)
 		.size = sizeof(req),
 		.map_id = mapping->map_id,
 	};
-	if (ioctl(mapping->session_fd, LKMDBG_IOC_REMOVE_REMOTE_MAP, &req) < 0 &&
+	if (mapping->map_id != 0 &&
+	    ioctl(mapping->session_fd, LKMDBG_IOC_REMOVE_REMOTE_MAP, &req) < 0 &&
 	    errno != ENOENT && errno != ESRCH) {
 		ret = -1;
 		saved_errno = errno;

@@ -43,7 +43,8 @@ lkmdbg_session_close(session);
   single-consumer unless the application provides its own dispatch layer.
 - A remote mapping duplicates the session fd and remains independently
   destructible after the original session object is closed.
-- `lkmdbg_remote_map_destroy()` removes the kernel resource before unmapping the
-  local view. Target exit and prior removal are accepted during cleanup.
+- `lkmdbg_remote_map_destroy()` explicitly removes ID-backed stealth mappings;
+  ordinary fd-backed mappings are released by unmapping and closing their map
+  fd. Target exit and prior removal are accepted during cleanup.
 - Failed memory transfers still populate `struct lkmdbg_transfer_result` with
   the kernel-reported partial progress.
