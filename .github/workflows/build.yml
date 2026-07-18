@@ -519,10 +519,11 @@ jobs:
             "$GITHUB_WORKSPACE/tools/examples/example_view_external_read.c" \
             "$GITHUB_WORKSPACE/userspace/src/lkmdbg.c"
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -static \
+            -I "$GITHUB_WORKSPACE/userspace/include" \
+            -I "$GITHUB_WORKSPACE/include" \
             -o "$RUNNER_TEMP/lkmdbg_example_view_wxshadow_exec" \
             "$GITHUB_WORKSPACE/tools/examples/example_view_wxshadow_exec.c" \
-            "$GITHUB_WORKSPACE/tools/driver/bridge_c.c" \
-            "$GITHUB_WORKSPACE/tools/driver/bridge_memory.c"
+            "$GITHUB_WORKSPACE/userspace/src/lkmdbg.c"
           mkdir -p "$INITRAMFS_DIR/dev" "$INITRAMFS_DIR/proc" \
             "$INITRAMFS_DIR/sys" "$INITRAMFS_DIR/sys/kernel" \
             "$INITRAMFS_DIR/sys/kernel/debug"

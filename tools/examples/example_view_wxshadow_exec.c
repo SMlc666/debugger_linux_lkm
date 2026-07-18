@@ -12,9 +12,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "../../include/lkmdbg_ioctl.h"
-#include "../driver/bridge_c.h"
-#include "../driver/bridge_memory.h"
+#include "lkmdbg/lkmdbg.h"
 
 static ssize_t write_full(int fd, const void *buf, size_t len)
 {
@@ -119,29 +117,26 @@ int main(void)
 	uint8_t *patch_page = NULL;
 	uint8_t *kernel_read = NULL;
 	uint8_t *external_read = NULL;
-	struct lkmdbg_view_region_request region_reply;
+	struct lkmdbg_view_region *region = NULL;
+	struct lkmdbg_session *session = NULL;
 	struct lkmdbg_view_backing_request write_backing_reply;
 	struct lkmdbg_view_backing_request exec_backing_reply;
 	struct lkmdbg_view_backing_request reset_reply;
 	struct lkmdbg_view_region_query_request query_reply;
-	struct lkmdbg_view_region_handle_request remove_reply;
+	struct lkmdbg_transfer_result transfer;
 	struct lkmdbg_view_region_entry entry;
 	struct iovec local_iov;
 	struct iovec remote_iov;
 	pid_t child = -1;
 	int cmd_pipe[2] = { -1, -1 };
 	int resp_pipe[2] = { -1, -1 };
-	int session_fd = -1;
 	int status = 1;
-	uint32_t bytes_done = 0;
 	uint64_t retval = 0;
 
-	memset(&region_reply, 0, sizeof(region_reply));
 	memset(&write_backing_reply, 0, sizeof(write_backing_reply));
 	memset(&exec_backing_reply, 0, sizeof(exec_backing_reply));
 	memset(&reset_reply, 0, sizeof(reset_reply));
 	memset(&query_reply, 0, sizeof(query_reply));
-	memset(&remove_reply, 0, sizeof(remove_reply));
 	memset(&entry, 0, sizeof(entry));
 
 	page_size = (size_t)sysconf(_SC_PAGESIZE);
@@ -211,10 +206,9 @@ int main(void)
 	close(resp_pipe[1]);
 	resp_pipe[1] = -1;
 
-	session_fd = open_session_fd();
-	if (session_fd < 0)
+	if (lkmdbg_session_open(&session) < 0)
 		goto out;
-	if (set_target(session_fd, child) < 0)
+	if (lkmdbg_session_set_target(session, child, 0) < 0)
 		goto out;
 
 	if (child_call0(cmd_pipe[1], resp_pipe[0], (uintptr_t)page, &retval) < 0 ||
@@ -225,30 +219,33 @@ int main(void)
 		goto out;
 	}
 
-	if (create_view_region(session_fd, (uintptr_t)page, page_size,
-			       LKMDBG_VIEW_ACCESS_READ |
+	{
+		struct lkmdbg_view_region_options options = {
+			.base_address = (uintptr_t)page,
+			.length = page_size,
+			.access_mask = LKMDBG_VIEW_ACCESS_READ |
 				       LKMDBG_VIEW_ACCESS_WRITE |
 				       LKMDBG_VIEW_ACCESS_EXEC,
-			       LKMDBG_VIEW_BACKEND_AUTO,
-			       LKMDBG_VIEW_FAULT_POLICY_TRAP_ONLY,
-			       LKMDBG_VIEW_SYNC_NONE,
-			       LKMDBG_VIEW_WRITEBACK_DISCARD,
-			       &region_reply) < 0)
+			.backend = LKMDBG_VIEW_BACKEND_AUTO,
+			.fault_policy = LKMDBG_VIEW_FAULT_POLICY_TRAP_ONLY,
+			.sync_policy = LKMDBG_VIEW_SYNC_NONE,
+			.writeback_policy = LKMDBG_VIEW_WRITEBACK_DISCARD,
+		};
+		if (lkmdbg_view_region_create(session, &options, &region) < 0)
+			goto out;
+	}
+
+	if (lkmdbg_view_region_set_backing(
+		    region, LKMDBG_VIEW_KIND_WRITE, shadow_page, page_size,
+		    LKMDBG_VIEW_BACKING_USER_BUFFER, &write_backing_reply) < 0)
+		goto out;
+	if (lkmdbg_view_region_set_backing(
+		    region, LKMDBG_VIEW_KIND_EXEC, shadow_page, page_size,
+		    LKMDBG_VIEW_BACKING_USER_BUFFER, &exec_backing_reply) < 0)
 		goto out;
 
-	if (set_view_region_write_backing(session_fd, region_reply.region_id,
-					  shadow_page, page_size,
-					  LKMDBG_VIEW_BACKING_USER_BUFFER,
-					  &write_backing_reply) < 0)
-		goto out;
-	if (set_view_region_exec_backing(session_fd, region_reply.region_id,
-					 shadow_page, page_size,
-					 LKMDBG_VIEW_BACKING_USER_BUFFER,
-					 &exec_backing_reply) < 0)
-		goto out;
-
-	if (query_view_regions(session_fd, region_reply.region_id, &entry, 1,
-			       &query_reply) < 0)
+	if (lkmdbg_view_regions_query(session, lkmdbg_view_region_id(region),
+				      &entry, 1, &query_reply) < 0)
 		goto out;
 	if (query_reply.entries_filled != 1 ||
 	    entry.active_backend != LKMDBG_VIEW_BACKEND_WXSHADOW ||
@@ -280,13 +277,13 @@ int main(void)
 		goto out;
 	}
 
-	if (read_target_memory(session_fd, (uintptr_t)page, kernel_read, page_size,
-			       &bytes_done, 0) < 0 ||
-	    bytes_done != page_size ||
+	if (lkmdbg_memory_read(session, (uintptr_t)page, kernel_read, page_size, 0,
+			       &transfer) < 0 ||
+	    transfer.bytes_done != page_size ||
 	    memcmp(kernel_read, shadow_page, page_size) != 0) {
 		fprintf(stderr,
-			"example_view_wxshadow_exec: READ_MEM mismatch bytes_done=%u\n",
-			bytes_done);
+			"example_view_wxshadow_exec: READ_MEM mismatch bytes_done=%" PRIu64
+			"\n", transfer.bytes_done);
 		goto out;
 	}
 
@@ -298,17 +295,14 @@ int main(void)
 		goto out;
 	}
 
-	bytes_done = 0;
-	if (write_target_memory(session_fd, (uintptr_t)page, patch_page, page_size,
-				&bytes_done, 0) < 0 ||
-	    bytes_done != page_size ||
-	    read_target_memory(session_fd, (uintptr_t)page, kernel_read, page_size,
-			       &bytes_done, 0) < 0 ||
-	    bytes_done != page_size ||
+	if (lkmdbg_memory_write(session, (uintptr_t)page, patch_page, page_size, 0,
+				&transfer) < 0 || transfer.bytes_done != page_size ||
+	    lkmdbg_memory_read(session, (uintptr_t)page, kernel_read, page_size, 0,
+			       &transfer) < 0 || transfer.bytes_done != page_size ||
 	    memcmp(kernel_read, patch_page, page_size) != 0) {
 		fprintf(stderr,
-			"example_view_wxshadow_exec: WRITE_MEM patch mismatch bytes_done=%u\n",
-			bytes_done);
+			"example_view_wxshadow_exec: WRITE_MEM patch mismatch bytes_done=%" PRIu64
+			"\n", transfer.bytes_done);
 		goto out;
 	}
 
@@ -330,19 +324,19 @@ int main(void)
 		goto out;
 	}
 
-	if (set_view_region_write_backing(session_fd, region_reply.region_id, NULL,
-					  0, LKMDBG_VIEW_BACKING_ORIGINAL,
-					  &reset_reply) < 0)
+	if (lkmdbg_view_region_set_backing(region, LKMDBG_VIEW_KIND_WRITE, NULL, 0,
+					   LKMDBG_VIEW_BACKING_ORIGINAL,
+					   &reset_reply) < 0)
 		goto out;
-	if (set_view_region_exec_backing(session_fd, region_reply.region_id, NULL,
-					 0, LKMDBG_VIEW_BACKING_ORIGINAL,
-					 &reset_reply) < 0)
+	if (lkmdbg_view_region_set_backing(region, LKMDBG_VIEW_KIND_EXEC, NULL, 0,
+					   LKMDBG_VIEW_BACKING_ORIGINAL,
+					   &reset_reply) < 0)
 		goto out;
 
 	memset(&entry, 0, sizeof(entry));
 	memset(&query_reply, 0, sizeof(query_reply));
-	if (query_view_regions(session_fd, region_reply.region_id, &entry, 1,
-			       &query_reply) < 0)
+	if (lkmdbg_view_regions_query(session, lkmdbg_view_region_id(region),
+				      &entry, 1, &query_reply) < 0)
 		goto out;
 	if (query_reply.entries_filled != 1 ||
 	    entry.write_backing_type != LKMDBG_VIEW_BACKING_ORIGINAL ||
@@ -377,7 +371,7 @@ int main(void)
 
 	status = 0;
 	printf("example_view_wxshadow_exec: ok region=%" PRIu64 " write_source=%" PRIu64 " exec_source=%" PRIu64 "\n",
-	       (uint64_t)region_reply.region_id,
+	       lkmdbg_view_region_id(region),
 	       (uint64_t)write_backing_reply.source_id,
 	       (uint64_t)exec_backing_reply.source_id);
 
@@ -386,11 +380,9 @@ out:
 		uintptr_t zero = 0;
 		(void)write_full(cmd_pipe[1], &zero, sizeof(zero));
 	}
-	if (session_fd >= 0 && region_reply.region_id)
-		(void)remove_view_region(session_fd, region_reply.region_id,
-					 &remove_reply);
-	if (session_fd >= 0)
-		close(session_fd);
+	if (region && lkmdbg_view_region_destroy(region) < 0)
+		status = 1;
+	lkmdbg_session_close(session);
 	if (cmd_pipe[0] >= 0)
 		close(cmd_pipe[0]);
 	if (cmd_pipe[1] >= 0)
