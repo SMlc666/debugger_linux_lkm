@@ -8,8 +8,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "../driver/bridge_c.h"
-#include "../driver/bridge_memory.h"
+#include "lkmdbg/lkmdbg.h"
 
 struct example_child_info {
 	uintptr_t addr;
@@ -90,9 +89,9 @@ int main(void)
 	int reply_pipe[2];
 	struct example_child_info info;
 	char readback[sizeof(expected_before)] = { 0 };
-	uint32_t bytes_done = 0;
+	struct lkmdbg_transfer_result transfer;
 	pid_t child;
-	int session_fd = -1;
+	struct lkmdbg_session *session = NULL;
 	char cmd;
 	int child_ok = 1;
 	int status = 1;
@@ -123,27 +122,27 @@ int main(void)
 		goto out;
 	}
 
-	session_fd = open_session_fd();
-	if (session_fd < 0)
+	if (lkmdbg_session_open(&session) < 0)
 		goto out;
-	if (set_target(session_fd, child) < 0)
+	if (lkmdbg_session_set_target(session, child, 0) < 0)
 		goto out;
 
-	if (read_target_memory(session_fd, info.addr, readback, sizeof(readback),
-			       &bytes_done, 0) < 0 ||
-	    bytes_done != sizeof(readback) ||
+	if (lkmdbg_memory_read(session, info.addr, readback, sizeof(readback), 0,
+			       &transfer) < 0 ||
+	    transfer.bytes_done != sizeof(readback) ||
 	    memcmp(readback, expected_before, sizeof(readback)) != 0) {
-		fprintf(stderr, "example_mem_rw: readback mismatch bytes_done=%u\n",
-			bytes_done);
+		fprintf(stderr,
+			"example_mem_rw: readback mismatch bytes_done=%" PRIu64 "\n",
+			transfer.bytes_done);
 		goto out;
 	}
 
-	bytes_done = 0;
-	if (write_target_memory(session_fd, info.addr, expected_after,
-				sizeof(expected_after), &bytes_done, 0) < 0 ||
-	    bytes_done != sizeof(expected_after)) {
-		fprintf(stderr, "example_mem_rw: write failed bytes_done=%u\n",
-			bytes_done);
+	if (lkmdbg_memory_write(session, info.addr, expected_after,
+				sizeof(expected_after), 0, &transfer) < 0 ||
+	    transfer.bytes_done != sizeof(expected_after)) {
+		fprintf(stderr,
+			"example_mem_rw: write failed bytes_done=%" PRIu64 "\n",
+			transfer.bytes_done);
 		goto out;
 	}
 
@@ -164,12 +163,10 @@ int main(void)
 out:
 	cmd = 'q';
 	(void)write_full(cmd_pipe[1], &cmd, sizeof(cmd));
-	if (session_fd >= 0)
-		close(session_fd);
+	lkmdbg_session_close(session);
 	close(info_pipe[0]);
 	close(cmd_pipe[1]);
 	close(reply_pipe[0]);
 	waitpid(child, NULL, 0);
 	return status;
 }
-

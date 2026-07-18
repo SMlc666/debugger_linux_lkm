@@ -5,14 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "../../include/lkmdbg_ioctl.h"
-#include "../driver/bridge_c.h"
-#include "../driver/bridge_memory.h"
+#include "lkmdbg/lkmdbg.h"
 
 struct child_info {
 	uintptr_t addr;
@@ -70,21 +67,18 @@ static int child_main(int info_fd, int cmd_fd)
 int main(void)
 {
 	struct child_info info;
-	struct lkmdbg_remote_map_request req = {
-		.version = LKMDBG_PROTO_VERSION,
-		.size = sizeof(req),
-		.map_fd = -1,
-		.prot = LKMDBG_REMOTE_MAP_PROT_READ |
+	struct lkmdbg_remote_map_options options = {
+		.protection = LKMDBG_REMOTE_MAP_PROT_READ |
 			LKMDBG_REMOTE_MAP_PROT_WRITE,
 	};
 	uint8_t expected[256];
 	uint8_t readback[sizeof(expected)];
-	uint8_t *mapped = MAP_FAILED;
-	uint32_t bytes_done = 0;
-	struct lkmdbg_remote_map_handle_request remove_req;
+	uint8_t *mapped = NULL;
+	struct lkmdbg_transfer_result transfer;
+	struct lkmdbg_remote_mapping *mapping = NULL;
+	struct lkmdbg_session *session = NULL;
 	int info_pipe[2], cmd_pipe[2];
 	pid_t child = -1;
-	int session_fd = -1;
 	int status = 1;
 	char cmd = 'q';
 
@@ -104,20 +98,18 @@ int main(void)
 	if (read_full(info_pipe[0], &info, sizeof(info)) < 0 ||
 	    !info.addr || info.length < (uint32_t)getpagesize())
 		goto out;
-	session_fd = open_session_fd();
-	if (session_fd < 0 || set_target(session_fd, child) < 0)
+	if (lkmdbg_session_open(&session) < 0 ||
+	    lkmdbg_session_set_target(session, child, 0) < 0)
 		goto out;
-	req.remote_addr = info.addr;
-	req.length = info.length;
-	if (ioctl(session_fd, LKMDBG_IOC_CREATE_REMOTE_MAP, &req) < 0 ||
-	    req.map_fd < 0 || req.mapped_length < sizeof(expected))
+	options.remote_address = info.addr;
+	options.length = info.length;
+	if (lkmdbg_remote_map_create(session, &options, &mapping) < 0 ||
+	    lkmdbg_remote_map_length(mapping) < sizeof(expected))
 		goto out;
-	mapped = mmap(NULL, req.mapped_length, PROT_READ | PROT_WRITE,
-		      MAP_SHARED, req.map_fd, 0);
-	if (mapped == MAP_FAILED)
-		goto out;
-	if (mprotect(mapped, req.mapped_length, PROT_READ) < 0 ||
-	    mprotect(mapped, req.mapped_length, PROT_READ | PROT_WRITE) < 0)
+	mapped = lkmdbg_remote_map_data(mapping);
+	if (mprotect(mapped, lkmdbg_remote_map_length(mapping), PROT_READ) < 0 ||
+	    mprotect(mapped, lkmdbg_remote_map_length(mapping),
+		     PROT_READ | PROT_WRITE) < 0)
 		goto out;
 
 	for (size_t i = 0; i < sizeof(expected); i++) {
@@ -127,28 +119,19 @@ int main(void)
 	}
 	for (size_t i = 0; i < sizeof(expected); i++)
 		mapped[i] ^= (uint8_t)(0x5aU + i);
-	if (read_target_memory(session_fd, info.addr, readback,
-			       sizeof(readback), &bytes_done, 0) < 0 ||
-	    bytes_done != sizeof(readback) ||
+	if (lkmdbg_memory_read(session, info.addr, readback, sizeof(readback), 0,
+			       &transfer) < 0 ||
+	    transfer.bytes_done != sizeof(readback) ||
 	    memcmp(mapped, readback, sizeof(readback)) != 0)
 		goto out;
 
 	printf("example_remote_map_rw: ok addr=0x%" PRIxPTR " len=%" PRIu64 "\n",
-	       info.addr, (uint64_t)req.mapped_length);
+	       info.addr, lkmdbg_remote_map_length(mapping));
 	status = 0;
 out:
-	if (session_fd >= 0 && req.map_id) {
-		if (bridge_remove_remote_map(session_fd, req.map_id, &remove_req) < 0)
-			status = 1;
-	}
-	if (mapped != MAP_FAILED) {
-		munmap(mapped, req.mapped_length);
-		mapped = MAP_FAILED;
-	}
-	if (req.map_fd >= 0)
-		close(req.map_fd);
-	if (session_fd >= 0)
-		close(session_fd);
+	if (mapping && lkmdbg_remote_map_destroy(mapping) < 0)
+		status = 1;
+	lkmdbg_session_close(session);
 	(void)write_full(cmd_pipe[1], &cmd, sizeof(cmd));
 	if (child > 0)
 		waitpid(child, NULL, 0);
